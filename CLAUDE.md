@@ -49,12 +49,48 @@ clustering, background job / file-listener triggers, multi-user support.
 
 ### Next
 
-1. **Register against the real Nextcloud instance and verify end-to-end.** Not yet done from
-   here — needs the actual deploy daemon name and container name (the `Makefile`'s `register`
-   target has placeholders: container `nextcloud`, daemon `manual_install`, adjust to match).
-   Note: `AppAPIAuthMiddleware` only exempts `/heartbeat` from signature checks, so a bare
-   `curl` at the container will 401 — the real test has to go through Nextcloud/AppAPI, not a
-   direct request.
+1. **Register against the real Nextcloud instance and verify end-to-end.**
+
+   This homelab's live AppAPI setup, discovered by exec-ing into `nextcloud-app-1` and reading
+   `occ app_api:daemon:list` plus AppAPI's own PHP source (`DockerActions.php`,
+   `ManualActions.php`):
+
+   - Nextcloud container: `nextcloud-app-1` (compose service `app`), occ lives at
+     `/var/www/html/occ`, so `docker exec -u www-data nextcloud-app-1 php occ ...` works without
+     a `./` (cwd is already `/var/www/html`).
+   - Only one daemon is registered so far: `harp_proxy_docker`, deploy-id `docker-install`. That
+     type means AppAPI does a real `docker pull` of whatever `<docker-install>` in `info.xml`
+     names (confirmed in `DockerActions.php`: `shouldPullImage()` defaults to `true` unless the
+     daemon has a `registries: [{from: ..., to: "local"}]` mapping, which this one doesn't) — not
+     suitable for a locally-built, unpublished image.
+   - Chosen instead: register a **second, manual-install daemon** (`manual_install_harp`) rather
+     than touching the existing one. `ManualActions::deployExApp()` is a no-op — AppAPI expects
+     *us* to run the container, which then tunnels in through HaRP's FRP reverse-proxy
+     (`appapi-harp:8782`) using the shared key already baked into the `appapi-harp` container's
+     own env (`docker exec appapi-harp printenv HP_SHARED_KEY`) — that value must match on both
+     sides, it's HaRP's tunnel auth, not something we invent per-app.
+   - Required container env vars, per `nc_py_api`'s `_session.py`/`uvicorn_fastapi.py`:
+     `APP_ID`, `APP_VERSION`, `APP_SECRET`, `NEXTCLOUD_URL` (required), `APP_PORT` (still needed
+     even under HaRP — it's the FRP tunnel's `remotePort`, used to key routing; the app itself
+     binds a unix socket, not this TCP port), `HP_SHARED_KEY`/`HP_FRP_ADDRESS`/`HP_FRP_PORT` (read
+     by `start.sh` to build `frpc.toml`).
+
+   Recipe (see `Makefile` targets `daemon-register` / `run` / `register`):
+
+   ```
+   # one-time: register the manual-install daemon
+   make daemon-register
+
+   # per-deploy: build, run the container (tunnels through HaRP), tell AppAPI about it
+   make build
+   make run APP_SECRET=$(openssl rand -hex 24)
+   make register APP_SECRET=<same-secret-as-above>
+   ```
+
+   `AppAPIAuthMiddleware` only exempts `/heartbeat` from signature checks, so a bare `curl` at
+   the container will 401 — verification has to go through Nextcloud/AppAPI, not a direct
+   request. Not yet run against the live instance — pending confirmation before touching shared
+   daemon config.
 2. **Read files from Nextcloud storage.** Wire `/detect` (or a new endpoint) to pull an image by
    Nextcloud file path via `nc_py_api`, instead of taking a raw image body directly.
 3. **Write into Recognize's tables.** `oc_recognize_face_detections` for per-face

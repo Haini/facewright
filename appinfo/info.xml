@@ -15,6 +15,12 @@
 		<nextcloud min-version="31" max-version="35"/>
 	</dependencies>
 	<external-app>
+		<!--
+		This block is required by the info.xml schema but is unused for our deployment:
+		we register against a manual-install daemon (see CLAUDE.md), and
+		ManualActions::deployExApp() in AppAPI's PHP source is a no-op - deploy is done by
+		us running the container ourselves, not by AppAPI pulling this image.
+		-->
 		<docker-install>
 			<registry>ghcr.io</registry>
 			<image>constantin-sk/recognaize</image>
