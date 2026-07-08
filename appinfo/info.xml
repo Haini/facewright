@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<info>
+	<id>recognaize</id>
+	<name>recognAIze</name>
+	<summary>InsightFace-based face detection ExApp</summary>
+	<description>
+	<![CDATA[Detects faces and extracts embeddings using InsightFace, as a replacement backend for Recognize's face-detection pipeline]]>
+	</description>
+	<version>0.1.0</version>
+	<licence>agpl</licence>
+	<author>Constantin Schieber-Knoebl</author>
+	<namespace>Recognaize</namespace>
+	<category>multimedia</category>
+	<dependencies>
+		<nextcloud min-version="31" max-version="35"/>
+	</dependencies>
+	<external-app>
+		<docker-install>
+			<registry>ghcr.io</registry>
+			<image>constantin-sk/recognaize</image>
+			<image-tag>latest</image-tag>
+		</docker-install>
+		<routes>
+			<route>
+				<url>^/detect$</url>
+				<verb>POST</verb>
+				<access_level>USER</access_level>
+			</route>
+		</routes>
+	</external-app>
+</info>
