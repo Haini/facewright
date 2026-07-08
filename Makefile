@@ -3,7 +3,10 @@
 APP_ID := recognaize
 APP_NAME := recognAIze
 APP_VERSION := 0.1.0
-APP_PORT := 9030
+# Must fall in one of HaRP's frps allowPorts ranges (see /run/harp/frps.toml inside the
+# appapi-harp container) - this homelab's is 23000-23999 or 24000-24099. Pick a value not
+# already used by another ExApp (test-deploy currently holds 23000).
+APP_PORT := 23001
 
 # This homelab's live AppAPI setup (see CLAUDE.md for how these were discovered):
 NC_CONTAINER := nextcloud-app-1
@@ -12,6 +15,9 @@ DAEMON_NAME := manual_install_harp
 DOCKER_NETWORK := gateway
 HARP_HOST := appapi-harp:8780
 HARP_FRP_ADDRESS := appapi-harp:8782
+# HaRP requires TLS on the FRP tunnel (HP_FRP_DISABLE_TLS=false); start.sh only enables it if
+# /certs/frp exists. Reuse HaRP's own client cert bundle rather than generating a new one.
+HARP_CERTS_DIR := /home/constantin/homecloud/nextcloud/harp_certs/frp
 # Must match the harp container's own HP_SHARED_KEY env var - fetch it rather than hardcoding:
 #   docker exec appapi-harp env | grep HP_SHARED_KEY
 HARP_SHARED_KEY ?= $(shell docker exec appapi-harp printenv HP_SHARED_KEY)
@@ -30,10 +36,16 @@ help:
 	@echo "  > One-time setup on this Nextcloud instance:"
 	@echo "  daemon-register   registers the '$(DAEMON_NAME)' manual-install daemon config"
 	@echo " "
-	@echo "  > Per-deploy (container must already be running via 'make run'):"
+	@echo "  > Per-deploy (in order):"
 	@echo "  run               runs the recognaize container, tunneling through HaRP"
 	@echo "  register          registers/updates the running ExApp with AppAPI"
 	@echo "  unregister        unregisters the ExApp from AppAPI"
+	@echo " "
+	@echo "  > Troubleshooting:"
+	@echo "  bust-cache        evicts HaRP's cached host/port record for this app (see CLAUDE.md -"
+	@echo "                    HaRP caches ExApp records forever until explicitly told otherwise;"
+	@echo "                    re-run this after re-registering with a different port)"
+	@echo "  verify            hits /heartbeat and /detect through the real Nextcloud/HaRP path"
 
 .PHONY: build
 build:
@@ -60,6 +72,7 @@ run:
 		-e HP_SHARED_KEY=$(HARP_SHARED_KEY) \
 		-e HP_FRP_ADDRESS=appapi-harp \
 		-e HP_FRP_PORT=8782 \
+		-v $(HARP_CERTS_DIR):/certs/frp:ro \
 		recognaize:latest
 
 .PHONY: register
@@ -70,3 +83,18 @@ register:
 .PHONY: unregister
 unregister:
 	docker exec -u www-data $(NC_CONTAINER) php occ app_api:app:unregister $(APP_ID) --silent --force
+
+.PHONY: bust-cache
+bust-cache:
+	docker exec appapi-harp curl -s -X DELETE -o /dev/null -w "DELETE_STATUS:%{http_code}\n" \
+		"http://127.0.0.1:8200/exapp_storage/$(APP_ID)"
+
+.PHONY: verify
+verify:
+	@AUTH=$$(printf ':%s' "$(APP_SECRET)" | base64 -w0); \
+	echo "--- heartbeat ---"; \
+	docker exec $(NC_CONTAINER) curl -s -o /dev/null -w "HTTP_STATUS:%{http_code}\n" \
+		-H "AA-VERSION: 32" -H "EX-APP-ID: $(APP_ID)" -H "EX-APP-VERSION: $(APP_VERSION)" \
+		-H "AUTHORIZATION-APP-API: $$AUTH" -H "harp-shared-key: $(HARP_SHARED_KEY)" \
+		-H "ex-app-port: $(APP_PORT)" -H "ex-app-host: 127.0.0.1" \
+		"$(NC_URL)/exapps/$(APP_ID)/heartbeat"
