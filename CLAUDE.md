@@ -363,6 +363,9 @@ on reload. Fixed with `type="button"` plus `event.preventDefault()` in the click
 second line of defense. The People-page checkbox never had this failure mode (no button/submit
 involved), which is why only the new textarea+button feature showed the bug.
 
+**Confirmed fixed** — the user tried it again after the `type="button"` fix and paths now
+persist across reloads, including the originally-reported space-containing one.
+
 ### Next
 
 1. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
