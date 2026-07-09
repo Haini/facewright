@@ -270,8 +270,10 @@ still needed before calling clustering "done":
 - Handle growing datasets incrementally (this prototype reclusters everything from scratch each
   run; Immich's real version only evaluates new faces against the existing index) — matters
   once this runs continuously rather than as a one-off batch.
-- Give clusters real titles / feed them into Memories' People UI — right now they're bare rows
-  with `title=''`.
+
+Naming clusters turned out to need no work at all — Memories' existing rename-a-person UI
+already writes into the same `title` column via Recognize's own DAV mechanism, confirmed working
+for recognAIze's own clusters too. See "Done: naming clusters" further down.
 
 ### Done: GUI toggle for Memories' People page
 
@@ -520,6 +522,28 @@ check it's not a 404" workaround) — both were still the same real-data action 
 different hat, and the classifier was right to catch that. Verification was `php -l` on every
 changed file plus the user clicking the real button themselves after the cache-bust fix —
 confirmed working, clusters showed up as people in Memories.
+
+### Done: naming clusters — turned out to need no code at all
+
+Asked to "give the clusters real names/titles" (`recognize_face_clusters.title` is `''` for
+every cluster recognAIze creates). Before writing anything, checked how naming actually works
+in this stack, since Memories' People page is Recognize's UI surface, not ours: Recognize
+exposes each cluster as a virtual folder over WebDAV (`recognize/lib/Dav/Faces/FaceRoot.php`),
+and `FaceRoot::setName()` is what a rename actually calls — straight into
+`FaceClusterMapper->update()`, writing `title` on the exact same table/column recognAIze already
+writes into. Memories' rename-a-person UI is just a DAV move/rename against that virtual folder
+under the hood. Confirmed this mechanism was already real and in use on this instance before
+touching any code: cluster id 16, from the pre-existing legacy 128-dim data, already had the
+title "Constantin Schieber-Knöbl" — set this exact way, at some point before this project
+existed.
+
+Since recognAIze's own clusters live in the identical table with the identical shape, there was
+no reason to expect Memories' existing rename UI wouldn't already work on them too — and it did,
+confirmed by the user directly in a real browser, no new code required. Worth remembering: this
+project's own writes into Recognize's tables get all of Recognize/Memories' *existing* read/write
+UI for free, not just the read-side People page display: don't assume a Memories-side feature
+needs building here without checking whether Recognize's own (DAV, not REST) machinery already
+covers it.
 
 ### Next
 
