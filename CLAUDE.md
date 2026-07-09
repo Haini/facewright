@@ -213,47 +213,76 @@ inserted 2 rows; read them back directly (via a throwaway verification command, 
 confirming) and checked `user_id`/`file_id` matched, `x/y/width/height` all fell within `[0,1]`,
 `cluster_id` was `NULL`, and `face_vector` decoded to a 512-float array.
 
+### Done: clustering prototype, validated on real data
+
+Researched two existing implementations for reusable numbers/algorithm shape first (neither is
+literally importable — different language, schema, and DB):
+- **Recognize's own** (`lib/Service/FaceClusterAnalyzer.php`): HDBSCAN over *Euclidean*
+  distance, tuned for its old 128-dim face-api.js embeddings (`MIN_CLUSTER_SEPARATION=0.35`,
+  `MAX_CLUSTER_EDGE_LENGTH=0.5`, `MIN_DATASET_SIZE=120` detections before it runs at all). None
+  of these numbers transfer — wrong dimensionality, wrong model, wrong distance metric for our
+  space.
+- **Immich's** (`server/src/config.ts` /
+  `machine-learning/immich_ml/models/facial_recognition/recognition.py`) is a much closer
+  match: its default model is `buffalo_l` — the *same* InsightFace model recognAIze already
+  uses. Its threshold is `maxDistance: 0.5` **cosine** distance (confirmed via
+  `embedding <=> ${embedding}`, pgvector's cosine-distance operator, in `search.repository.ts`)
+  with `minFaces: 3` before a face counts as a cluster "core" — directly comparable to our own
+  `face.normed_embedding` output. Algorithm: incremental per-face nearest-neighbor assignment (a
+  face joins/starts a cluster once it has ≥3 matches within cosine distance 0.5), not a batch
+  HDBSCAN pass.
+
+Implemented Immich's algorithm (not its code) as `recognaize_bridge`'s `occ recognaize:cluster
+<user> [--max-distance=0.5] [--min-faces=3] [--reset]`: loads a user's face detections, and for
+each unclustered one, finds same-user detections within `max-distance` cosine distance; if the
+match count (including itself) is ≥ `min-faces`, it joins an existing matched cluster or starts
+a new one (`recognize_face_clusters` row), otherwise it's left unclustered. Simplified from
+Immich in one place: no fallback search beyond the initial match set when none of those matches
+already has a cluster — close enough for threshold experimentation.
+
+**Gotcha discovered while testing**: `recognize_face_detections` predates this project on this
+instance. Nextcloud app uninstalls don't drop tables by default, so real rows from Recognize's
+own old face-api.js classifier (128-dim vectors, other users, and even ~1400 old rows mixed
+into `alice`'s own data) were silently sitting in the table before `occ app:install recognize`
+ever ran this session — invisible until reinstalling made them queryable again. Mixing those
+with our 512-dim InsightFace vectors in a distance computation would silently corrupt every
+match, so `ClusterFaces` filters strictly by embedding dimensionality (512) before doing
+anything else. Worth remembering for *any* future code that queries this table broadly rather
+than by a known `file_id` — the multi-user phase especially.
+
+**Validated on real data**: ran detection over 60 real photos (a `alice` photo album, chosen
+for likely repeat appearances of the same people), then clustered with Immich's defaults. Of 95
+real detections, got 3 clusters (sizes 17/13/4) and 61 left unclustered (single/rare
+appearances — plausible for background people in group shots). Spot-checked by cropping actual
+face regions (using the stored bbox) from photos in the two largest clusters and viewing them
+directly: cluster 544 is one person (a woman) across multiple photos, cluster 545 is a
+different person (a bearded man) across multiple photos — correctly separated, correctly
+matched across different photos. First real evidence Immich's thresholds are a good fit for
+this embedding space, not just a plausible-sounding number.
+
+**Not yet done**: this is a single-user, single-run prototype, not the final feature —
+still needed before calling clustering "done":
+- Validate against a much larger, more diverse sample (more people, more photos, harder cases
+  like partial occlusion/side angles) before trusting the thresholds generally.
+- Apply something like Recognize's `MIN_DETECTION_SIZE` (skip tiny/low-confidence faces before
+  clustering) — not yet filtered here, so some of the 61 unclustered faces may be junk
+  detections rather than genuine rare appearances.
+- Handle growing datasets incrementally (this prototype reclusters everything from scratch each
+  run; Immich's real version only evaluates new faces against the existing index) — matters
+  once this runs continuously rather than as a one-off batch.
+- Give clusters real titles / feed them into Memories' People UI — right now they're bare rows
+  with `title=''`.
+
 ### Next
 
-1. **Clustering.** The hard part — figure out cosine-similarity thresholds for InsightFace's
-   embedding space against a labeled slice of the real photo library, then write clusters into
-   `oc_recognize_face_clusters`.
-
-   Checked two existing implementations for reusable numbers/algorithm shape (neither is
-   literally importable — different language, schema, and DB — but worth grounding the
-   from-scratch work in what's already been tuned):
-   - **Recognize's own** (`lib/Service/FaceClusterAnalyzer.php`): HDBSCAN over *Euclidean*
-     distance, tuned for its old 128-dim face-api.js embeddings
-     (`MIN_CLUSTER_SEPARATION=0.35`, `MAX_CLUSTER_EDGE_LENGTH=0.5`, `MIN_DATASET_SIZE=120`
-     detections before it runs at all). None of these numbers transfer — wrong dimensionality,
-     wrong model, wrong distance metric for our space.
-   - **Immich's** (`server/src/config.ts` /
-     `machine-learning/immich_ml/models/facial_recognition/recognition.py`) is a much closer
-     match: its default model is `buffalo_l` — the *same* InsightFace model recognAIze already
-     uses. Its threshold is `maxDistance: 0.5` **cosine** distance (confirmed via
-     `embedding <=> ${embedding}`, pgvector's cosine-distance operator, in
-     `search.repository.ts`) with `minFaces: 3` before a face counts as a cluster "core" —
-     directly comparable to our own `face.normed_embedding` output, unlike Recognize's numbers.
-     Its algorithm is also a better structural fit: incremental per-face nearest-neighbor
-     assignment (a face joins/starts a person once it has ≥3 matches within cosine distance
-     0.5) run as new faces arrive, rather than Recognize's "batch-recluster everything once
-     ≥120 detections exist." Catch: Immich leans on Postgres+pgvector for the similarity
-     search; this instance's DB is MariaDB 10.11 with no vector index, but that's not a real
-     blocker at homelab library scale — cosine distance on L2-normalized vectors is just a dot
-     product, cheap to compute directly against a user's existing embeddings without an ANN
-     index until the per-user face count is far larger than any real personal library.
-   - Bottom line: `maxDistance ≤ 0.5` / `minFaces = 3` from Immich are a far better *starting
-     point* for real experimentation than anything from Recognize, precisely because they're
-     tuned for the identical model — but still need validating against a labeled slice of the
-     real photo library, not trusted blind.
-2. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
+1. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
    Nextcloud's file events / background jobs, matching how Recognize currently gets invoked —
-   `recognaize_bridge`'s `occ recognaize:detect` command is the manual trigger this phase would
-   replace/wrap.
-3. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
+   `recognaize_bridge`'s `occ recognaize:detect`/`occ recognaize:cluster` are the manual
+   triggers this phase would replace/wrap.
+2. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
    prototype first; multi-user support (writing a row for every user with file access, matching
    Recognize's own behavior) and resilience to Recognize updates are a separate, larger step
-   after the prototype proves clustering quality.
+   after the prototype proves clustering quality at scale.
 
 ## Licensing note
 
