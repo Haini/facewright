@@ -351,6 +351,18 @@ theirs.
   the already-working `routes.php` — 404 until another container restart. Expected this time,
   confirmed the fix still applies.
 
+**Bug found after initial "it works" report**: paths didn't persist across a page reload,
+reported specifically with a path containing spaces (`Bilder/2011 Fotos/OldPhone_Fotos`).
+Verified the backend (`PathFilterService`, the appconfig round-trip, the actual `occ
+recognaize:detect` matching) handles spaces fine on its own — not a backend bug at all. Real
+cause: the `<button>` in `templates/admin.php` had no explicit `type` attribute, so it defaulted
+to `type="submit"`. If a page-level `<form>` wraps the settings sections (plausible on
+Nextcloud's admin settings page), that submits/reloads the page in parallel with our `fetch()`
+call, which can abort the save mid-flight — looks like it saved (no visible error), then reverts
+on reload. Fixed with `type="button"` plus `event.preventDefault()` in the click handler as a
+second line of defense. The People-page checkbox never had this failure mode (no button/submit
+involved), which is why only the new textarea+button feature showed the bug.
+
 ### Next
 
 1. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into

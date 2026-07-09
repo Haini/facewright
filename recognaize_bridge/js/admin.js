@@ -29,7 +29,8 @@
 		var pathsSaveButton = document.getElementById('recognaize-included-paths-save');
 		var pathsStatus = document.getElementById('recognaize-included-paths-status');
 		if (pathsSaveButton) {
-			pathsSaveButton.addEventListener('click', function () {
+			pathsSaveButton.addEventListener('click', function (event) {
+				event.preventDefault();
 				fetch(OC.generateUrl('/apps/recognaize_bridge/included-paths'), {
 					method: 'PUT',
 					headers: {

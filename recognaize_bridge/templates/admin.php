@@ -19,7 +19,7 @@ $paths = $_['paths'] ?? '';
 		<textarea id="recognaize-included-paths" rows="6" cols="50" placeholder="Photos&#10;Camera/2024"><?php p($paths); ?></textarea>
 	</p>
 	<p>
-		<button id="recognaize-included-paths-save"><?php p($l->t('Save')); ?></button>
+		<button type="button" id="recognaize-included-paths-save"><?php p($l->t('Save')); ?></button>
 	</p>
 	<p id="recognaize-included-paths-status"></p>
 </div>
