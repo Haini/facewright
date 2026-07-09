@@ -4,6 +4,8 @@ $enabled = !empty($_['enabled']);
 $paths = $_['paths'] ?? '';
 $automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
 $batchSize = $_['batchSize'] ?? 50;
+$clusterMaxDistance = $_['clusterMaxDistance'] ?? 0.5;
+$clusterMinFaces = $_['clusterMinFaces'] ?? 3;
 $processedLastHour = $_['processedLastHour'] ?? 0;
 $processedCount = $_['processedCount'] ?? 0;
 $unprocessedCount = $_['unprocessedCount'] ?? 0;
@@ -42,6 +44,20 @@ $unprocessedCount = $_['unprocessedCount'] ?? 0;
 		<button type="button" id="recognaize-run-batch"><?php p($l->t('Run now')); ?></button>
 	</p>
 	<p id="recognaize-run-batch-status"></p>
+</div>
+<div id="recognaize-clustering-settings" class="section">
+	<h2><?php p($l->t('Clustering')); ?></h2>
+	<p><?php p($l->t('Groups detected faces into people Memories can show and let you name. Prototype thresholds - see CLAUDE.md before trusting them at scale. Only newly-detected faces are considered on each run; already-clustered ones are left alone.')); ?></p>
+	<p>
+		<label for="recognaize-cluster-max-distance"><?php p($l->t('Max cosine distance')); ?></label>
+		<input type="number" id="recognaize-cluster-max-distance" min="0" max="2" step="0.01" value="<?php p((string)$clusterMaxDistance); ?>">
+	</p>
+	<p>
+		<label for="recognaize-cluster-min-faces"><?php p($l->t('Min faces to form a cluster')); ?></label>
+		<input type="number" id="recognaize-cluster-min-faces" min="1" value="<?php p((string)$clusterMinFaces); ?>">
+		<button type="button" id="recognaize-run-clustering"><?php p($l->t('Run now')); ?></button>
+	</p>
+	<p id="recognaize-run-clustering-status"></p>
 </div>
 <div id="recognaize-stats-settings" class="section">
 	<h2><?php p($l->t('Statistics')); ?></h2>

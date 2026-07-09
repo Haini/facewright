@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\RecognaizeBridge\Controller;
 
 use OCA\RecognaizeBridge\Service\BatchTriggerService;
+use OCA\RecognaizeBridge\Service\ClusteringService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
@@ -33,6 +34,7 @@ class PeopleSettingsController extends Controller {
 		private IAppConfig $appConfig,
 		private PathFilterService $pathFilter,
 		private BatchTriggerService $batchTrigger,
+		private ClusteringService $clustering,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -58,5 +60,19 @@ class PeopleSettingsController extends Controller {
 		$this->appConfig->setValueInt('recognaize_bridge', 'batch_size', $batchSize);
 		$queued = $this->batchTrigger->run($batchSize);
 		return new JSONResponse(['queued' => $queued]);
+	}
+
+	/**
+	 * Runs synchronously (unlike detection, this is pure local DB/CPU work against
+	 * already-stored embeddings - no ExApp round-trip - so it's fast enough not to need a
+	 * background job at this project's current data scale, see CLAUDE.md).
+	 */
+	public function runClustering(float $maxDistance, int $minFaces): JSONResponse {
+		$maxDistance = max(0.0, $maxDistance);
+		$minFaces = max(1, $minFaces);
+		$this->appConfig->setValueFloat('recognaize_bridge', 'cluster_max_distance', $maxDistance);
+		$this->appConfig->setValueInt('recognaize_bridge', 'cluster_min_faces', $minFaces);
+		$result = $this->clustering->runForAllUsers($maxDistance, $minFaces);
+		return new JSONResponse($result);
 	}
 }

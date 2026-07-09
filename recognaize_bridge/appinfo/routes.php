@@ -8,5 +8,6 @@ return [
 		['name' => 'PeopleSettings#setIncludedPaths', 'url' => '/included-paths', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#setAutomaticDetectionEnabled', 'url' => '/automatic-detection-enabled', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#runBatch', 'url' => '/run-batch', 'verb' => 'PUT'],
+		['name' => 'PeopleSettings#runClustering', 'url' => '/run-clustering', 'verb' => 'PUT'],
 	],
 ];

@@ -59,6 +59,37 @@
 			});
 		}
 
+		var clusterMaxDistanceField = document.getElementById('recognaize-cluster-max-distance');
+		var clusterMinFacesField = document.getElementById('recognaize-cluster-min-faces');
+		var runClusteringButton = document.getElementById('recognaize-run-clustering');
+		var runClusteringStatus = document.getElementById('recognaize-run-clustering-status');
+		if (runClusteringButton) {
+			runClusteringButton.addEventListener('click', function (event) {
+				event.preventDefault();
+				runClusteringStatus.textContent = 'Clustering...';
+				fetch(OC.generateUrl('/apps/recognaize_bridge/run-clustering'), {
+					method: 'PUT',
+					headers: {
+						'Content-Type': 'application/json',
+						requesttoken: OC.requestToken,
+					},
+					body: JSON.stringify({
+						maxDistance: parseFloat(clusterMaxDistanceField.value) || 0.5,
+						minFaces: parseInt(clusterMinFacesField.value, 10) || 3,
+					}),
+				}).then(function (response) {
+					if (!response.ok) {
+						throw new Error('Request failed');
+					}
+					return response.json();
+				}).then(function (data) {
+					runClusteringStatus.textContent = data.newClusters + ' new cluster(s), ' + data.joined + ' face(s) joined an existing cluster, ' + data.skipped + ' face(s) left unclustered.';
+				}).catch(function () {
+					runClusteringStatus.textContent = 'Failed to run - see the Nextcloud log.';
+				});
+			});
+		}
+
 		var batchSizeField = document.getElementById('recognaize-batch-size');
 		var runBatchButton = document.getElementById('recognaize-run-batch');
 		var runBatchStatus = document.getElementById('recognaize-run-batch-status');
