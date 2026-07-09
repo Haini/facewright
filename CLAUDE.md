@@ -35,7 +35,8 @@ homelab). Runs under an existing AppAPI + deploy daemon setup.
 - `appinfo/info.xml` — app id `recognaize`, single `POST /detect` route at `USER` access level
 - `ex_app/lib/main.py` — FastAPI app; `AppAPIAuthMiddleware` kept intact; InsightFace
   `FaceAnalysis` (`buffalo_l`, CPU) loaded once in the `lifespan` hook (not per-request/per-fork);
-  `/detect` takes a raw image body, returns `{faces: [{bbox, kps, det_score, embedding}]}`
+  `/detect` reads a Nextcloud file path (see below), returns
+  `{faces: [{bbox, kps, det_score, embedding}]}`
 - `requirements.txt` — `nc_py_api[app]`, `insightface`, `onnxruntime` (CPU build),
   `opencv-python-headless`, `numpy`
 - `Dockerfile` — skeleton's two-stage build + `build-essential`/`cmake` (InsightFace compiles
@@ -127,19 +128,43 @@ direct request.
    `make bust-cache` before assuming something else is broken — the DB is very likely already
    correct and HaRP's in-memory cache is the actual stale piece.
 
+### Done: `/detect` reads from Nextcloud storage via `nc_py_api`
+
+`/detect` now takes a JSON body (`{"path": "..."}`, relative to the calling user's DAV files
+root) instead of a raw image body, and downloads it with `nc_py_api` instead of requiring the
+caller to upload bytes directly.
+
+- Route handler takes `nc: Annotated[AsyncNextcloudApp, Depends(anc_app)]` (the async
+  dependency — `nc_app` is the deprecated sync one) and calls
+  `await nc.files.download(payload.path)`.
+- **User impersonation**: the acting Nextcloud user comes from the `AUTHORIZATION-APP-API`
+  header (`base64("<username>:<app_secret>")`) — `anc_app` extracts the username server-side
+  from that header (see `nc_py_api.ex_app.integration_fastapi.__nc_app`), and `nc.files.download`
+  then operates against *that* user's files, no password needed since the app secret is the
+  trust anchor. Verified by crafting this header manually for a real user (`alice`) via the
+  same curl-through-Nextcloud technique used for heartbeat testing earlier, and pulling a real
+  photo from their library successfully.
+- **Gotcha**: `nc_py_api`'s `check_error()` (used internally by `files.download`) always raises
+  the base `NextcloudException` with `.status_code` set to the real HTTP code — it does *not*
+  raise the more specific `NextcloudExceptionNotFound` subclass for DAV 404s (that subclass
+  exists but isn't used on this path). Catch `NextcloudException` and check
+  `exc.status_code == 404` explicitly; catching `NextcloudExceptionNotFound` silently misses
+  every missing-file case and surfaces as an unhandled 500 instead. Confirmed via the container
+  logs' actual traceback, not by reading docs.
+- Verified end-to-end: a real file path returns real detections (2 faces on a second test
+  photo), and a nonexistent path returns a clean `404 {"detail": "No such file: ..."}`.
+
 ### Next
 
-1. **Read files from Nextcloud storage.** Wire `/detect` (or a new endpoint) to pull an image by
-   Nextcloud file path via `nc_py_api`, instead of taking a raw image body directly.
-2. **Write into Recognize's tables.** `oc_recognize_face_detections` for per-face
+1. **Write into Recognize's tables.** `oc_recognize_face_detections` for per-face
    bbox/embedding rows. Undocumented internal schema owned by another app — fragile across
    Recognize updates, worth a code comment explaining why we depend on it.
-3. **Clustering.** The hard part — figure out cosine-similarity thresholds for InsightFace's
+2. **Clustering.** The hard part — figure out cosine-similarity thresholds for InsightFace's
    embedding space against a labeled slice of the real photo library, then write clusters into
    `oc_recognize_face_clusters`.
-4. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
+3. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
    Nextcloud's file events / background jobs, matching how Recognize currently gets invoked.
-5. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
+4. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
    prototype first; multi-user support and resilience to Recognize updates are a separate,
    larger step after the prototype proves clustering quality.
 

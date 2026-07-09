@@ -3,16 +3,22 @@
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from insightface.app import FaceAnalysis
-from nc_py_api import NextcloudApp
-from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, run_app, set_handlers
+from nc_py_api import AsyncNextcloudApp, NextcloudApp, NextcloudException
+from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, anc_app, run_app, set_handlers
+from pydantic import BaseModel
 
 FACE_ANALYSIS: FaceAnalysis | None = None
+
+
+class DetectRequest(BaseModel):
+    path: str
 
 
 @asynccontextmanager
@@ -31,10 +37,13 @@ APP.add_middleware(AppAPIAuthMiddleware)
 
 
 @APP.post("/detect")
-async def detect(request: Request):
-    image_bytes = await request.body()
-    if not image_bytes:
-        raise HTTPException(status_code=400, detail="Empty request body, expected raw image bytes")
+async def detect(payload: DetectRequest, nc: Annotated[AsyncNextcloudApp, Depends(anc_app)]):
+    try:
+        image_bytes = await nc.files.download(payload.path)
+    except NextcloudException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"No such file: {payload.path}") from None
+        raise HTTPException(status_code=502, detail=f"Nextcloud error downloading {payload.path}: {exc}") from exc
 
     npbuf = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(npbuf, cv2.IMREAD_COLOR)
