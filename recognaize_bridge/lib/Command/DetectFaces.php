@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\RecognaizeBridge\Command;
 
 use OCA\AppAPI\PublicFunctions;
+use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
@@ -25,6 +26,7 @@ class DetectFaces extends Command {
 		private IRootFolder $rootFolder,
 		private IDBConnection $db,
 		private PublicFunctions $appAPI,
+		private PathFilterService $pathFilter,
 	) {
 		parent::__construct();
 	}
@@ -39,6 +41,11 @@ class DetectFaces extends Command {
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$userId = $input->getArgument('user');
 		$path = $input->getArgument('path');
+
+		if (!$this->pathFilter->isIncluded($path)) {
+			$output->writeln("<error>Path '{$path}' is not in the configured included paths - skipping.</error>");
+			return 1;
+		}
 
 		try {
 			$node = $this->rootFolder->getUserFolder($userId)->get($path);

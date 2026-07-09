@@ -316,10 +316,40 @@ route/controller 404s on this instance despite everything looking correct in sou
 container restart before assuming the code is wrong.
 
 **Verified working in a real browser** (the user confirmed directly) — both the original
-shared-section version and the follow-up dedicated-section version. The dedicated section
-change needed no container restart (unlike the initial Controller+route addition) — adding a
-new `Settings\AdminSection` class to an app that's already routing correctly didn't hit the
-same stale-registration issue.
+shared-section version and the follow-up dedicated-section version. The dedicated-section
+change (a new `Settings\AdminSection` class, no new routes) needed no restart. Adding a new
+*route* later (see below) did need one again — so the pattern is specifically about `routes.php`
+entries, not app changes in general: **any time a route is added to `routes.php`, even in an
+app that's already routing correctly, expect to need a container restart** for it to actually
+resolve (still 404s otherwise, confirmed twice now).
+
+### Done: included-paths allowlist for face detection
+
+Admin-configurable list of paths (relative to each user's files root, one per line) that
+`occ recognaize:detect` will actually process — anything outside them is skipped. Checked
+Recognize's own approach first (`lib/Service/IgnoreService.php`): it's a per-folder
+`.noimage`-style *exclusion marker* file, the opposite direction from what was asked (an
+explicit include list, everything else ignored) — so this is a fresh mechanism, not a port of
+theirs.
+
+- `recognaize_bridge/lib/Service/PathFilterService.php` — new small shared service (needed by
+  both the Controller that saves the list and the Command that checks it). Stores a
+  `list<string>` via `IAppConfig::setValueArray`/`getValueArray` (native array support, no
+  manual JSON encode/decode needed) under our own app id, key `included_paths`. Empty list =
+  no restriction (matches pre-feature behavior). Matching is exact-or-folder-prefix
+  (`Photos` matches `Photos/2024/x.jpg` but not `Photos2/x.jpg`).
+- `DetectFaces` now checks `PathFilterService::isIncluded($path)` before doing anything else,
+  refusing with a clear message (exit 1) if the path isn't covered. Verified both directions
+  directly: set `included_paths` to a folder that doesn't match the test file → rejected; set
+  it to one that does → proceeded and inserted normally.
+- Added to the *same* admin settings page/section, via a second endpoint
+  (`PeopleSettingsController::setIncludedPaths`, `PUT /included-paths`) and a textarea + Save
+  button in `templates/admin.php`/`js/admin.js`. Kept the controller's name/file as-is even
+  though it now covers more than the People toggle — renaming risked re-triggering the
+  stale-routing issue above for no functional benefit.
+- Hit the exact routing gotcha described above when adding the new `/included-paths` route to
+  the already-working `routes.php` — 404 until another container restart. Expected this time,
+  confirmed the fix still applies.
 
 ### Next
 
