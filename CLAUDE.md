@@ -218,6 +218,34 @@ confirming) and checked `user_id`/`file_id` matched, `x/y/width/height` all fell
 1. **Clustering.** The hard part — figure out cosine-similarity thresholds for InsightFace's
    embedding space against a labeled slice of the real photo library, then write clusters into
    `oc_recognize_face_clusters`.
+
+   Checked two existing implementations for reusable numbers/algorithm shape (neither is
+   literally importable — different language, schema, and DB — but worth grounding the
+   from-scratch work in what's already been tuned):
+   - **Recognize's own** (`lib/Service/FaceClusterAnalyzer.php`): HDBSCAN over *Euclidean*
+     distance, tuned for its old 128-dim face-api.js embeddings
+     (`MIN_CLUSTER_SEPARATION=0.35`, `MAX_CLUSTER_EDGE_LENGTH=0.5`, `MIN_DATASET_SIZE=120`
+     detections before it runs at all). None of these numbers transfer — wrong dimensionality,
+     wrong model, wrong distance metric for our space.
+   - **Immich's** (`server/src/config.ts` /
+     `machine-learning/immich_ml/models/facial_recognition/recognition.py`) is a much closer
+     match: its default model is `buffalo_l` — the *same* InsightFace model recognAIze already
+     uses. Its threshold is `maxDistance: 0.5` **cosine** distance (confirmed via
+     `embedding <=> ${embedding}`, pgvector's cosine-distance operator, in
+     `search.repository.ts`) with `minFaces: 3` before a face counts as a cluster "core" —
+     directly comparable to our own `face.normed_embedding` output, unlike Recognize's numbers.
+     Its algorithm is also a better structural fit: incremental per-face nearest-neighbor
+     assignment (a face joins/starts a person once it has ≥3 matches within cosine distance
+     0.5) run as new faces arrive, rather than Recognize's "batch-recluster everything once
+     ≥120 detections exist." Catch: Immich leans on Postgres+pgvector for the similarity
+     search; this instance's DB is MariaDB 10.11 with no vector index, but that's not a real
+     blocker at homelab library scale — cosine distance on L2-normalized vectors is just a dot
+     product, cheap to compute directly against a user's existing embeddings without an ANN
+     index until the per-user face count is far larger than any real personal library.
+   - Bottom line: `maxDistance ≤ 0.5` / `minFaces = 3` from Immich are a far better *starting
+     point* for real experimentation than anything from Recognize, precisely because they're
+     tuned for the identical model — but still need validating against a labeled slice of the
+     real photo library, not trusted blind.
 2. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
    Nextcloud's file events / background jobs, matching how Recognize currently gets invoked —
    `recognaize_bridge`'s `occ recognaize:detect` command is the manual trigger this phase would
