@@ -18,16 +18,8 @@ class DetectionService {
 	public function __construct(
 		private IDBConnection $db,
 		private PublicFunctions $appAPI,
+		private ProcessedFileService $processedFiles,
 	) {
-	}
-
-	public function hasExistingDetections(string $userId, int $fileId): bool {
-		$qb = $this->db->getQueryBuilder();
-		$qb->select($qb->func()->count('*', 'c'))
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-		return (int)$qb->executeQuery()->fetchOne() > 0;
 	}
 
 	/** @return array{success: bool, inserted: int, error: ?string} */
@@ -73,6 +65,10 @@ class DetectionService {
 			$qb->executeStatement();
 			$inserted++;
 		}
+
+		// Recorded even for zero-face results - recognize_face_detections never gets a row then,
+		// which used to mean such files were reprocessed on every subsequent trigger run.
+		$this->processedFiles->markProcessed($userId, $fileId, $inserted);
 
 		return ['success' => true, 'inserted' => $inserted, 'error' => null];
 	}

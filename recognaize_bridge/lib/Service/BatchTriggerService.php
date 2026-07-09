@@ -6,9 +6,7 @@ namespace OCA\RecognaizeBridge\Service;
 
 use OCA\RecognaizeBridge\BackgroundJob\DetectQueuedJob;
 use OCP\BackgroundJob\IJobList;
-use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
-use OCP\Files\NotFoundException;
 use OCP\IUser;
 use OCP\IUserManager;
 
@@ -24,22 +22,21 @@ class BatchTriggerService {
 		private IUserManager $userManager,
 		private IRootFolder $rootFolder,
 		private PathFilterService $pathFilter,
-		private DetectionService $detectionService,
+		private ProcessedFileService $processedFiles,
 		private IJobList $jobList,
 	) {
 	}
 
 	public function run(int $batchSize): int {
 		$queued = 0;
-		$includedPaths = $this->pathFilter->getIncludedPaths();
 
-		$this->userManager->callForSeenUsers(function (IUser $user) use (&$queued, $batchSize, $includedPaths): ?bool {
+		$this->userManager->callForSeenUsers(function (IUser $user) use (&$queued, $batchSize): ?bool {
 			$userFolder = $this->rootFolder->getUserFolder($user->getUID());
-			$searchRoots = $includedPaths === [] ? [$userFolder] : $this->resolveFolders($userFolder, $includedPaths);
+			$searchRoots = $this->pathFilter->resolveSearchRoots($userFolder);
 
 			foreach ($searchRoots as $folder) {
 				foreach ($folder->searchByMime('image') as $node) {
-					if ($this->detectionService->hasExistingDetections($user->getUID(), $node->getId())) {
+					if ($this->processedFiles->isProcessed($user->getUID(), $node->getId())) {
 						continue;
 					}
 					$this->jobList->add(DetectQueuedJob::class, ['userId' => $user->getUID(), 'fileId' => $node->getId()]);
@@ -53,24 +50,5 @@ class BatchTriggerService {
 		});
 
 		return $queued;
-	}
-
-	/**
-	 * @param list<string> $paths
-	 * @return list<Folder>
-	 */
-	private function resolveFolders(Folder $userFolder, array $paths): array {
-		$folders = [];
-		foreach ($paths as $path) {
-			try {
-				$node = $userFolder->get($path);
-			} catch (NotFoundException) {
-				continue; // configured path doesn't exist for this user
-			}
-			if ($node instanceof Folder) {
-				$folders[] = $node;
-			}
-		}
-		return $folders;
 	}
 }

@@ -6,6 +6,7 @@ namespace OCA\RecognaizeBridge\BackgroundJob;
 
 use OCA\RecognaizeBridge\Service\DetectionService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
+use OCA\RecognaizeBridge\Service\ProcessedFileService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\QueuedJob;
 use OCP\Files\IRootFolder;
@@ -24,6 +25,7 @@ class DetectQueuedJob extends QueuedJob {
 		private IRootFolder $rootFolder,
 		private PathFilterService $pathFilter,
 		private DetectionService $detectionService,
+		private ProcessedFileService $processedFiles,
 		private LoggerInterface $logger,
 	) {
 		parent::__construct($time);
@@ -51,7 +53,7 @@ class DetectQueuedJob extends QueuedJob {
 		if (!$this->pathFilter->isIncluded($path)) {
 			return;
 		}
-		if ($this->detectionService->hasExistingDetections($userId, $fileId)) {
+		if ($this->processedFiles->isProcessed($userId, $fileId)) {
 			return;
 		}
 

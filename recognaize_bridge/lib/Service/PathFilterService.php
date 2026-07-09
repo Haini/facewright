@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace OCA\RecognaizeBridge\Service;
 
+use OCP\Files\Folder;
+use OCP\Files\NotFoundException;
 use OCP\IAppConfig;
 
 /**
@@ -54,5 +56,33 @@ class PathFilterService {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Resolves the configured included paths to actual Folder nodes for one user - shared by
+	 * BatchTriggerService (enqueueing the backlog) and StatsService (counting candidates), so
+	 * both enumerate exactly the same set of files. Falls back to the whole user folder when no
+	 * paths are configured (matching isIncluded()'s "empty list = no restriction" behavior).
+	 *
+	 * @return list<Folder>
+	 */
+	public function resolveSearchRoots(Folder $userFolder): array {
+		$paths = $this->getIncludedPaths();
+		if ($paths === []) {
+			return [$userFolder];
+		}
+
+		$folders = [];
+		foreach ($paths as $path) {
+			try {
+				$node = $userFolder->get($path);
+			} catch (NotFoundException) {
+				continue; // configured path doesn't exist for this user
+			}
+			if ($node instanceof Folder) {
+				$folders[] = $node;
+			}
+		}
+		return $folders;
 	}
 }

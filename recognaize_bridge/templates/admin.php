@@ -4,6 +4,9 @@ $enabled = !empty($_['enabled']);
 $paths = $_['paths'] ?? '';
 $automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
 $batchSize = $_['batchSize'] ?? 50;
+$processedLastHour = $_['processedLastHour'] ?? 0;
+$processedCount = $_['processedCount'] ?? 0;
+$unprocessedCount = $_['unprocessedCount'] ?? 0;
 ?>
 <div id="recognaize-people-settings" class="section">
 	<h2><?php p($l->t('recognAIze')); ?></h2>
@@ -39,4 +42,9 @@ $batchSize = $_['batchSize'] ?? 50;
 		<button type="button" id="recognaize-run-batch"><?php p($l->t('Run now')); ?></button>
 	</p>
 	<p id="recognaize-run-batch-status"></p>
+</div>
+<div id="recognaize-stats-settings" class="section">
+	<h2><?php p($l->t('Statistics')); ?></h2>
+	<p><?php p($l->n('%n picture processed in the last hour', '%n pictures processed in the last hour', $processedLastHour, [$processedLastHour])); ?></p>
+	<p><?php p($l->t('%s processed, %s not yet processed', [(string)$processedCount, (string)$unprocessedCount])); ?></p>
 </div>

@@ -416,6 +416,58 @@ copied into the real library and their resulting detection rows/config afterward
 detections produced by the real batch-trigger run against real, previously-unprocessed
 photos — those are correct, kept as-is.
 
+### Done: admin-page stats (processed last hour, processed vs. not-yet-processed)
+
+`recognize_face_detections` has no timestamp column and never gets a row for a zero-face photo,
+so "processed in the last hour" and "already processed" couldn't be answered from it directly —
+and that second gap was a latent bug: zero-face files were being silently reprocessed on every
+batch-trigger/cron run forever, since the old idempotency check
+(`DetectionService::hasExistingDetections`) only looked at that table.
+
+Fixed both at once with a new table `recognaize_bridge` owns, `recognaize_processed`
+(`user_id`, `file_id`, `processed_at`, `faces_found`, unique index on `user_id`+`file_id`) via
+this app's first-ever DB migration (`lib/Migration/Version000002000Date20260709120000.php`).
+New `lib/Service/ProcessedFileService.php` records a row after every detection attempt
+(including zero-face ones) and is now the single idempotency check both `DetectQueuedJob` and
+`BatchTriggerService` use, replacing the old table-specific check. `DetectionService` no longer
+exposes `hasExistingDetections` at all — call sites went straight to `ProcessedFileService`.
+`PathFilterService` gained `resolveSearchRoots(Folder): array<Folder>`, promoted out of
+`BatchTriggerService`'s private `resolveFolders()` so `ProcessedFileService::countCandidates()`
+(the denominator for "not yet processed") enumerates exactly the same file set the batch
+trigger would enqueue — not an independent estimate.
+
+Stats are computed synchronously in `AdminSettings::getForm()` (processed count, unprocessed
+count, processed-in-the-last-3600s count) and rendered in a plain new section in
+`templates/admin.php` — deliberately no new AJAX endpoint/route for this, since it's simple,
+read-once-per-page-load data, and sidesteps the already-twice-hit "new routes.php entries need
+a container restart" gotcha entirely.
+
+**Real bug hit applying this app's very first schema migration**: `recognaize_bridge` is
+manually deployed (`docker cp`, not app-store), and `occ migrations:migrate`/`execute` aren't
+registered commands on this Nextcloud version — a dead end. The actual fix: bumping the app's
+`<version>` in `info.xml` (0.1.0 → 0.2.0) makes Nextcloud itself detect a pending app upgrade
+(`occ status` starts reporting `needsDbUpgrade: true`, and occ restricts itself to a small
+command subset until resolved) — `occ upgrade` then runs exactly the same migration path a real
+app-store update would, cleanly, with a normal maintenance-mode window. This is the sanctioned
+mechanism, not a workaround; worth remembering for any future migration on either bridge app,
+since it's not obvious the version bump alone is what unlocks it.
+
+**Second real bug, caught by testing manual re-detection, not by inspection**:
+`recognaize:detect` is deliberately designed to reprocess a file that's already been processed
+(unlike the automatic/batch paths) — but `ProcessedFileService::markProcessed()`'s first cut was
+a plain `INSERT`, which threw a duplicate-key error against the new unique index the moment the
+same file was detected twice. Fixed by making it a check-then-insert-or-update instead of a bare
+insert (not a portable atomic upsert — deliberately not needed at this project's single-cron-
+worker homelab scale, consistent with how idempotency is handled everywhere else in this app).
+
+Verified against the real live instance, not just `php -l`: ran `occ upgrade` for real (user
+confirmed first, since it's a shared-system, maintenance-mode-inducing operation), confirmed
+`oc_recognaize_processed` exists via `occ db:schema:export`, ran `recognaize:detect` twice in a
+row against a real test file to prove both the idempotency fix and the reprocessing-crash fix,
+queried the table directly to confirm exactly one row (not two), and rendered
+`AdminSettings::getForm()` through the real DI container to see actual output against the real
+~54k-file library (`"1 processed, 54341 not yet processed"`) before considering this done.
+
 ### Next
 
 1. **Multi-user + robustness.** Everything above targets a single-user prototype first
