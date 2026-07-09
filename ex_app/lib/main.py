@@ -60,7 +60,13 @@ async def detect(payload: DetectRequest, nc: Annotated[AsyncNextcloudApp, Depend
         }
         for face in faces
     ]
-    return JSONResponse(content={"faces": results})
+    return JSONResponse(
+        content={
+            "faces": results,
+            "image_width": img.shape[1],
+            "image_height": img.shape[0],
+        }
+    )
 
 
 def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:

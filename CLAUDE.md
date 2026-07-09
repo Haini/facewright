@@ -4,6 +4,14 @@ A replacement backend for Nextcloud Recognize's face-detection pipeline, built a
 AppAPI ExApp. Uses InsightFace instead of Recognize's face-api.js/tfjs-node stack, but keeps
 Recognize installed as a companion app rather than forking it.
 
+This repo holds two apps:
+- `appinfo/`, `ex_app/` etc. at the top level — `recognaize`, the Python AppAPI ExApp (InsightFace
+  detection).
+- `recognaize_bridge/` — a small, separate, regular Nextcloud PHP app. It exists only because
+  ExApps have no path to real database access; it calls `recognaize` and writes results into
+  Recognize's tables. See "Done: writing into Recognize's `oc_recognize_face_detections` table"
+  below for why.
+
 See `status.md` for the original scoping discussion this project is based on.
 
 ## Architecture decision
@@ -154,19 +162,70 @@ caller to upload bytes directly.
 - Verified end-to-end: a real file path returns real detections (2 faces on a second test
   photo), and a nonexistent path returns a clean `404 {"detail": "No such file: ..."}`.
 
+### Done: writing into Recognize's `oc_recognize_face_detections` table
+
+Two things discovered while doing this changed its shape from "just add a DB write":
+
+- **Recognize wasn't actually installed on this instance.** Only the older, unrelated
+  `facerecognition` app was present (disabled). Installed it (`occ app:install recognize`,
+  11.0.1 — confirmed compatible with this instance's NC 33.0.6). Its own face classifier
+  (`faces.enabled`) defaults to `false` in `SettingsService.php`, so no extra step was needed to
+  keep it from competing with our writes.
+- **ExApps have no sanctioned path to raw DB access** — confirmed by grepping `nc_py_api`'s
+  source (files/users/notifications/etc. APIs, nothing for arbitrary SQL) and by the official
+  AppAPI docs, which describe ExApps as isolated microservices with only a private Docker volume
+  for persistence. Recognize's own classifier also writes one detection row *per user with file
+  access* (via `IUserMountCache`), which only Nextcloud-side PHP can determine. So the actual
+  write happens from a small **new, separate Nextcloud PHP app**, `recognaize_bridge/` (not an
+  ExApp) — it calls `recognaize`'s `/detect` via AppAPI's `OCA\AppAPI\PublicFunctions::exAppRequest()`
+  (the sanctioned way for one Nextcloud app to call another's ExApp), then writes rows via
+  `IDBConnection`/`QueryBuilder`. Deployed by copying into this instance's `custom_apps` mount
+  (`/mnt/data/nextcloud/nc_apps` on the host) and `occ app:enable recognaize_bridge`.
+  Deliberately minimal: no controllers/routes/Entity-Mapper ceremony, just
+  `lib/Command/DetectFaces.php` implementing `occ recognaize:detect <user> <path>` as the manual
+  trigger for this phase.
+
+Schema mapping (from Recognize's GitHub source, since it wasn't installed here to read
+migrations from directly — `lib/Db/FaceDetection.php`, `lib/Classifiers/Images/ClusteringFaceClassifier.php`,
+`src/classifier_faces.js`):
+
+- `x`, `y`, `width`, `height` are **normalized 0.0–1.0 fractions** of image dimensions (top-left
+  corner + box size), not pixels — confirmed from face-api.js's `relativeBox` in Recognize's own
+  detector script. Our InsightFace `/detect` returns absolute pixel `[x1,y1,x2,y2]`, so
+  `/detect`'s response now also includes `image_width`/`image_height` (added to
+  `ex_app/lib/main.py`) so the bridge app can convert.
+- `face_vector` is a JSON-encoded **flat** array of floats (not nested — a `setVector([$vector])`
+  call in Recognize's `FaceDetection.php` looks like array-wrapping at first glance, but it's
+  actually just `NC\Entity::setter()`'s `func_get_args()`-style calling convention). Their
+  vectors are 128-dim (old face-api.js); ours are 512-dim InsightFace embeddings — different
+  space, harmless at the DB level, only matters once *our own* future clustering code reads it
+  back (Recognize's own clustering isn't being reused).
+- `cluster_id` is left `NULL` (clustering is a later phase) and `threshold` is left unset so the
+  DB default (`0.0`) applies — confirmed Recognize's own classifier doesn't set `threshold`
+  either at this insert site, so this matches upstream's actual behavior rather than guessing at
+  the column's intended meaning.
+- Deliberately **not** done yet (matches the "Multi-user + robustness" item below, not this
+  one): fan-out to every user with access to the file. This phase inserts exactly one row, for
+  whichever user the command names.
+
+Verified end-to-end: `occ recognaize:detect alice "Family/Photos/2024 Trip Photos/IMG20240102T165818.jpg"`
+inserted 2 rows; read them back directly (via a throwaway verification command, removed after
+confirming) and checked `user_id`/`file_id` matched, `x/y/width/height` all fell within `[0,1]`,
+`cluster_id` was `NULL`, and `face_vector` decoded to a 512-float array.
+
 ### Next
 
-1. **Write into Recognize's tables.** `oc_recognize_face_detections` for per-face
-   bbox/embedding rows. Undocumented internal schema owned by another app — fragile across
-   Recognize updates, worth a code comment explaining why we depend on it.
-2. **Clustering.** The hard part — figure out cosine-similarity thresholds for InsightFace's
+1. **Clustering.** The hard part — figure out cosine-similarity thresholds for InsightFace's
    embedding space against a labeled slice of the real photo library, then write clusters into
    `oc_recognize_face_clusters`.
-3. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
-   Nextcloud's file events / background jobs, matching how Recognize currently gets invoked.
-4. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
-   prototype first; multi-user support and resilience to Recognize updates are a separate,
-   larger step after the prototype proves clustering quality.
+2. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
+   Nextcloud's file events / background jobs, matching how Recognize currently gets invoked —
+   `recognaize_bridge`'s `occ recognaize:detect` command is the manual trigger this phase would
+   replace/wrap.
+3. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
+   prototype first; multi-user support (writing a row for every user with file access, matching
+   Recognize's own behavior) and resilience to Recognize updates are a separate, larger step
+   after the prototype proves clustering quality.
 
 ## Licensing note
 
