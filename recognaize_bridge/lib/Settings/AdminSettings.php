@@ -20,8 +20,15 @@ class AdminSettings implements ISettings {
 	public function getForm(): TemplateResponse {
 		$enabled = $this->appConfig->getValueString('recognize', 'faces.enabled', 'false') === 'true';
 		$paths = implode("\n", $this->pathFilter->getIncludedPaths());
+		$automaticDetectionEnabled = $this->appConfig->getValueString('recognaize_bridge', 'automatic_detection_enabled', 'false') === 'true';
+		$batchSize = $this->appConfig->getValueInt('recognaize_bridge', 'batch_size', 50);
 		Util::addScript('recognaize_bridge', 'admin');
-		return new TemplateResponse('recognaize_bridge', 'admin', ['enabled' => $enabled, 'paths' => $paths], '');
+		return new TemplateResponse('recognaize_bridge', 'admin', [
+			'enabled' => $enabled,
+			'paths' => $paths,
+			'automaticDetectionEnabled' => $automaticDetectionEnabled,
+			'batchSize' => $batchSize,
+		], '');
 	}
 
 	public function getSection(): string {

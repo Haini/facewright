@@ -2,6 +2,8 @@
 /** @var array $_ */
 $enabled = !empty($_['enabled']);
 $paths = $_['paths'] ?? '';
+$automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
+$batchSize = $_['batchSize'] ?? 50;
 ?>
 <div id="recognaize-people-settings" class="section">
 	<h2><?php p($l->t('recognAIze')); ?></h2>
@@ -22,4 +24,19 @@ $paths = $_['paths'] ?? '';
 		<button type="button" id="recognaize-included-paths-save"><?php p($l->t('Save')); ?></button>
 	</p>
 	<p id="recognaize-included-paths-status"></p>
+</div>
+<div id="recognaize-trigger-settings" class="section">
+	<h2><?php p($l->t('Detection triggers')); ?></h2>
+	<p>
+		<input type="checkbox" id="recognaize-automatic-detection-enabled" class="checkbox" <?php p($automaticDetectionEnabled ? 'checked' : ''); ?>>
+		<label for="recognaize-automatic-detection-enabled"><?php p($l->t('Automatically detect faces in new uploads')); ?></label>
+	</p>
+	<p id="recognaize-automatic-detection-status"></p>
+	<p><?php p($l->t('Process existing files that haven\'t been checked yet (respects the included paths above). Runs in the background over the next few cron cycles, not immediately.')); ?></p>
+	<p>
+		<label for="recognaize-batch-size"><?php p($l->t('Batch size')); ?></label>
+		<input type="number" id="recognaize-batch-size" min="1" value="<?php p((string)$batchSize); ?>">
+		<button type="button" id="recognaize-run-batch"><?php p($l->t('Run now')); ?></button>
+	</p>
+	<p id="recognaize-run-batch-status"></p>
 </div>

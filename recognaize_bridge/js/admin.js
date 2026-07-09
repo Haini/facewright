@@ -1,19 +1,21 @@
 (function () {
-	document.addEventListener('DOMContentLoaded', function () {
-		var checkbox = document.getElementById('recognaize-people-enabled');
-		var status = document.getElementById('recognaize-people-status');
+	function bindToggle(checkboxId, statusId, endpoint, bodyKey) {
+		var checkbox = document.getElementById(checkboxId);
+		var status = document.getElementById(statusId);
 		if (!checkbox) {
 			return;
 		}
 		checkbox.addEventListener('change', function () {
 			var enabled = checkbox.checked;
-			fetch(OC.generateUrl('/apps/recognaize_bridge/people-enabled'), {
+			var body = {};
+			body[bodyKey] = enabled;
+			fetch(OC.generateUrl('/apps/recognaize_bridge/' + endpoint), {
 				method: 'PUT',
 				headers: {
 					'Content-Type': 'application/json',
 					requesttoken: OC.requestToken,
 				},
-				body: JSON.stringify({ enabled: enabled }),
+				body: JSON.stringify(body),
 			}).then(function (response) {
 				if (!response.ok) {
 					throw new Error('Request failed');
@@ -24,6 +26,11 @@
 				status.textContent = 'Failed to save - see the Nextcloud log.';
 			});
 		});
+	}
+
+	document.addEventListener('DOMContentLoaded', function () {
+		bindToggle('recognaize-people-enabled', 'recognaize-people-status', 'people-enabled', 'enabled');
+		bindToggle('recognaize-automatic-detection-enabled', 'recognaize-automatic-detection-status', 'automatic-detection-enabled', 'enabled');
 
 		var pathsField = document.getElementById('recognaize-included-paths');
 		var pathsSaveButton = document.getElementById('recognaize-included-paths-save');
@@ -48,6 +55,33 @@
 					pathsStatus.textContent = 'Saved.';
 				}).catch(function () {
 					pathsStatus.textContent = 'Failed to save - see the Nextcloud log.';
+				});
+			});
+		}
+
+		var batchSizeField = document.getElementById('recognaize-batch-size');
+		var runBatchButton = document.getElementById('recognaize-run-batch');
+		var runBatchStatus = document.getElementById('recognaize-run-batch-status');
+		if (runBatchButton) {
+			runBatchButton.addEventListener('click', function (event) {
+				event.preventDefault();
+				runBatchStatus.textContent = 'Queuing...';
+				fetch(OC.generateUrl('/apps/recognaize_bridge/run-batch'), {
+					method: 'PUT',
+					headers: {
+						'Content-Type': 'application/json',
+						requesttoken: OC.requestToken,
+					},
+					body: JSON.stringify({ batchSize: parseInt(batchSizeField.value, 10) || 50 }),
+				}).then(function (response) {
+					if (!response.ok) {
+						throw new Error('Request failed');
+					}
+					return response.json();
+				}).then(function (data) {
+					runBatchStatus.textContent = 'Queued ' + data.queued + ' file(s) for processing.';
+				}).catch(function () {
+					runBatchStatus.textContent = 'Failed to run - see the Nextcloud log.';
 				});
 			});
 		}

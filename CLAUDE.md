@@ -366,16 +366,63 @@ involved), which is why only the new textarea+button feature showed the bug.
 **Confirmed fixed** — the user tried it again after the `type="button"` fix and paths now
 persist across reloads, including the originally-reported space-containing one.
 
+### Done: automatic + manual batch triggers
+
+Detection no longer requires a manual `occ recognaize:detect` call per file. Researched
+Recognize's own trigger architecture first (`lib/Hooks/FileListener.php`,
+`lib/BackgroundJobs/ClassifyFacesJob.php`): file events → a queue → background jobs drain it on
+Nextcloud's own cron. Confirmed this instance's cron is genuinely running (`lastcron` was ~95s
+old at check time) before relying on it. Deliberately not porting Recognize's full
+sophistication (rename/delete/mount-change handling, ignore-marker files, per-user access
+fan-out) — matches this project's incremental scope; multi-user fan-out is still the separate
+"Multi-user + robustness" phase below.
+
+Extracted the shared core (call the ExApp, insert rows) out of `DetectFaces` into
+`lib/Service/DetectionService.php`, since three different callers now need it.
+
+**Automatic path**: `lib/Listener/FileCreatedListener.php`, registered in
+`Application.php::register()` for both `NodeCreatedEvent` and `CacheEntryInsertedEvent`
+(Recognize listens to both too — different upload paths fire different events, neither alone
+covers everything). Gated by a dedicated `automatic_detection_enabled` appconfig toggle,
+**defaulting to off** — confirmed with the user first that this deserves its own switch,
+separate from the People-page toggle and included-paths, since flipping it on is a real
+behavioral jump (previously nothing happened without an explicit command). On a qualifying
+image-mimetype event with a resolvable owner, enqueues `lib/BackgroundJob/DetectQueuedJob.php`
+with just `{userId, fileId}` (not the Node itself — job arguments need to survive being
+queued). The job re-checks `PathFilterService::isIncluded()` at run time (freshest possible
+read, since the queue can sit for one or more cron cycles) and skips files that already have a
+detection row for that user (idempotency — otherwise every later cache-touch on an
+already-processed file would insert duplicates).
+
+**Manual batch trigger** (added after the user pointed out file-event triggers only catch *new*
+uploads, not the existing backlog already in the library): `lib/Service/BatchTriggerService.php`
++ a "Run now" button with a batch-size number field on the same admin page. Enumerates
+candidate files across all seen users (`Folder::searchByMime('image')`, scoped to each
+configured included path via `Folder::get()` if any are set — much cheaper than scanning the
+whole tree), skips already-processed ones via the same idempotency check, and enqueues up to
+the configured batch size as the *same* `DetectQueuedJob` — one processing pipeline for both
+trigger paths, actual work still happens on cron, not synchronously in the request.
+
+Verified end-to-end against the user's real photo library (not synthetic data): copied a
+known-2-face test photo into their actual configured included path (`Bilder`), `occ
+files:scan`ed it in to fire a genuine `CacheEntryInsertedEvent`, confirmed a job queued, ran it,
+confirmed 2 real detection rows landed. Verified idempotency by manually re-enqueueing the same
+file and confirming no duplicate rows. Verified the batch trigger against the real library with
+a small batch size, including a false alarm along the way: a first test run's jobs disappeared
+from the queue before a manual check could find them — turned out to be the *real* system cron
+processing them faster than expected, not a bug. Verified the toggle actually gates the
+listener (off → a new file in an included path does not get queued). Cleaned up all test files
+copied into the real library and their resulting detection rows/config afterward, except the
+detections produced by the real batch-trigger run against real, previously-unprocessed
+photos — those are correct, kept as-is.
+
 ### Next
 
-1. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
-   Nextcloud's file events / background jobs, matching how Recognize currently gets invoked —
-   `recognaize_bridge`'s `occ recognaize:detect`/`occ recognaize:cluster` are the manual
-   triggers this phase would replace/wrap.
-2. **Multi-user + robustness.** Everything above targets a single-user, manually-triggered
-   prototype first; multi-user support (writing a row for every user with file access, matching
-   Recognize's own behavior) and resilience to Recognize updates are a separate, larger step
-   after the prototype proves clustering quality at scale.
+1. **Multi-user + robustness.** Everything above targets a single-user prototype first
+   (detection is still keyed to a file's owner, not fanned out to every user with access, unlike
+   Recognize's own behavior); resilience to Recognize updates is a separate, larger step after
+   the prototype proves clustering quality at scale. Rename/delete/mount-change handling for the
+   file-event listener (deliberately skipped this phase) would live here too.
 
 ## Licensing note
 

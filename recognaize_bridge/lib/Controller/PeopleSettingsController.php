@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\RecognaizeBridge\Controller;
 
+use OCA\RecognaizeBridge\Service\BatchTriggerService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
@@ -12,9 +13,9 @@ use OCP\IRequest;
 
 /**
  * Backs the recognAIze admin settings page (kept the name from when it only handled the
- * People-page toggle; now also handles the included-paths allowlist - not worth the risk of
- * renaming the class/route once routing was working, see CLAUDE.md's "stale registration"
- * gotcha).
+ * People-page toggle; now also handles included-paths, automatic-detection, and the batch
+ * trigger - not worth the risk of renaming the class/route once routing was working, see
+ * CLAUDE.md's "stale registration" gotcha).
  *
  * setEnabled: toggles Memories' People page visibility. Memories checks Recognize's own
  * `faces.enabled` appconfig key directly (Util::recognizeIsEnabled()), but Recognize's own
@@ -22,7 +23,7 @@ use OCP\IRequest;
  * real face classifier crawl - which recognAIze exists to replace, not race. So this writes
  * the same appconfig key directly, bypassing Recognize's own service and that side effect.
  *
- * Route registered in appinfo/routes.php (mirrors Recognize's own convention).
+ * Routes registered in appinfo/routes.php (mirrors Recognize's own convention).
  * No #[NoAdminRequired] - Controller actions require admin by default.
  */
 class PeopleSettingsController extends Controller {
@@ -31,6 +32,7 @@ class PeopleSettingsController extends Controller {
 		IRequest $request,
 		private IAppConfig $appConfig,
 		private PathFilterService $pathFilter,
+		private BatchTriggerService $batchTrigger,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -44,5 +46,17 @@ class PeopleSettingsController extends Controller {
 	public function setIncludedPaths(string $paths): JSONResponse {
 		$this->pathFilter->setIncludedPaths(preg_split('/\r\n|\r|\n/', $paths) ?: []);
 		return new JSONResponse(['paths' => $this->pathFilter->getIncludedPaths()]);
+	}
+
+	public function setAutomaticDetectionEnabled(bool $enabled): JSONResponse {
+		$this->appConfig->setValueString('recognaize_bridge', 'automatic_detection_enabled', $enabled ? 'true' : 'false');
+		return new JSONResponse(['enabled' => $enabled]);
+	}
+
+	public function runBatch(int $batchSize): JSONResponse {
+		$batchSize = max(1, $batchSize);
+		$this->appConfig->setValueInt('recognaize_bridge', 'batch_size', $batchSize);
+		$queued = $this->batchTrigger->run($batchSize);
+		return new JSONResponse(['queued' => $queued]);
 	}
 }
