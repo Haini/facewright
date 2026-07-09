@@ -9,11 +9,6 @@ use OCP\IAppConfig;
 use OCP\Settings\ISettings;
 use OCP\Util;
 
-/**
- * Registered under Recognize's own 'recognize' settings section (not a section we own) so
- * this toggle shows up alongside Recognize's existing settings form, since it's really about
- * the same underlying appconfig key - see PeopleSettingsController.
- */
 class AdminSettings implements ISettings {
 	public function __construct(private IAppConfig $appConfig) {
 	}
@@ -25,7 +20,7 @@ class AdminSettings implements ISettings {
 	}
 
 	public function getSection(): string {
-		return 'recognize';
+		return 'recognaize_bridge';
 	}
 
 	public function getPriority(): int {

@@ -285,9 +285,11 @@ clustering work. Checked Recognize's own source (`lib/Settings/AdminSettings.php
 `AdminSection.php`, `lib/Controller/AdminController.php`) for the pattern, then built our own
 toggle that reuses it but skips that side effect:
 
-- `recognaize_bridge/lib/Settings/AdminSettings.php` — registers under Recognize's own
-  `'recognize'` settings-section ID (not a new section), so the toggle shows up right on the
-  same admin page as Recognize's own settings, at the top (`getPriority(): 10`).
+- `recognaize_bridge/lib/Settings/AdminSettings.php` + `AdminSection.php` — its own dedicated
+  "recognAIze" Administration section (own nav entry, own icon at `img/app.svg`), rather than
+  reusing Recognize's `'recognize'` section as originally built — the user tried the shared-page
+  version live and preferred a dedicated section instead. `AdminSection` mirrors Recognize's own
+  (`getID`/`getName`/`getPriority`/`getIcon` via `IIconSection`), just under our own section ID.
 - `recognaize_bridge/lib/Controller/PeopleSettingsController.php` — `PUT /people-enabled`
   writes `recognize`'s `faces.enabled` config **directly via `IAppConfig`**, bypassing
   Recognize's `SettingsService` entirely, so Recognize's classifier never gets (re-)armed.
@@ -313,11 +315,11 @@ extraction, unlike every other installed app on this instance). Worth rememberin
 route/controller 404s on this instance despite everything looking correct in source, try a
 container restart before assuming the code is wrong.
 
-Not independently browser-verified (would need a real logged-in admin session, and minting a
-throwaway app-password credential for that isn't warranted) — confirmed via direct HTTP
-requests that the route now resolves and requires auth (401, not 404) exactly like Recognize's
-own working equivalent, and the settings page itself renders without a fatal error
-unauthenticated. Real click-test in the actual admin UI is still worth doing.
+**Verified working in a real browser** (the user confirmed directly) — both the original
+shared-section version and the follow-up dedicated-section version. The dedicated section
+change needed no container restart (unlike the initial Controller+route addition) — adding a
+new `Settings\AdminSection` class to an app that's already routing correctly didn't hit the
+same stale-registration issue.
 
 ### Next
 

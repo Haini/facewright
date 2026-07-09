@@ -23,5 +23,6 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 	</commands>
 	<settings>
 		<admin>OCA\RecognaizeBridge\Settings\AdminSettings</admin>
+		<admin-section>OCA\RecognaizeBridge\Settings\AdminSection</admin-section>
 	</settings>
 </info>
