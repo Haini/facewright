@@ -21,4 +21,7 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\RecognaizeBridge\Command\DetectFaces</command>
 		<command>OCA\RecognaizeBridge\Command\ClusterFaces</command>
 	</commands>
+	<settings>
+		<admin>OCA\RecognaizeBridge\Settings\AdminSettings</admin>
+	</settings>
 </info>

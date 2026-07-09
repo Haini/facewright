@@ -273,6 +273,52 @@ still needed before calling clustering "done":
 - Give clusters real titles / feed them into Memories' People UI — right now they're bare rows
   with `title=''`.
 
+### Done: GUI toggle for Memories' People page
+
+Memories only shows the People page when Recognize's own appconfig key `faces.enabled` is
+`'true'` (checked in Memories' `Util::recognizeIsEnabled()`, in `custom_apps/memories/lib/Util.php`).
+But Recognize's *own* admin-settings toggle for that key
+(`AdminController::setSetting`/`SettingsService::setSetting`) has a side effect: flipping it to
+true also schedules Recognize's own real face-classifier crawl (`SchedulerJob`) across the whole
+instance — almost certainly what produced the ~1400 legacy 128-dim rows found during the
+clustering work. Checked Recognize's own source (`lib/Settings/AdminSettings.php` +
+`AdminSection.php`, `lib/Controller/AdminController.php`) for the pattern, then built our own
+toggle that reuses it but skips that side effect:
+
+- `recognaize_bridge/lib/Settings/AdminSettings.php` — registers under Recognize's own
+  `'recognize'` settings-section ID (not a new section), so the toggle shows up right on the
+  same admin page as Recognize's own settings, at the top (`getPriority(): 10`).
+- `recognaize_bridge/lib/Controller/PeopleSettingsController.php` — `PUT /people-enabled`
+  writes `recognize`'s `faces.enabled` config **directly via `IAppConfig`**, bypassing
+  Recognize's `SettingsService` entirely, so Recognize's classifier never gets (re-)armed.
+  Confirmed safe by checking for event listeners on appconfig changes in Recognize's source —
+  there are none, so the only place that side effect happens is inside that one PHP method, and
+  a direct `IAppConfig` write is a clean way around it.
+- `recognaize_bridge/templates/admin.php` + `js/admin.js` — plain PHP template + hand-written
+  vanilla JS (no build step/Vue). Nextcloud's classic (non-attribute) `$l->t()`/`p()` template
+  convention, checkbox posts via `fetch()` using the `OC.requestToken` global for CSRF.
+- Route registered in `appinfo/routes.php`, matching Recognize's own convention (was asked to
+  check their source for this specifically).
+
+**Gotcha that ate a lot of time**: after adding the Controller + route, real HTTP requests to
+the new endpoint 404'd — but everything checked out individually (an `occ` debug command
+confirmed `isEnabledForUser`, `isAppLoaded`, `class_exists`, and reflection all correct; even a
+`#[FrontpageRoute]` PHP-attribute-based route, tried as an alternative, 404'd identically).
+Recognize's own equivalent route worked fine on the same instance throughout, ruling out a
+systemic routing problem. **Fixed by restarting the `nextcloud-app-1` container** — something
+about the app's route/controller registration was stuck in stale in-memory state from before
+the Controller existed (most likely tied to how the app was deployed: directories and files
+copied in directly via `docker cp` rather than through a real app-store install/package
+extraction, unlike every other installed app on this instance). Worth remembering: if a new
+route/controller 404s on this instance despite everything looking correct in source, try a
+container restart before assuming the code is wrong.
+
+Not independently browser-verified (would need a real logged-in admin session, and minting a
+throwaway app-password credential for that isn't warranted) — confirmed via direct HTTP
+requests that the route now resolves and requires auth (401, not 404) exactly like Recognize's
+own working equivalent, and the settings page itself renders without a fatal error
+unauthenticated. Real click-test in the actual admin UI is still worth doing.
+
 ### Next
 
 1. **Trigger wiring.** Move from manually-triggered detection to whatever hooks into
