@@ -40,58 +40,73 @@ class ClusteringService {
 
 	/** @return array{newClusters: int, joined: int, skipped: int, skippedForeign: int} */
 	public function clusterUser(string $userId, float $maxDistance, int $minFaces): array {
-		$detections = $this->loadDetections($userId);
-		$skippedForeign = $detections['skippedForeign'];
-		$detections = $detections['detections'];
+		['detections' => $detections, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
 
-		$ids = array_keys($detections);
-		$newClusters = 0;
-		$joined = 0;
-		$skipped = 0;
+		$idsToProcess = array_values(array_filter(
+			array_keys($detections),
+			fn (int $id): bool => $detections[$id]['cluster_id'] === null,
+		));
 
-		foreach ($ids as $id) {
-			if ($detections[$id]['cluster_id'] !== null) {
-				continue;
-			}
+		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
+		$this->persistAssignments($detections, $stats['changedIds']);
 
-			$matches = $this->findMatches($detections, $id, $maxDistance);
-			// "matches" excludes $id itself here, so +1 mirrors Immich's "includes the face itself".
-			if (count($matches) + 1 < $minFaces) {
-				$skipped++;
-				continue;
-			}
-
-			$clusterId = null;
-			foreach ($matches as $match) {
-				if ($detections[$match['id']]['cluster_id'] !== null) {
-					$clusterId = $detections[$match['id']]['cluster_id'];
-					break;
-				}
-			}
-
-			if ($clusterId === null) {
-				$clusterId = $this->createCluster($userId);
-				$newClusters++;
-			} else {
-				$joined++;
-			}
-
-			$detections[$id]['cluster_id'] = $clusterId;
-			foreach ($matches as $match) {
-				if ($detections[$match['id']]['cluster_id'] === null) {
-					$detections[$match['id']]['cluster_id'] = $clusterId;
-				}
-			}
-		}
-
-		$this->persistAssignments($detections);
-
-		return ['newClusters' => $newClusters, 'joined' => $joined, 'skipped' => $skipped, 'skippedForeign' => $skippedForeign];
+		return [
+			'newClusters' => $stats['newClusters'],
+			'joined' => $stats['joined'],
+			'skipped' => $stats['skipped'],
+			'skippedForeign' => $skippedForeign,
+		];
 	}
 
 	/**
-	 * Runs clusterUser() across every seen user - the admin-page trigger's entry point, since
-	 * that page isn't scoped to one user the way the CLI command is.
+	 * Chunked counterpart to clusterUser(), for users with too many detections to match and
+	 * persist in one synchronous request/job run - see ClusterScanJob, which owns pacing this
+	 * across cron cycles via the $afterId cursor. Still loads and matches against every one of
+	 * the user's detections (correct nearest-neighbor matching needs the full candidate pool
+	 * regardless of chunk size), but only *attempts* up to $chunkSize currently-unclustered ids
+	 * with id > $afterId this call - that's what bounds the O(chunk x total) comparison cost and
+	 * the persisted-write cost per invocation, not the memory floor of holding the candidate
+	 * pool, which stays proportional to the user's total detection count either way.
+	 *
+	 * @return array{attempted: int, newClusters: int, joined: int, skipped: int,
+	 *     skippedForeign: int, lastId: ?int, remainingUnclustered: int}
+	 */
+	public function clusterUserChunk(string $userId, float $maxDistance, int $minFaces, int $afterId, int $chunkSize): array {
+		['detections' => $detections, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
+
+		$unclusteredIds = array_values(array_filter(
+			array_keys($detections),
+			fn (int $id): bool => $detections[$id]['cluster_id'] === null && $id > $afterId,
+		));
+		$idsToProcess = array_slice($unclusteredIds, 0, $chunkSize);
+
+		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
+		$this->persistAssignments($detections, $stats['changedIds']);
+
+		$remainingUnclustered = 0;
+		foreach ($detections as $d) {
+			if ($d['cluster_id'] === null) {
+				$remainingUnclustered++;
+			}
+		}
+
+		return [
+			'attempted' => count($idsToProcess),
+			'newClusters' => $stats['newClusters'],
+			'joined' => $stats['joined'],
+			'skipped' => $stats['skipped'],
+			'skippedForeign' => $skippedForeign,
+			'lastId' => $idsToProcess === [] ? null : max($idsToProcess),
+			'remainingUnclustered' => $remainingUnclustered,
+		];
+	}
+
+	/**
+	 * Runs clusterUser() across every seen user - used by occ recognaize:cluster for small,
+	 * synchronous, single- or all-user runs. The admin page's "Run now" trigger and
+	 * occ recognaize:cluster-scan use ClusterScanJob (chunked) instead, since this blocks for
+	 * the whole user's detection set in one request - fine for a prototype-scale library, not
+	 * for the ~14k-detection scale this instance reached (see CLAUDE.md).
 	 *
 	 * @return array{newClusters: int, joined: int, skipped: int, perUser: array<string, array{newClusters: int, joined: int, skipped: int}>}
 	 */
@@ -126,18 +141,85 @@ class ClusteringService {
 		$qb->executeStatement();
 	}
 
-	/** @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, skippedForeign: int} */
+	/**
+	 * Attempts to assign a cluster to each of $idsToProcess (in order), matching against the
+	 * full $detections candidate pool - shared by clusterUser() and clusterUserChunk() so the
+	 * matching/join/create logic exists exactly once. Mutates $detections in place (both the
+	 * processed ids and any other still-unclustered match that gets pulled in as a side effect,
+	 * same as the original single-pass algorithm did) and reports which ids actually changed, so
+	 * the caller persists only those instead of rewriting every already-clustered row again.
+	 *
+	 * @param array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}> $detections
+	 * @param list<int> $idsToProcess
+	 * @return array{newClusters: int, joined: int, skipped: int, changedIds: list<int>}
+	 */
+	private function assignClusters(array &$detections, array $idsToProcess, string $userId, float $maxDistance, int $minFaces): array {
+		$newClusters = 0;
+		$joined = 0;
+		$skipped = 0;
+		$changedIds = [];
+
+		foreach ($idsToProcess as $id) {
+			if ($detections[$id]['cluster_id'] !== null) {
+				// already assigned as a side effect of an earlier id in this same pass
+				continue;
+			}
+
+			$matches = $this->findMatches($detections, $id, $maxDistance);
+			// "matches" excludes $id itself here, so +1 mirrors Immich's "includes the face itself".
+			if (count($matches) + 1 < $minFaces) {
+				$skipped++;
+				continue;
+			}
+
+			$clusterId = null;
+			foreach ($matches as $match) {
+				if ($detections[$match['id']]['cluster_id'] !== null) {
+					$clusterId = $detections[$match['id']]['cluster_id'];
+					break;
+				}
+			}
+
+			if ($clusterId === null) {
+				$clusterId = $this->createCluster($userId);
+				$newClusters++;
+			} else {
+				$joined++;
+			}
+
+			$detections[$id]['cluster_id'] = $clusterId;
+			$changedIds[] = $id;
+			foreach ($matches as $match) {
+				if ($detections[$match['id']]['cluster_id'] === null) {
+					$detections[$match['id']]['cluster_id'] = $clusterId;
+					$changedIds[] = $match['id'];
+				}
+			}
+		}
+
+		return ['newClusters' => $newClusters, 'joined' => $joined, 'skipped' => $skipped, 'changedIds' => $changedIds];
+	}
+
+	/**
+	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, skippedForeign: int}
+	 */
 	private function loadDetections(string $userId): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id', 'file_id', 'face_vector', 'cluster_id')
 			->from('recognize_face_detections')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->orderBy('id', 'ASC');
-		$rows = $qb->executeQuery()->fetchAll();
+		$result = $qb->executeQuery();
 
+		// Streamed row-by-row rather than fetchAll(): at real-library scale (tens of thousands
+		// of rows) fetchAll() would hold the *entire* raw result set (including every legacy
+		// 128-dim row's JSON text, discarded a moment later) in memory at once, on top of the
+		// decoded vectors being built up alongside it - the combination is what pushed this past
+		// PHP's memory_limit. Discarding each row's raw data as soon as it's decoded avoids
+		// holding both forms of the whole dataset simultaneously.
 		$detections = [];
 		$skippedForeign = 0;
-		foreach ($rows as $row) {
+		while ($row = $result->fetch()) {
 			$vector = json_decode($row['face_vector'], true);
 			if (!is_array($vector) || count($vector) !== self::EXPECTED_DIMENSIONS) {
 				$skippedForeign++;
@@ -149,6 +231,8 @@ class ClusteringService {
 				'cluster_id' => $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null,
 			];
 		}
+		$result->closeCursor();
+
 		return ['detections' => $detections, 'skippedForeign' => $skippedForeign];
 	}
 
@@ -189,14 +273,16 @@ class ClusteringService {
 		return $qb->getLastInsertId();
 	}
 
-	private function persistAssignments(array $detections): void {
-		foreach ($detections as $id => $d) {
-			if ($d['cluster_id'] === null) {
+	/** @param list<int> $ids */
+	private function persistAssignments(array $detections, array $ids): void {
+		foreach (array_unique($ids) as $id) {
+			$clusterId = $detections[$id]['cluster_id'];
+			if ($clusterId === null) {
 				continue;
 			}
 			$qb = $this->db->getQueryBuilder();
 			$qb->update('recognize_face_detections')
-				->set('cluster_id', $qb->createNamedParameter($d['cluster_id'], IQueryBuilder::PARAM_INT))
+				->set('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT))
 				->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
 			$qb->executeStatement();
 		}

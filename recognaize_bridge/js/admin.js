@@ -62,12 +62,13 @@
 
 		var clusterMaxDistanceField = document.getElementById('recognaize-cluster-max-distance');
 		var clusterMinFacesField = document.getElementById('recognaize-cluster-min-faces');
+		var clusterChunkSizeField = document.getElementById('recognaize-cluster-chunk-size');
 		var runClusteringButton = document.getElementById('recognaize-run-clustering');
 		var runClusteringStatus = document.getElementById('recognaize-run-clustering-status');
 		if (runClusteringButton) {
 			runClusteringButton.addEventListener('click', function (event) {
 				event.preventDefault();
-				runClusteringStatus.textContent = 'Clustering...';
+				runClusteringStatus.textContent = 'Starting...';
 				fetch(OC.generateUrl('/apps/recognaize_bridge/run-clustering'), {
 					method: 'PUT',
 					headers: {
@@ -77,6 +78,7 @@
 					body: JSON.stringify({
 						maxDistance: parseFloat(clusterMaxDistanceField.value) || 0.5,
 						minFaces: parseInt(clusterMinFacesField.value, 10) || 3,
+						chunkSize: parseInt(clusterChunkSizeField.value, 10) || 300,
 					}),
 				}).then(function (response) {
 					if (!response.ok) {
@@ -84,9 +86,9 @@
 					}
 					return response.json();
 				}).then(function (data) {
-					runClusteringStatus.textContent = data.newClusters + ' new cluster(s), ' + data.joined + ' face(s) joined an existing cluster, ' + data.skipped + ' face(s) left unclustered.';
+					runClusteringStatus.textContent = 'Started for ' + data.started + ' user(s) - runs in the background across upcoming cron cycles.';
 				}).catch(function () {
-					runClusteringStatus.textContent = 'Failed to run - see the Nextcloud log.';
+					runClusteringStatus.textContent = 'Failed to start - see the Nextcloud log.';
 				});
 			});
 		}

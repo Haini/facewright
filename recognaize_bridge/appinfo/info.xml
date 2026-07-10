@@ -9,7 +9,7 @@ ExApps have no path to real database access. It calls the recognaize ExApp for f
 and writes the results into Recognize's own oc_recognize_face_detections table via Nextcloud's
 QueryBuilder, since only first-party PHP code can do that.]]>
 	</description>
-	<version>0.2.3</version>
+	<version>0.2.4</version>
 	<licence>agpl</licence>
 	<author>Constantin Schieber-Knoebl</author>
 	<namespace>RecognaizeBridge</namespace>
@@ -22,6 +22,7 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\RecognaizeBridge\Command\ClusterFaces</command>
 		<command>OCA\RecognaizeBridge\Command\ResetRecognaizeData</command>
 		<command>OCA\RecognaizeBridge\Command\ScanLibrary</command>
+		<command>OCA\RecognaizeBridge\Command\ClusterScan</command>
 	</commands>
 	<settings>
 		<admin>OCA\RecognaizeBridge\Settings\AdminSettings</admin>

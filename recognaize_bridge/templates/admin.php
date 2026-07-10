@@ -7,11 +7,13 @@ $processingPaused = !empty($_['processingPaused']);
 $batchSize = $_['batchSize'] ?? 50;
 $clusterMaxDistance = $_['clusterMaxDistance'] ?? 0.5;
 $clusterMinFaces = $_['clusterMinFaces'] ?? 3;
+$clusterChunkSize = $_['clusterChunkSize'] ?? 300;
 $processedLastHour = $_['processedLastHour'] ?? 0;
 $processedCount = $_['processedCount'] ?? 0;
 $unprocessedCount = $_['unprocessedCount'] ?? 0;
 $queuedDetections = $_['queuedDetections'] ?? 0;
 $scanActive = !empty($_['scanActive']);
+$clusteringActive = !empty($_['clusteringActive']);
 ?>
 <div id="recognaize-people-settings" class="section">
 	<h2><?php p($l->t('recognAIze')); ?></h2>
@@ -69,8 +71,13 @@ $scanActive = !empty($_['scanActive']);
 	<p>
 		<label for="recognaize-cluster-min-faces"><?php p($l->t('Min faces to form a cluster')); ?></label>
 		<input type="number" id="recognaize-cluster-min-faces" min="1" value="<?php p((string)$clusterMinFaces); ?>">
+	</p>
+	<p>
+		<label for="recognaize-cluster-chunk-size"><?php p($l->t('Chunk size')); ?></label>
+		<input type="number" id="recognaize-cluster-chunk-size" min="1" value="<?php p((string)$clusterChunkSize); ?>">
 		<button type="button" id="recognaize-run-clustering"><?php p($l->t('Run now')); ?></button>
 	</p>
+	<p><?php p($l->t('Runs in the background, in chunks, across upcoming cron cycles - large accounts can have tens of thousands of faces to compare, which is too much work for one request. Started chains resume automatically after a pause and keep going until nothing changes.')); ?></p>
 	<p id="recognaize-run-clustering-status"></p>
 </div>
 <div id="recognaize-stats-settings" class="section">
@@ -80,10 +87,14 @@ $scanActive = !empty($_['scanActive']);
 		<strong>
 		<?php if ($processingPaused): ?>
 			<?php p($l->t('Processing is PAUSED.')); ?>
+		<?php elseif ($scanActive && $clusteringActive): ?>
+			<?php p($l->t('Library scan and clustering are both active.')); ?>
 		<?php elseif ($scanActive): ?>
 			<?php p($l->t('Library scan is active.')); ?>
+		<?php elseif ($clusteringActive): ?>
+			<?php p($l->t('Clustering is active.')); ?>
 		<?php else: ?>
-			<?php p($l->t('Idle - no scan running.')); ?>
+			<?php p($l->t('Idle - nothing running.')); ?>
 		<?php endif; ?>
 		</strong>
 	</p>

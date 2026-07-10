@@ -608,6 +608,74 @@ unambiguous line at the top of the Statistics section — "Idle" / "Library scan
 Confirmed correct against real state in a real browser (showed "active" with a nonzero queued
 count while a real scan was running).
 
+### Done: chunked, self-requeuing clustering (fixed a real memory-limit crash)
+
+Triggered by a real incident, same class as the detection-batch-size one but on the other side
+of the pipeline: once the library scan (previous section) had been running a while, alice's own
+InsightFace detection count grew from the ~740 the clustering prototype was validated against to
+**13,825**, with 4,286 unclustered. Clicking "Run now" under Clustering started reliably failing
+— no error surfaced anywhere findable (checked Nextcloud's log, Apache's error log — which turned
+out to be a symlink to `/dev/stderr`, not a real file; reading it as one just hangs forever
+waiting on a live stream, the actual content is in `docker logs`, not the container's
+filesystem — and the container's own OOM/restart state; nothing). Same silent-failure shape as
+the earlier ExApp segfault: a hard kill leaves no application-level trace to grep for. The
+numbers alone were enough to diagnose it without a log line: `ClusteringService::clusterUser()`
+loaded and held every one of a user's detections in memory at once
+(`fetchAll()`, then a fully-decoded 512-float PHP array *per row*, kept resident for the entire
+run), then did an all-pairs cosine-distance comparison for every unclustered face against that
+whole set — synchronously, in one HTTP request. At 13,825 detections that's tens of millions of
+pairwise 512-float comparisons plus tens of thousands of resident decoded vectors, comfortably
+past PHP's `memory_limit` (4096M on this instance) or a request timeout, whichever came first.
+
+Unlike detection batching, clustering can't simply chunk *which files to enqueue* — correct
+nearest-neighbor matching needs every one of a user's detections loaded as the candidate pool
+no matter how much work you do per call, so the memory floor for holding that pool is
+unavoidable at some size. What chunking *can* bound is (a) unnecessary memory duplication while
+loading, and (b) how many faces get matched-and-persisted per invocation:
+
+- `ClusteringService::loadDetections()` now streams rows (`$result->fetch()` in a loop) instead
+  of `fetchAll()`ing the whole result set up front — avoids holding both the raw JSON text and
+  the decoded vector for *every* row (including the ~8,300 legacy 128-dim ones that get
+  discarded anyway) simultaneously; each row's raw form is dropped the moment it's decoded.
+- New `ClusteringService::clusterUserChunk($userId, $maxDistance, $minFaces, $afterId,
+  $chunkSize)`: still loads and matches against the full candidate pool, but only *attempts*
+  cluster assignment for up to `$chunkSize` currently-unclustered ids with `id > $afterId` —
+  that's what bounds the comparison and per-call persisted-write cost. The actual
+  matching/join/create logic was extracted into a shared private `assignClusters()` so
+  `clusterUser()` (the original one-shot, still used by `occ recognaize:cluster <user>` for
+  small manual runs) and `clusterUserChunk()` aren't two copies of the same algorithm.
+  `persistAssignments()` was also changed to take an explicit list of changed ids rather than
+  re-`UPDATE`ing every already-clustered row on every call — a real, pre-existing inefficient
+  behavior surfaced while fixing this, not new.
+- New `lib/BackgroundJob/ClusterScanJob.php`: self-requeuing like `BatchScanJob`, but carries an
+  `afterId` cursor (not just a constant chunk size) and a `passProgress` flag in its argument,
+  since simply "requeue until nothing's left unclustered" isn't a valid stop condition here —
+  some faces are permanently below `min-faces` and will never cluster no matter how many more
+  passes run. It advances through the unclustered set in id order each pass; once a pass reaches
+  the end, it starts a fresh pass from the beginning (matching is order-dependent within a pass —
+  a cluster formed partway through can make an earlier-skipped face matchable next time), but
+  only if the *previous* pass made some assignment. A pass with zero effect will have zero effect
+  again unchanged, so that — not an empty queue, which may never be fully true — is what actually
+  stops it. Honors the same `processing_paused` flag as the detection jobs.
+- `PeopleSettingsController::runClustering` (the existing `/run-clustering` route — no new route,
+  so no container restart needed this time, just `occ upgrade` for the JS cache-bust) now
+  enqueues one `ClusterScanJob` per seen user instead of calling
+  `ClusteringService::runForAllUsers()` synchronously. Guards against double-starting a chain for
+  a user who already has one in flight, via `IJobList::getJobsIterator()` + inspecting each
+  pending job's `getArgument()['userId']` — `IJobList::add()`'s own built-in dedup (see the
+  scan-job section above) doesn't help here since `ClusterScanJob`'s argument changes every
+  invocation (`afterId`/`passProgress` evolve), unlike `BatchScanJob`'s constant `chunkSize`.
+- `occ recognaize:cluster-scan [--chunk-size=300]` mirrors `occ recognaize:scan` — same
+  per-user-chain-guard, starts the background job and returns immediately rather than blocking.
+- Admin page: "Run now" under Clustering now starts the background chain (with a configurable
+  chunk size, default 300) instead of blocking the request; the live status line (previous
+  section) gained a `ClusterScanJob`-backed "Clustering is active" state alongside the existing
+  scan/paused ones.
+
+Confirmed live: clicking "Run now" started clustering for all 5 seen users without hanging or
+erroring, where the old synchronous version reliably failed for the one account that had grown
+past prototype scale.
+
 ### Next
 
 1. **Multi-user + robustness.** Everything above targets a single-user prototype first

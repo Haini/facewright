@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\RecognaizeBridge\Settings;
 
 use OCA\RecognaizeBridge\BackgroundJob\BatchScanJob;
+use OCA\RecognaizeBridge\BackgroundJob\ClusterScanJob;
 use OCA\RecognaizeBridge\BackgroundJob\DetectQueuedJob;
 use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCA\RecognaizeBridge\Service\ProcessedFileService;
@@ -33,6 +34,7 @@ class AdminSettings implements ISettings {
 		$batchSize = $this->appConfig->getValueInt('recognaize_bridge', 'batch_size', 50);
 		$clusterMaxDistance = $this->appConfig->getValueFloat('recognaize_bridge', 'cluster_max_distance', 0.5);
 		$clusterMinFaces = $this->appConfig->getValueInt('recognaize_bridge', 'cluster_min_faces', 3);
+		$clusterChunkSize = $this->appConfig->getValueInt('recognaize_bridge', 'cluster_chunk_size', 300);
 
 		$processedCount = $this->processedFiles->countProcessed();
 		$candidateCount = $this->processedFiles->countCandidates();
@@ -45,11 +47,13 @@ class AdminSettings implements ISettings {
 			'batchSize' => $batchSize,
 			'clusterMaxDistance' => $clusterMaxDistance,
 			'clusterMinFaces' => $clusterMinFaces,
+			'clusterChunkSize' => $clusterChunkSize,
 			'processedLastHour' => $this->processedFiles->countProcessedSince($this->timeFactory->getTime() - 3600),
 			'processedCount' => $processedCount,
 			'unprocessedCount' => max(0, $candidateCount - $processedCount),
 			'queuedDetections' => $this->countJobs(DetectQueuedJob::class),
 			'scanActive' => $this->countJobs(BatchScanJob::class) > 0,
+			'clusteringActive' => $this->countJobs(ClusterScanJob::class) > 0,
 		], '');
 	}
 

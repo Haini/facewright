@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\RecognaizeBridge\Controller;
 
 use OCA\RecognaizeBridge\BackgroundJob\BatchScanJob;
+use OCA\RecognaizeBridge\BackgroundJob\ClusterScanJob;
 use OCA\RecognaizeBridge\Service\BatchTriggerService;
 use OCA\RecognaizeBridge\Service\ClusteringService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
@@ -13,6 +14,8 @@ use OCP\AppFramework\Http\JSONResponse;
 use OCP\BackgroundJob\IJobList;
 use OCP\IAppConfig;
 use OCP\IRequest;
+use OCP\IUser;
+use OCP\IUserManager;
 
 /**
  * Backs the recognAIze admin settings page (kept the name from when it only handled the
@@ -38,6 +41,7 @@ class PeopleSettingsController extends Controller {
 		private BatchTriggerService $batchTrigger,
 		private ClusteringService $clustering,
 		private IJobList $jobList,
+		private IUserManager $userManager,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -88,16 +92,51 @@ class PeopleSettingsController extends Controller {
 	}
 
 	/**
-	 * Runs synchronously (unlike detection, this is pure local DB/CPU work against
-	 * already-stored embeddings - no ExApp round-trip - so it's fast enough not to need a
-	 * background job at this project's current data scale, see CLAUDE.md).
+	 * Starts a self-requeuing, chunked ClusterScanJob per seen user, instead of running
+	 * ClusteringService::runForAllUsers() synchronously in this request - that used to load and
+	 * all-pairs-match a user's *entire* detection set in one go, which was fine at prototype
+	 * scale but started hitting PHP's memory limit once a real account passed several thousand
+	 * detections (see CLAUDE.md). Skips starting a second chain for a user who already has one
+	 * in flight (harmless either way since matching is idempotent against already-clustered
+	 * rows, but wasteful).
 	 */
-	public function runClustering(float $maxDistance, int $minFaces): JSONResponse {
+	public function runClustering(float $maxDistance, int $minFaces, int $chunkSize = 300): JSONResponse {
 		$maxDistance = max(0.0, $maxDistance);
 		$minFaces = max(1, $minFaces);
+		$chunkSize = max(1, $chunkSize);
 		$this->appConfig->setValueFloat('recognaize_bridge', 'cluster_max_distance', $maxDistance);
 		$this->appConfig->setValueInt('recognaize_bridge', 'cluster_min_faces', $minFaces);
-		$result = $this->clustering->runForAllUsers($maxDistance, $minFaces);
-		return new JSONResponse($result);
+		$this->appConfig->setValueInt('recognaize_bridge', 'cluster_chunk_size', $chunkSize);
+
+		$alreadyRunning = $this->usersWithPendingClusterScan();
+		$started = 0;
+		$this->userManager->callForSeenUsers(function (IUser $user) use (&$started, $maxDistance, $minFaces, $chunkSize, $alreadyRunning): void {
+			if (isset($alreadyRunning[$user->getUID()])) {
+				return;
+			}
+			$this->jobList->add(ClusterScanJob::class, [
+				'userId' => $user->getUID(),
+				'maxDistance' => $maxDistance,
+				'minFaces' => $minFaces,
+				'chunkSize' => $chunkSize,
+				'afterId' => 0,
+				'passProgress' => false,
+			]);
+			$started++;
+		});
+
+		return new JSONResponse(['started' => $started]);
+	}
+
+	/** @return array<string, true> user ids that already have a ClusterScanJob pending */
+	private function usersWithPendingClusterScan(): array {
+		$userIds = [];
+		foreach ($this->jobList->getJobsIterator(ClusterScanJob::class, null, 0) as $job) {
+			$argument = $job->getArgument();
+			if (is_array($argument) && isset($argument['userId'])) {
+				$userIds[$argument['userId']] = true;
+			}
+		}
+		return $userIds;
 	}
 }
