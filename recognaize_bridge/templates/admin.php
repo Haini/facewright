@@ -3,12 +3,15 @@
 $enabled = !empty($_['enabled']);
 $paths = $_['paths'] ?? '';
 $automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
+$processingPaused = !empty($_['processingPaused']);
 $batchSize = $_['batchSize'] ?? 50;
 $clusterMaxDistance = $_['clusterMaxDistance'] ?? 0.5;
 $clusterMinFaces = $_['clusterMinFaces'] ?? 3;
 $processedLastHour = $_['processedLastHour'] ?? 0;
 $processedCount = $_['processedCount'] ?? 0;
 $unprocessedCount = $_['unprocessedCount'] ?? 0;
+$queuedDetections = $_['queuedDetections'] ?? 0;
+$scanActive = !empty($_['scanActive']);
 ?>
 <div id="recognaize-people-settings" class="section">
 	<h2><?php p($l->t('recognAIze')); ?></h2>
@@ -37,6 +40,12 @@ $unprocessedCount = $_['unprocessedCount'] ?? 0;
 		<label for="recognaize-automatic-detection-enabled"><?php p($l->t('Automatically detect faces in new uploads')); ?></label>
 	</p>
 	<p id="recognaize-automatic-detection-status"></p>
+	<p>
+		<input type="checkbox" id="recognaize-processing-paused" class="checkbox" <?php p($processingPaused ? 'checked' : ''); ?>>
+		<label for="recognaize-processing-paused"><?php p($l->t('Pause processing')); ?></label>
+	</p>
+	<p><?php p($l->t('Stops recognAIze from running new detections (from automatic uploads, "Run now", or "Scan entire library" alike). Already-queued files stay queued and pick back up automatically once unpaused - nothing is lost or needs restarting. Only affects recognAIze\'s own background jobs, not Nextcloud\'s cron or any other app.')); ?></p>
+	<p id="recognaize-processing-paused-status"></p>
 	<p><?php p($l->t('Process existing files that haven\'t been checked yet (respects the included paths above). Runs in the background over the next few cron cycles, not immediately.')); ?></p>
 	<p>
 		<label for="recognaize-batch-size"><?php p($l->t('Batch size')); ?></label>
@@ -44,6 +53,11 @@ $unprocessedCount = $_['unprocessedCount'] ?? 0;
 		<button type="button" id="recognaize-run-batch"><?php p($l->t('Run now')); ?></button>
 	</p>
 	<p id="recognaize-run-batch-status"></p>
+	<p><?php p($l->t('For a large backlog, prefer this over a huge batch size above: it enqueues one batch-sized chunk at a time in the background, repeating automatically every cron cycle until the whole library is covered, so it never tries to queue everything at once.')); ?></p>
+	<p>
+		<button type="button" id="recognaize-run-scan"><?php p($l->t('Scan entire library')); ?></button>
+	</p>
+	<p id="recognaize-run-scan-status"></p>
 </div>
 <div id="recognaize-clustering-settings" class="section">
 	<h2><?php p($l->t('Clustering')); ?></h2>
@@ -61,6 +75,19 @@ $unprocessedCount = $_['unprocessedCount'] ?? 0;
 </div>
 <div id="recognaize-stats-settings" class="section">
 	<h2><?php p($l->t('Statistics')); ?></h2>
+	<p><?php p($l->t('Snapshot as of this page load - reload to refresh.')); ?></p>
+	<p>
+		<strong>
+		<?php if ($processingPaused): ?>
+			<?php p($l->t('Processing is PAUSED.')); ?>
+		<?php elseif ($scanActive): ?>
+			<?php p($l->t('Library scan is active.')); ?>
+		<?php else: ?>
+			<?php p($l->t('Idle - no scan running.')); ?>
+		<?php endif; ?>
+		</strong>
+	</p>
+	<p><?php p($l->n('%n file queued for detection right now', '%n files queued for detection right now', $queuedDetections, [$queuedDetections])); ?><?php if ($processingPaused && $queuedDetections > 0): ?> <?php p($l->t('(held, not shrinking, while paused)')); ?><?php endif; ?></p>
 	<p><?php p($l->n('%n picture processed in the last hour', '%n pictures processed in the last hour', $processedLastHour, [$processedLastHour])); ?></p>
 	<p><?php p($l->t('%s processed, %s not yet processed', [(string)$processedCount, (string)$unprocessedCount])); ?></p>
 </div>

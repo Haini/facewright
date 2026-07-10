@@ -28,7 +28,9 @@ class ClusteringService {
 	// uninstalls don't drop tables) and still holds real rows from Recognize's own old
 	// face-api.js classifier - 128-dim vectors, not our 512-dim InsightFace ones. Mixing the
 	// two in a distance computation would silently corrupt every match, so filter strictly.
-	private const EXPECTED_DIMENSIONS = 512;
+	// Public: ResetService reuses this as the same "is this row ours" test, so the two never
+	// drift apart into different definitions of "our data".
+	public const EXPECTED_DIMENSIONS = 512;
 
 	public function __construct(
 		private IDBConnection $db,

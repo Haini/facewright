@@ -545,6 +545,69 @@ UI for free, not just the read-side People page display: don't assume a Memories
 needs building here without checking whether Recognize's own (DAV, not REST) machinery already
 covers it.
 
+### Done: full-library scan, pause, and live queue/scan status
+
+Triggered by a real incident: the `recognaize` ExApp container had silently crashed (`Exited
+(139)` — SIGSEGV, no Python traceback despite `TRACE`-level logging, so almost certainly a
+native-code crash in ONNX Runtime/InsightFace's Cython extensions/OpenCV rather than an
+application bug) and sat dead for 16 hours before anyone noticed, since it had no restart
+policy. Also discovered mid-investigation (unrelated to the crash, and turned out to be
+intentional — the user had manually cleared both tables for a clean slate): `recognize_face_detections`
+and `recognize_face_clusters` were completely empty, legacy 128-dim data included.
+
+**Restart policy**: `docker update --restart=unless-stopped recognaize` (live) and the
+`Makefile`'s `run` target both now set `--restart unless-stopped`, so a future crash self-heals
+instead of silently stalling for hours.
+
+**Clean-slate reset command**: `occ recognaize:reset [--dry-run] [--yes]`
+(`lib/Command/ResetRecognaizeData.php` + `lib/Service/ResetService.php`) deletes recognAIze's own
+512-dim detections, any cluster made up of them, and clears `recognaize_processed` entirely —
+instance-wide, not per-user, unlike `ClusteringService::resetUser()` (which has no dimensionality
+filter and would also wipe legacy 128-dim clusters/titles if pointed at the wrong thing — see the
+near-miss in the clustering section above). Safe because clustering never mixes dimensions in one
+cluster, so "every cluster referenced by a 512-dim detection" and "every cluster recognAIze ever
+created" are the same set. `ClusteringService::EXPECTED_DIMENSIONS` was made `public const` so
+`ResetService` reuses the exact same "is this row ours" test rather than a second copy that could
+drift.
+
+**Full-library scan without a single huge request**: asked what happens if the existing
+`BatchTriggerService` "Run now" batch size were set to the whole backlog (~54k files) at once.
+Answer: `BatchTriggerService::run()` does two DB round-trips per candidate file synchronously
+inside the web request that handles the button click — at that scale, near-certain to blow a
+PHP/php-fpm/reverse-proxy request timeout partway through, with no resume logic. Fixed by adding
+`lib/BackgroundJob/BatchScanJob.php`, a self-requeuing `QueuedJob`: each run enqueues one modest
+chunk via the existing `BatchTriggerService::run($chunkSize)`, then re-adds itself so the *next*
+chunk waits for the next cron tick rather than everything being enqueued at once. Discovered
+`OCP\BackgroundJob\IJobList::add()` already calls its own `has()` internally before inserting —
+i.e. duplicate `(class, json-argument)` pairs are deduped server-side for free — so re-adding
+`self::class` with the same `chunkSize` argument every cycle is always safe, never creates
+duplicate queue rows, and naturally stops once a pass enqueues nothing new (backlog exhausted, or
+everything remaining already queued elsewhere). Both `occ recognaize:scan [--chunk-size=200]`
+(`lib/Command/ScanLibrary.php`) and the admin page's new "Scan entire library" button
+(`PeopleSettingsController::runScan`, `PUT /run-scan`) just enqueue the first `BatchScanJob` —
+same mechanism either way.
+
+**Pause**: a `processing_paused` appconfig flag, toggled by a new admin-page checkbox
+(`PeopleSettingsController::setProcessingPaused`, `PUT /processing-paused`). Checked at the top
+of both `DetectQueuedJob::run()` and `BatchScanJob::run()` — if paused, each just re-adds itself
+with its original argument and returns, doing no real work (no ExApp call, no enumeration) until
+unpaused, then resumes exactly where it left off. Deliberately scoped to only recognAIze's own
+two job classes, not Nextcloud's cron generally or any other app's jobs — there's no sanctioned
+way to pause cron itself, and pausing the whole instance's background jobs to stop one app's CPU
+load would be a much bigger hammer than asked for.
+
+**Live status visibility**: after building the above, live-tested it and found the existing
+admin-page stats (processed last hour, processed-vs-not) didn't answer the actually-interesting
+question — is a scan currently running, is it paused, how many files are sitting queued right
+now. Added to `AdminSettings::getForm()` (same "computed synchronously at page load, no new AJAX
+endpoint" pattern as the original stats): `IJobList::countByClass()` (available since NC 30.0.0)
+gives an exact pending count per job class, so `DetectQueuedJob`'s count is the live queue depth
+and `BatchScanJob`'s count (0 or 1) is whether a scan chain is currently alive. Rendered as one
+unambiguous line at the top of the Statistics section — "Idle" / "Library scan is active" /
+"Processing is PAUSED" — plus the queue depth, with a note when it's paused-and-not-shrinking.
+Confirmed correct against real state in a real browser (showed "active" with a nonzero queued
+count while a real scan was running).
+
 ### Next
 
 1. **Multi-user + robustness.** Everything above targets a single-user prototype first

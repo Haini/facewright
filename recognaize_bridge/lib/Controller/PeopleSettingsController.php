@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace OCA\RecognaizeBridge\Controller;
 
+use OCA\RecognaizeBridge\BackgroundJob\BatchScanJob;
 use OCA\RecognaizeBridge\Service\BatchTriggerService;
 use OCA\RecognaizeBridge\Service\ClusteringService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\BackgroundJob\IJobList;
 use OCP\IAppConfig;
 use OCP\IRequest;
 
@@ -35,6 +37,7 @@ class PeopleSettingsController extends Controller {
 		private PathFilterService $pathFilter,
 		private BatchTriggerService $batchTrigger,
 		private ClusteringService $clustering,
+		private IJobList $jobList,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -55,11 +58,33 @@ class PeopleSettingsController extends Controller {
 		return new JSONResponse(['enabled' => $enabled]);
 	}
 
+	/**
+	 * Pauses recognaize's own background jobs (DetectQueuedJob, BatchScanJob) - they check this
+	 * flag themselves and re-queue without doing work while it's set, see those classes. Only
+	 * affects recognaize's own jobs, not Nextcloud's cron or any other app's background jobs.
+	 */
+	public function setProcessingPaused(bool $paused): JSONResponse {
+		$this->appConfig->setValueString('recognaize_bridge', 'processing_paused', $paused ? 'true' : 'false');
+		return new JSONResponse(['paused' => $paused]);
+	}
+
 	public function runBatch(int $batchSize): JSONResponse {
 		$batchSize = max(1, $batchSize);
 		$this->appConfig->setValueInt('recognaize_bridge', 'batch_size', $batchSize);
 		$queued = $this->batchTrigger->run($batchSize);
 		return new JSONResponse(['queued' => $queued]);
+	}
+
+	/**
+	 * Starts (or, if already running, harmlessly no-ops against - see BatchScanJob) a
+	 * self-requeuing scan of the entire backlog, in chunks of $chunkSize, rather than trying to
+	 * enqueue everything in this one request the way a huge runBatch() batchSize would.
+	 */
+	public function runScan(int $chunkSize): JSONResponse {
+		$chunkSize = max(1, $chunkSize);
+		$this->appConfig->setValueInt('recognaize_bridge', 'batch_size', $chunkSize);
+		$this->jobList->add(BatchScanJob::class, ['chunkSize' => $chunkSize]);
+		return new JSONResponse(['started' => true]);
 	}
 
 	/**

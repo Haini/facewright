@@ -63,7 +63,7 @@ daemon-register:
 .PHONY: run
 run:
 	docker rm -f recognaize 2>/dev/null || true
-	docker run -d --name recognaize --network $(DOCKER_NETWORK) \
+	docker run -d --name recognaize --network $(DOCKER_NETWORK) --restart unless-stopped \
 		-e APP_ID=$(APP_ID) \
 		-e APP_VERSION=$(APP_VERSION) \
 		-e APP_SECRET=$(APP_SECRET) \

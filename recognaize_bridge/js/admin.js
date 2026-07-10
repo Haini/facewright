@@ -31,6 +31,7 @@
 	document.addEventListener('DOMContentLoaded', function () {
 		bindToggle('recognaize-people-enabled', 'recognaize-people-status', 'people-enabled', 'enabled');
 		bindToggle('recognaize-automatic-detection-enabled', 'recognaize-automatic-detection-status', 'automatic-detection-enabled', 'enabled');
+		bindToggle('recognaize-processing-paused', 'recognaize-processing-paused-status', 'processing-paused', 'paused');
 
 		var pathsField = document.getElementById('recognaize-included-paths');
 		var pathsSaveButton = document.getElementById('recognaize-included-paths-save');
@@ -113,6 +114,32 @@
 					runBatchStatus.textContent = 'Queued ' + data.queued + ' file(s) for processing.';
 				}).catch(function () {
 					runBatchStatus.textContent = 'Failed to run - see the Nextcloud log.';
+				});
+			});
+		}
+
+		var runScanButton = document.getElementById('recognaize-run-scan');
+		var runScanStatus = document.getElementById('recognaize-run-scan-status');
+		if (runScanButton) {
+			runScanButton.addEventListener('click', function (event) {
+				event.preventDefault();
+				runScanStatus.textContent = 'Starting...';
+				fetch(OC.generateUrl('/apps/recognaize_bridge/run-scan'), {
+					method: 'PUT',
+					headers: {
+						'Content-Type': 'application/json',
+						requesttoken: OC.requestToken,
+					},
+					body: JSON.stringify({ chunkSize: parseInt(batchSizeField.value, 10) || 50 }),
+				}).then(function (response) {
+					if (!response.ok) {
+						throw new Error('Request failed');
+					}
+					return response.json();
+				}).then(function () {
+					runScanStatus.textContent = 'Started - will enqueue files in chunks across upcoming cron cycles until the whole library is covered.';
+				}).catch(function () {
+					runScanStatus.textContent = 'Failed to start - see the Nextcloud log.';
 				});
 			});
 		}

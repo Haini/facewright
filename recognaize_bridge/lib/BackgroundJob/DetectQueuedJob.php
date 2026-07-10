@@ -8,8 +8,10 @@ use OCA\RecognaizeBridge\Service\DetectionService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCA\RecognaizeBridge\Service\ProcessedFileService;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\BackgroundJob\IJobList;
 use OCP\BackgroundJob\QueuedJob;
 use OCP\Files\IRootFolder;
+use OCP\IAppConfig;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -27,12 +29,22 @@ class DetectQueuedJob extends QueuedJob {
 		private DetectionService $detectionService,
 		private ProcessedFileService $processedFiles,
 		private LoggerInterface $logger,
+		private IAppConfig $appConfig,
+		private IJobList $jobList,
 	) {
 		parent::__construct($time);
 	}
 
 	/** @param array{userId: string, fileId: int} $argument */
 	protected function run($argument): void {
+		// QueuedJobs are removed from the queue once run() returns, so a paused job has to
+		// re-add itself to survive until the next tick - see BatchScanJob for the same pattern,
+		// and PeopleSettingsController::setProcessingPaused for how this flag gets set.
+		if ($this->appConfig->getValueString('recognaize_bridge', 'processing_paused', 'false') === 'true') {
+			$this->jobList->add(self::class, $argument);
+			return;
+		}
+
 		$userId = $argument['userId'];
 		$fileId = (int)$argument['fileId'];
 
