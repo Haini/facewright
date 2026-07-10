@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How recognAIze matches faces to files and clusters</title>
+<style>
+  :root {
+    --bg: #f2f1ec;
+    --surface: #ffffff;
+    --surface-2: #eae8e1;
+    --ink: #1b1f24;
+    --muted: #5b6570;
+    --accent: #0e8c79;
+    --accent-soft: rgba(14, 140, 121, 0.08);
+    --accent-soft-2: rgba(14, 140, 121, 0.16);
+    --line: #dde3e0;
+    --line-strong: #c3cbc7;
+    --shadow: 0 1px 2px rgba(20, 30, 28, 0.06);
+    --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161c;
+      --surface: #1a2029;
+      --surface-2: #212836;
+      --ink: #e7eaee;
+      --muted: #8b95a3;
+      --accent: #5fd3c0;
+      --accent-soft: rgba(95, 211, 192, 0.1);
+      --accent-soft-2: rgba(95, 211, 192, 0.18);
+      --line: #2a3038;
+      --line-strong: #394050;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161c;
+    --surface: #1a2029;
+    --surface-2: #212836;
+    --ink: #e7eaee;
+    --muted: #8b95a3;
+    --accent: #5fd3c0;
+    --accent-soft: rgba(95, 211, 192, 0.1);
+    --accent-soft-2: rgba(95, 211, 192, 0.18);
+    --line: #2a3038;
+    --line-strong: #394050;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  :root[data-theme="light"] {
+    --bg: #f2f1ec;
+    --surface: #ffffff;
+    --surface-2: #eae8e1;
+    --ink: #1b1f24;
+    --muted: #5b6570;
+    --accent: #0e8c79;
+    --accent-soft: rgba(14, 140, 121, 0.08);
+    --accent-soft-2: rgba(14, 140, 121, 0.16);
+    --line: #dde3e0;
+    --line-strong: #c3cbc7;
+    --shadow: 0 1px 2px rgba(20, 30, 28, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+  }
+
+  header.doc-head {
+    position: relative;
+    padding: 2.2rem 2rem;
+    margin-bottom: 3.5rem;
+  }
+  header.doc-head::before,
+  header.doc-head::after,
+  .corner-br::before,
+  .corner-br::after {
+    content: "";
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border-color: var(--accent);
+    opacity: 0.75;
+  }
+  header.doc-head::before { top: 0; left: 0; border-top: 2px solid; border-left: 2px solid; }
+  header.doc-head::after { top: 0; right: 0; border-top: 2px solid; border-right: 2px solid; }
+  .corner-br { position: relative; padding: 2.2rem 2rem; }
+  .corner-br::before { bottom: 0; left: 0; border-bottom: 2px solid; border-left: 2px solid; top: auto; }
+  .corner-br::after { bottom: 0; right: 0; border-bottom: 2px solid; border-right: 2px solid; top: auto; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.9rem;
+  }
+  .eyebrow .sep { color: var(--muted); opacity: 0.6; margin: 0 0.5em; }
+
+  h1 {
+    font-size: clamp(1.7rem, 1.4rem + 1.1vw, 2.35rem);
+    line-height: 1.18;
+    margin: 0 0 0.9rem;
+    text-wrap: balance;
+    font-weight: 600;
+  }
+
+  .dek {
+    color: var(--muted);
+    font-size: 1.05rem;
+    max-width: 54ch;
+    margin: 0;
+  }
+
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0 0 0.35rem;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0 0 0.8rem;
+    color: var(--ink);
+  }
+
+  section { margin-bottom: 3.6rem; }
+  section > .section-index {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0 0 0.5rem;
+  }
+  section > p { margin: 0.9rem 0; }
+  section > p.lede { font-size: 1.08rem; color: var(--ink); }
+
+  code, .mono {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
+  p code, li code {
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 0.08em 0.4em;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+
+  .callout {
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1.1rem 1.3rem;
+    margin: 1.4rem 0;
+    box-shadow: var(--shadow);
+  }
+  .callout .callout-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.5rem;
+  }
+  .callout p { margin: 0.5rem 0; }
+  .callout p:first-of-type { margin-top: 0; }
+  .callout p:last-of-type { margin-bottom: 0; }
+
+  /* schema cards */
+  .schema-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+  .schema-card {
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .schema-card .schema-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.85rem 1.1rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .schema-card .schema-head .tbl-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--accent);
+  }
+  .schema-card .schema-head .tbl-tag {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .schema-card .cols {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .schema-card .cols li {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+    padding: 0.62rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .schema-card .cols li:last-child { border-bottom: none; }
+  .schema-card .col-name {
+    font-family: var(--font-mono);
+    font-size: 0.86rem;
+    color: var(--ink);
+    white-space: nowrap;
+    min-width: 9.5rem;
+  }
+  .schema-card .col-name .fk {
+    color: var(--accent);
+  }
+  .schema-card .col-desc {
+    color: var(--muted);
+    font-size: 0.94rem;
+    line-height: 1.5;
+  }
+
+  /* diagrams */
+  .diagram-wrap {
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 1.2rem 0.5rem 0.9rem;
+    margin: 1.3rem 0;
+  }
+  .diagram-scroll {
+    overflow-x: auto;
+  }
+  .diagram-scroll svg {
+    display: block;
+    min-width: 640px;
+  }
+  .diagram-caption {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: center;
+    margin: 0.7rem 1rem 0.1rem;
+    letter-spacing: 0.02em;
+  }
+
+  svg .node-fill { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1; }
+  svg .node-fill.accent { fill: var(--accent-soft-2); stroke: var(--accent); }
+  svg .node-fill.dim { fill: var(--surface-2); stroke: var(--line); stroke-dasharray: 3 3; }
+  svg .edge { stroke: var(--line-strong); stroke-width: 1.3; fill: none; }
+  svg .edge.on { stroke: var(--accent); stroke-width: 1.5; }
+  svg .edge.dashed { stroke-dasharray: 4 4; stroke: var(--muted); }
+  svg text { font-family: var(--font-mono); fill: var(--ink); }
+  svg text.label-muted { fill: var(--muted); font-size: 10.5px; }
+  svg text.label-accent { fill: var(--accent); font-weight: 600; }
+  svg text.title-serif { font-family: var(--font-serif); fill: var(--muted); font-size: 12px; }
+  svg .arrowhead { fill: var(--line-strong); }
+  svg .arrowhead.on { fill: var(--accent); }
+
+  /* worked example table */
+  table.worked {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    margin: 1.1rem 0;
+  }
+  table.worked caption { text-align: left; caption-side: top; margin-bottom: 0.5rem; }
+  table.worked th, table.worked td {
+    text-align: left;
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--line);
+    font-variant-numeric: tabular-nums;
+  }
+  table.worked th {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--line-strong);
+  }
+  table.worked td.mono { font-family: var(--font-mono); font-size: 0.86rem; }
+  table.worked td.yes { color: var(--accent); font-family: var(--font-mono); }
+  .table-scroll { overflow-x: auto; }
+
+  ol.steps, ul.plain {
+    margin: 0.9rem 0;
+    padding-left: 1.4rem;
+  }
+  ol.steps li, ul.plain li { margin: 0.5rem 0; }
+  ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+  ol.steps li {
+    position: relative;
+    padding-left: 2.5rem;
+    margin: 0.9rem 0;
+  }
+  ol.steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0.05em;
+    width: 1.6rem;
+    height: 1.6rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 50%;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  footer.doc-foot {
+    margin-top: 4.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  footer.doc-foot code { color: var(--muted); background: none; padding: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="doc-head corner-br">
+    <p class="eyebrow">recognAIze<span class="sep">·</span>internal reference<span class="sep">·</span>schema &amp; matching</p>
+    <h1>How a photo becomes a face, and a face becomes a person</h1>
+    <p class="dek">What actually happens in the database between an uploaded photo and a named person on Memories' People page — table by table, row by row.</p>
+  </header>
+
+  <section>
+    <p class="section-index">00 &nbsp;— &nbsp;the short version</p>
+    <p class="lede">Three tables carry the whole system. A Nextcloud <strong>file</strong> is linked to zero or more <strong>face detections</strong> (one row per face InsightFace found in that photo). A face detection is linked to zero or one <strong>cluster</strong> — a cluster being recognAIze's notion of "a person." Detection and clustering are two separate passes, run at different times, connected only through the data they leave behind.</p>
+    <p>Nothing here is recognAIze's own schema by choice — these are Recognize's tables. recognAIze writes into them so Memories' existing People page can read them without knowing recognAIze exists.</p>
+  </section>
+
+  <section>
+    <p class="section-index">01 &nbsp;— &nbsp;the three tables</p>
+    <h2>What's actually on disk</h2>
+    <p>One table per concept. The fourth table you'll see mentioned elsewhere in this project, <code>recognaize_processed</code>, is <em>not</em> part of this — it only tracks which files have been attempted, for idempotency. It has no opinion about faces or people.</p>
+
+    <div class="schema-grid">
+      <div class="schema-card">
+        <div class="schema-head">
+          <span class="tbl-name">oc_recognize_face_detections</span>
+          <span class="tbl-tag">one row per face</span>
+        </div>
+        <ul class="cols">
+          <li><span class="col-name">id</span><span class="col-desc">primary key</span></li>
+          <li><span class="col-name">user_id</span><span class="col-desc">whose library this photo belongs to — detections are always scoped to one user</span></li>
+          <li><span class="col-name"><span class="fk">file_id</span></span><span class="col-desc">Nextcloud's internal, rename-proof file id — the only link back to an actual photo</span></li>
+          <li><span class="col-name">x, y, width, height</span><span class="col-desc">the face's bounding box, as fractions of the image (0.0–1.0), not pixels</span></li>
+          <li><span class="col-name">face_vector</span><span class="col-desc">the face embedding — a JSON array of floats. 512 numbers if recognAIze wrote it, 128 if Recognize's old classifier did</span></li>
+          <li><span class="col-name"><span class="fk">cluster_id</span></span><span class="col-desc">which person this face belongs to — <code>NULL</code> until a clustering pass decides</span></li>
+        </ul>
+      </div>
+
+      <div class="schema-card">
+        <div class="schema-head">
+          <span class="tbl-name">oc_recognize_face_clusters</span>
+          <span class="tbl-tag">one row per person</span>
+        </div>
+        <ul class="cols">
+          <li><span class="col-name">id</span><span class="col-desc">primary key — this is what <code>cluster_id</code> above points to</span></li>
+          <li><span class="col-name">user_id</span><span class="col-desc">clusters are private: "Anna" in your library and "Anna" in someone else's are unrelated rows</span></li>
+          <li><span class="col-name">title</span><span class="col-desc">the person's name — starts empty, set later by renaming them in Memories</span></li>
+        </ul>
+      </div>
+
+      <div class="schema-card">
+        <div class="schema-head">
+          <span class="tbl-name">oc_recognaize_processed</span>
+          <span class="tbl-tag">bookkeeping only</span>
+        </div>
+        <ul class="cols">
+          <li><span class="col-name">user_id, file_id</span><span class="col-desc">unique together — "has this file already been attempted"</span></li>
+          <li><span class="col-name">processed_at, faces_found</span><span class="col-desc">even 0 counts — this is what stops zero-face photos from being retried forever</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="section-index">02 &nbsp;— &nbsp;the shape of the data</p>
+    <h2>Files, faces, and people are a chain, not a lookup table</h2>
+    <p>There's no table that maps a file directly to a person. You get there by walking through the detections: <span class="mono">file → its faces → each face's cluster</span>. That indirection is what lets one photo hold several different people, and one person show up across hundreds of unrelated photos — worked below with three real-shaped rows, not placeholders.</p>
+
+    <div class="diagram-wrap">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three files feeding face detections, which feed two person clusters, with one face left unclustered">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" class="arrowhead"></path></marker>
+            <marker id="arrowOn" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" class="arrowhead on"></path></marker>
+          </defs>
+
+          <text x="70" y="24" class="title-serif">files</text>
+          <text x="410" y="24" class="title-serif">face detections</text>
+          <text x="760" y="24" class="title-serif">clusters</text>
+
+          <!-- file nodes -->
+          <rect x="20" y="50" width="180" height="46" rx="5" class="node-fill"></rect>
+          <text x="32" y="70" font-size="12">file_id 8841</text>
+          <text x="32" y="86" class="label-muted">IMG20240102.jpg</text>
+
+          <rect x="20" y="176" width="180" height="46" rx="5" class="node-fill"></rect>
+          <text x="32" y="196" font-size="12">file_id 9002</text>
+          <text x="32" y="212" class="label-muted">IMG20120215.jpg</text>
+
+          <rect x="20" y="300" width="180" height="46" rx="5" class="node-fill"></rect>
+          <text x="32" y="320" font-size="12">file_id 9310</text>
+          <text x="32" y="336" class="label-muted">IMG20130201.jpg</text>
+
+          <!-- detection nodes -->
+          <rect x="330" y="30" width="220" height="52" rx="5" class="node-fill accent"></rect>
+          <text x="342" y="50" font-size="12">detection id 5501</text>
+          <text x="342" y="66" class="label-muted">512-d · cluster_id → 12</text>
+
+          <rect x="330" y="98" width="220" height="52" rx="5" class="node-fill accent"></rect>
+          <text x="342" y="118" font-size="12">detection id 5502</text>
+          <text x="342" y="134" class="label-muted">512-d · cluster_id → 7</text>
+
+          <rect x="330" y="176" width="220" height="52" rx="5" class="node-fill accent"></rect>
+          <text x="342" y="196" font-size="12">detection id 5610</text>
+          <text x="342" y="212" class="label-muted">512-d · cluster_id → 12</text>
+
+          <rect x="330" y="290" width="220" height="52" rx="5" class="node-fill dim"></rect>
+          <text x="342" y="310" font-size="12">detection id 5722</text>
+          <text x="342" y="326" class="label-muted">512-d · cluster_id → NULL</text>
+
+          <!-- cluster nodes -->
+          <rect x="700" y="60" width="180" height="52" rx="5" class="node-fill accent"></rect>
+          <text x="712" y="80" font-size="12">cluster id 12</text>
+          <text x="712" y="96" class="label-accent" font-size="11">"Anna"</text>
+
+          <rect x="700" y="150" width="180" height="52" rx="5" class="node-fill accent"></rect>
+          <text x="712" y="170" font-size="12">cluster id 7</text>
+          <text x="712" y="186" class="label-accent" font-size="11">"Ben"</text>
+
+          <rect x="700" y="290" width="180" height="52" rx="5" class="node-fill dim"></rect>
+          <text x="712" y="310" font-size="11" fill="var(--muted)">no cluster yet</text>
+          <text x="712" y="326" class="label-muted">(fewer than 3 matches)</text>
+
+          <!-- edges: file -> detection -->
+          <path d="M200,73 C260,73 270,56 330,56" class="edge on" marker-end="url(#arrowOn)"></path>
+          <path d="M200,73 C260,73 270,124 330,124" class="edge on" marker-end="url(#arrowOn)"></path>
+          <path d="M200,199 C260,199 270,202 330,202" class="edge on" marker-end="url(#arrowOn)"></path>
+          <path d="M200,323 C260,323 270,316 330,316" class="edge" marker-end="url(#arrow)"></path>
+
+          <!-- edges: detection -> cluster -->
+          <path d="M550,56 C620,56 630,86 700,86" class="edge on" marker-end="url(#arrowOn)"></path>
+          <path d="M550,124 C620,124 630,176 700,176" class="edge on" marker-end="url(#arrowOn)"></path>
+          <path d="M550,202 C620,202 630,86 700,86" class="edge on" marker-end="url(#arrowOn)"></path>
+          <path d="M550,316 C620,316 630,316 700,316" class="edge dashed" marker-end="url(#arrow)"></path>
+
+        </svg>
+      </div>
+      <p class="diagram-caption">one group photo (8841) holds two different people; one person (Anna) recurs across two unrelated photos; one face isn't confident enough to join a cluster yet</p>
+    </div>
+
+    <p>Read the arrows both directions and you get both of your original questions for free: <em>files → faces</em> is "what does this photo contain," and <em>faces → clusters</em>, walked backwards, is "which photos does this person appear in." Memories' People page does exactly that second walk — see §05.</p>
+  </section>
+
+  <section>
+    <p class="section-index">03 &nbsp;— &nbsp;detection</p>
+    <h2>How a file gets its face rows</h2>
+    <p>Detection is triggered four different ways — a new upload, the admin page's "Run now," the self-requeuing "Scan entire library," or <code>occ recognaize:detect</code> by hand — but all four converge on the same steps:</p>
+    <ol class="steps">
+      <li>A trigger identifies a candidate as <code>(user_id, file_id, path)</code> and hands it to <code>DetectionService</code>.</li>
+      <li><code>DetectionService</code> calls the <code>recognaize</code> ExApp's <code>POST /detect</code>, impersonating that user so the ExApp can read the file from their storage.</li>
+      <li>Inside the ExApp, InsightFace (<code>buffalo_l</code>, CPU) returns a pixel bounding box, a 512-float normalized embedding, and a confidence score — per face found.</li>
+      <li>The bridge converts each pixel bbox to a 0.0–1.0 fraction of the image, and <code>INSERT</code>s one row per face into <code>recognize_face_detections</code>. <code>cluster_id</code> is left <code>NULL</code> — nothing here decides who anyone is.</li>
+      <li>Whether one face was found or none, <code>recognaize_processed</code> gets a row, so this file won't be attempted again automatically.</li>
+    </ol>
+
+    <div class="diagram-wrap">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 900 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trigger to ExApp to inserted detection rows, unclustered">
+          <defs>
+            <marker id="arrow2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" class="arrowhead"></path></marker>
+          </defs>
+          <rect x="10" y="45" width="150" height="54" rx="5" class="node-fill"></rect>
+          <text x="22" y="68" font-size="12">trigger</text>
+          <text x="22" y="84" class="label-muted">upload / Run now / scan</text>
+
+          <rect x="205" y="45" width="180" height="54" rx="5" class="node-fill"></rect>
+          <text x="217" y="68" font-size="12">recognaize ExApp</text>
+          <text x="217" y="84" class="label-muted">POST /detect (InsightFace)</text>
+
+          <rect x="430" y="45" width="200" height="54" rx="5" class="node-fill accent"></rect>
+          <text x="442" y="68" font-size="12">INSERT detection row(s)</text>
+          <text x="442" y="84" class="label-muted">cluster_id = NULL</text>
+
+          <rect x="680" y="45" width="200" height="54" rx="5" class="node-fill"></rect>
+          <text x="692" y="68" font-size="12">recognaize_processed</text>
+          <text x="692" y="84" class="label-muted">marks file attempted</text>
+
+          <path d="M160,72 L205,72" class="edge" marker-end="url(#arrow2)"></path>
+          <path d="M385,72 L430,72" class="edge" marker-end="url(#arrow2)"></path>
+          <path d="M630,72 L680,72" class="edge" marker-end="url(#arrow2)"></path>
+        </svg>
+      </div>
+      <p class="diagram-caption">one pass, one file, zero decisions about identity</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="section-index">04 &nbsp;— &nbsp;clustering</p>
+    <h2>How faces become a person</h2>
+    <p>Clustering is a <em>separate</em> pass, run later, by hand or from the admin page — never automatically after detection. It only ever looks at one user's own <code>512</code>-dimension rows (Recognize's old 128-dimension embeddings are a different, incompatible space and are filtered out before any comparison happens), and only at rows where <code>cluster_id IS NULL</code>.</p>
+
+    <p>For each unclustered face, it measures <strong>cosine distance</strong> to every other loaded face of that same user — 0 meaning identical, larger meaning less alike. If at least <code>min-faces</code> (default 3, including the face itself) fall within <code>max-distance</code> (default 0.5), it joins whichever of those matches already has a cluster, or starts a new one if none does. Otherwise it's left <code>NULL</code> — not wrong, just not enough evidence yet, and eligible again next run.</p>
+
+    <div class="table-scroll">
+      <table class="worked">
+        <caption class="mono" style="color:var(--muted); font-size:0.78rem; text-transform:uppercase; letter-spacing:0.06em;">worked example — four faces belonging to one user, max-distance 0.5, min-faces 3</caption>
+        <thead>
+          <tr><th>detection</th><th>distance to 5501</th><th>distance to 5502</th><th>distance to 5610</th><th>matches (≤0.5, +self)</th><th>outcome</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">5501</td><td class="mono">—</td><td class="mono">0.71</td><td class="mono">0.22</td><td class="mono">2</td><td>below 3 — starts new cluster once a 3rd match appears</td></tr>
+          <tr><td class="mono">5610</td><td class="mono">0.22</td><td class="mono">0.68</td><td class="mono">—</td><td class="mono">2</td><td>same as above — matches 5501, not yet 3</td></tr>
+          <tr><td class="mono">5502</td><td class="mono">0.71</td><td class="mono">—</td><td class="mono">0.68</td><td class="mono">1</td><td>no close matches — stays unclustered</td></tr>
+          <tr><td class="mono">5340<span style="color:var(--muted)">*</span></td><td class="mono">0.19</td><td class="mono">0.74</td><td class="mono">0.24</td><td class="mono yes">3</td><td class="yes">joins/creates a cluster with 5501 + 5610</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="color:var(--muted); font-size:0.9rem; margin-top:-0.6rem;">* a fourth face, close to both 5501 and 5610, is what tips that trio over the <code>min-faces</code> line — 5502 stays unclustered regardless, since nothing was ever close enough to it.</p>
+
+    <div class="callout">
+      <p class="callout-label">why the 512 / 128 split matters</p>
+      <p>This instance still has roughly 8,300 old <code>128</code>-dimension rows from Recognize's original face-api.js classifier, sitting in the same table as recognAIze's own <code>512</code>-dimension InsightFace rows. Comparing across that boundary isn't just inaccurate — the vectors aren't in the same space at all, so a "distance" between them is meaningless. Every place that reads embeddings for clustering filters to exactly 512 first.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="section-index">05 &nbsp;— &nbsp;reading it back</p>
+    <h2>How Memories turns a cluster into "Anna's photos"</h2>
+    <p>There's no code in recognAIze for this — it's the same walk from §02, run backwards, by Recognize and Memories' own existing machinery:</p>
+    <ul class="plain">
+      <li>Memories' People page lists <code>recognize_face_clusters</code> rows for the current user, showing <code>title</code> where one's been set.</li>
+      <li>Opening a person queries <code>recognize_face_detections WHERE cluster_id = &lt;that id&gt;</code>, then follows each row's <code>file_id</code> back to the actual photo to render a thumbnail, cropped using that row's <code>x, y, width, height</code>.</li>
+      <li>Naming a person is a rename on a virtual WebDAV folder Recognize exposes per cluster — which, under the hood, is just an <code>UPDATE … SET title = … WHERE id = …</code> against the same row.</li>
+    </ul>
+  </section>
+
+  <footer class="doc-foot">
+    <p>Reflects <code>recognize_face_detections</code>, <code>recognize_face_clusters</code>, and <code>recognaize_processed</code> as written by <code>recognaize_bridge</code> — see the repo's <code>CLAUDE.md</code> for the full build history behind each piece.</p>
+  </footer>
+
+</div>
+</body>
+</html>
