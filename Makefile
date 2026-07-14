@@ -1,31 +1,48 @@
 .DEFAULT_GOAL := help
 
+# Deployment-specific values (your Nextcloud URL, HaRP cert path, a real APP_SECRET, etc.) live
+# in deploy.env, which is gitignored - copy deploy.env.example to deploy.env and fill it in.
+# Targets that actually need those values enforce that via check-nc-url/check-harp-certs below,
+# so `make help`/`make build`/the `dev-*` local-compose targets work with no deploy.env at all.
+-include deploy.env
+
 APP_ID := recognaize
 APP_NAME := recognAIze
 APP_VERSION := 0.1.0
 # Must fall in one of HaRP's frps allowPorts ranges (see /run/harp/frps.toml inside the
-# appapi-harp container) - this homelab's is 23000-23999 or 24000-24099. Pick a value not
-# already used by another ExApp (test-deploy currently holds 23000).
-APP_PORT := 23001
+# appapi-harp container) - check yours before assuming a value is free (ranges/usage vary by
+# instance and change over time).
+APP_PORT ?= 23001
 
-# This homelab's live AppAPI setup (see CLAUDE.md for how these were discovered):
-NC_CONTAINER := nextcloud-app-1
-NC_URL := https://cloud.example.com
-DAEMON_NAME := manual_install_harp
-DOCKER_NETWORK := gateway
-HARP_HOST := appapi-harp:8780
-HARP_FRP_ADDRESS := appapi-harp:8782
-# HaRP requires TLS on the FRP tunnel (HP_FRP_DISABLE_TLS=false); start.sh only enables it if
-# /certs/frp exists. Reuse HaRP's own client cert bundle rather than generating a new one.
-HARP_CERTS_DIR := /home/constantin/homecloud/nextcloud/harp_certs/frp
+# Sensible defaults for a typical AppAPI + HaRP manual-install setup (see CLAUDE.md's
+# "registered live and verified end-to-end" section for how these were discovered) - override
+# in deploy.env if yours differ.
+NC_CONTAINER ?= nextcloud-app-1
+DAEMON_NAME ?= manual_install_harp
+DOCKER_NETWORK ?= gateway
+HARP_HOST ?= appapi-harp:8780
+HARP_FRP_ADDRESS ?= appapi-harp:8782
+
+# No sane default for these two - they're specific to your instance. Required by the targets
+# that use them (see check-nc-url/check-harp-certs).
+NC_URL ?=
+HARP_CERTS_DIR ?=
+
 # Must match the harp container's own HP_SHARED_KEY env var - fetch it rather than hardcoding:
 #   docker exec appapi-harp env | grep HP_SHARED_KEY
-HARP_SHARED_KEY ?= $(shell docker exec appapi-harp printenv HP_SHARED_KEY)
+HARP_SHARED_KEY ?= $(shell docker exec appapi-harp printenv HP_SHARED_KEY 2>/dev/null)
 # Regenerate for real use: openssl rand -hex 24. Do not commit a real secret to this file.
 APP_SECRET ?= changeme-generate-your-own
 
 JSON_INFO := "{\"id\":\"$(APP_ID)\",\"name\":\"$(APP_NAME)\",\"daemon_config_name\":\"$(DAEMON_NAME)\",\"version\":\"$(APP_VERSION)\",\"secret\":\"$(APP_SECRET)\",\"port\":$(APP_PORT)}"
 
+.PHONY: check-nc-url
+check-nc-url:
+	@test -n "$(NC_URL)" || { echo "NC_URL is not set. Copy deploy.env.example to deploy.env and fill in your Nextcloud instance's URL." >&2; exit 1; }
+
+.PHONY: check-harp-certs
+check-harp-certs:
+	@test -n "$(HARP_CERTS_DIR)" || { echo "HARP_CERTS_DIR is not set. Copy deploy.env.example to deploy.env and fill in the path to HaRP's FRP client certs." >&2; exit 1; }
 
 .PHONY: help
 help:
@@ -52,7 +69,7 @@ build:
 	docker build --tag recognaize:latest .
 
 .PHONY: daemon-register
-daemon-register:
+daemon-register: check-nc-url
 	docker exec -u www-data $(NC_CONTAINER) php occ app_api:daemon:register \
 		$(DAEMON_NAME) "Harp Manual Install" manual-install http \
 		$(HARP_HOST) $(NC_URL) \
@@ -61,7 +78,7 @@ daemon-register:
 		--harp_shared_key "$(HARP_SHARED_KEY)"
 
 .PHONY: run
-run:
+run: check-nc-url check-harp-certs
 	docker rm -f recognaize 2>/dev/null || true
 	docker run -d --name recognaize --network $(DOCKER_NETWORK) --restart unless-stopped \
 		-e APP_ID=$(APP_ID) \
@@ -90,7 +107,7 @@ bust-cache:
 		"http://127.0.0.1:8200/exapp_storage/$(APP_ID)"
 
 .PHONY: verify
-verify:
+verify: check-nc-url
 	@AUTH=$$(printf ':%s' "$(APP_SECRET)" | base64 -w0); \
 	echo "--- heartbeat ---"; \
 	docker exec $(NC_CONTAINER) curl -s -o /dev/null -w "HTTP_STATUS:%{http_code}\n" \

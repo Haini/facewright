@@ -145,5 +145,46 @@
 				});
 			});
 		}
+
+		var mergeUserField = document.getElementById('recognaize-merge-user');
+		var mergeKeepIdField = document.getElementById('recognaize-merge-keep-id');
+		var mergeIdField = document.getElementById('recognaize-merge-id');
+		var mergeButton = document.getElementById('recognaize-merge-clusters');
+		var mergeStatus = document.getElementById('recognaize-merge-clusters-status');
+		if (mergeButton) {
+			mergeButton.addEventListener('click', function (event) {
+				event.preventDefault();
+				var userId = mergeUserField.value.trim();
+				var keepId = parseInt(mergeKeepIdField.value, 10);
+				var mergeId = parseInt(mergeIdField.value, 10);
+				if (!userId || !keepId || !mergeId) {
+					mergeStatus.textContent = 'Fill in the user and both cluster IDs.';
+					return;
+				}
+				if (!window.confirm('Merge cluster ' + mergeId + ' into cluster ' + keepId + ' for user ' + userId + '? Cluster ' + mergeId + ' will be deleted.')) {
+					return;
+				}
+				mergeStatus.textContent = 'Merging...';
+				fetch(OC.generateUrl('/apps/recognaize_bridge/merge-clusters'), {
+					method: 'PUT',
+					headers: {
+						'Content-Type': 'application/json',
+						requesttoken: OC.requestToken,
+					},
+					body: JSON.stringify({ userId: userId, keepId: keepId, mergeId: mergeId }),
+				}).then(function (response) {
+					return response.json().then(function (data) {
+						if (!response.ok) {
+							throw new Error(data.error || 'Request failed');
+						}
+						return data;
+					});
+				}).then(function (data) {
+					mergeStatus.textContent = 'Moved ' + data.moved + ' face(s) into cluster ' + keepId + '. Cluster ' + mergeId + ' deleted.';
+				}).catch(function (err) {
+					mergeStatus.textContent = 'Failed: ' + err.message;
+				});
+			});
+		}
 	});
 })();

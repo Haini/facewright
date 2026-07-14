@@ -80,6 +80,25 @@ $clusteringActive = !empty($_['clusteringActive']);
 	<p><?php p($l->t('Runs in the background, in chunks, across upcoming cron cycles - large accounts can have tens of thousands of faces to compare, which is too much work for one request. Started chains resume automatically after a pause and keep going until nothing changes.')); ?></p>
 	<p id="recognaize-run-clustering-status"></p>
 </div>
+<div id="recognaize-merge-settings" class="section">
+	<h2><?php p($l->t('Merge clusters')); ?></h2>
+	<p><?php p($l->t('Combines two clusters that turned out to be the same person into one. Recognize\'s own rename UI refuses this - renaming a person to an existing name is treated as an error there, not a merge request. This moves every face from "merge in" onto "keep", then deletes the now-empty cluster.')); ?></p>
+	<p>
+		<label for="recognaize-merge-user"><?php p($l->t('User')); ?></label>
+		<input type="text" id="recognaize-merge-user" placeholder="e.g. alice">
+	</p>
+	<p>
+		<label for="recognaize-merge-keep-id"><?php p($l->t('Cluster ID to keep')); ?></label>
+		<input type="number" id="recognaize-merge-keep-id" min="1">
+	</p>
+	<p>
+		<label for="recognaize-merge-id"><?php p($l->t('Cluster ID to merge in (deleted afterward)')); ?></label>
+		<input type="number" id="recognaize-merge-id" min="1">
+		<button type="button" id="recognaize-merge-clusters"><?php p($l->t('Merge')); ?></button>
+	</p>
+	<p><?php p($l->t('Find cluster IDs on Memories\' People page - an unnamed cluster is shown using its numeric ID as the tile\'s label.')); ?></p>
+	<p id="recognaize-merge-clusters-status"></p>
+</div>
 <div id="recognaize-stats-settings" class="section">
 	<h2><?php p($l->t('Statistics')); ?></h2>
 	<p><?php p($l->t('Snapshot as of this page load - reload to refresh.')); ?></p>

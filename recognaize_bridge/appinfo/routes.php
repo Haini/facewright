@@ -11,5 +11,6 @@ return [
 		['name' => 'PeopleSettings#runBatch', 'url' => '/run-batch', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#runScan', 'url' => '/run-scan', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#runClustering', 'url' => '/run-clustering', 'verb' => 'PUT'],
+		['name' => 'PeopleSettings#mergeClusters', 'url' => '/merge-clusters', 'verb' => 'PUT'],
 	],
 ];

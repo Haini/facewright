@@ -7,6 +7,7 @@ namespace OCA\RecognaizeBridge\Controller;
 use OCA\RecognaizeBridge\BackgroundJob\BatchScanJob;
 use OCA\RecognaizeBridge\BackgroundJob\ClusterScanJob;
 use OCA\RecognaizeBridge\Service\BatchTriggerService;
+use OCA\RecognaizeBridge\Service\ClusterMergeService;
 use OCA\RecognaizeBridge\Service\ClusteringService;
 use OCA\RecognaizeBridge\Service\PathFilterService;
 use OCP\AppFramework\Controller;
@@ -40,6 +41,7 @@ class PeopleSettingsController extends Controller {
 		private PathFilterService $pathFilter,
 		private BatchTriggerService $batchTrigger,
 		private ClusteringService $clustering,
+		private ClusterMergeService $clusterMerge,
 		private IJobList $jobList,
 		private IUserManager $userManager,
 	) {
@@ -138,5 +140,18 @@ class PeopleSettingsController extends Controller {
 			}
 		}
 		return $userIds;
+	}
+
+	/**
+	 * See ClusterMergeService - does what Recognize's own rename-based DAV UI has no path to at
+	 * all (renaming a cluster to an existing name is treated as an error there, not a merge).
+	 */
+	public function mergeClusters(string $userId, int $keepId, int $mergeId): JSONResponse {
+		try {
+			$moved = $this->clusterMerge->merge($userId, $keepId, $mergeId);
+		} catch (\InvalidArgumentException $e) {
+			return new JSONResponse(['error' => $e->getMessage()], 400);
+		}
+		return new JSONResponse(['moved' => $moved]);
 	}
 }

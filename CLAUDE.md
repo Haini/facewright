@@ -686,5 +686,22 @@ past prototype scale.
 
 ## Licensing note
 
-Recognize is AGPL-licensed. Depending on its DB schema/tables directly is fine for personal
-homelab use, but would need reconsideration if this project left that context.
+This project (both apps) is AGPL-3.0-or-later — see the root `LICENSE` file. Revisited when
+preparing the public alpha release, since the original version of this note said depending on
+Recognize's (also AGPL) DB schema/tables directly was "fine for personal homelab use, but would
+need reconsideration if this project left that context" — and it has now left that context.
+
+The actual analysis: `recognaize_bridge` never imports, `use`s, or links against any of
+Recognize's PHP — it writes into Recognize's tables using Nextcloud's own `IDBConnection`/
+`QueryBuilder`, knowing only the table/column names, the same way any external tool that knows
+a database's schema could. That's schema interoperability, not incorporating Recognize's code,
+so AGPL's copyleft (which attaches to conveying/network-serving the covered work itself, or
+code that incorporates it) isn't obviously triggered by the DB writes alone. Not a certainty —
+this is a reasonable, defensible reading for a personal/hobby project, not legal advice, and it
+hasn't been tested in court.
+
+AGPL-3.0 was still chosen for this project anyway, deliberately, for a different reason:
+convention. Nextcloud itself is AGPLv3, and the App Store requires an AGPL-*compatible* license
+for anything submitted there — so matching it keeps that door open later, and it's the norm
+across the Nextcloud app ecosystem this project sits in. It's a fit-with-the-ecosystem choice,
+not a legal requirement flowing from the DB dependency.
