@@ -5,7 +5,19 @@ Recognize](https://github.com/nextcloud/recognize)'s pipeline, built as a compan
 than a fork.
 
 **Status: early public alpha.** This is a single-user-tested prototype, not a finished product -
-see "Current limitations" below before relying on it.
+see "Current limitations" below before relying on it. But it **does show** that **proper** face 
+recognition for Nextcloud is actually very feasible and easily implementable in a flexible way
+using an ExApp that deploys the actual image recognition library. In this case we use the same 
+library as [Immich](https://github.com/immich-app/immich) as this works very well already.
+
+**AI and State Disclaimer.** Additionally, this project is built using Claude Code, including 
+lots of architectural decisions that come with using an ExApp setup (e.g., split into PHP based
+Nextcloud App and external Docker container for image recognition).
+It actually does work for my setup and produces great results with the CPU only build on over
+54000 pictures that span over 15 years.
+But since I directly build upon recognizes tables there is no guarantee that past results will
+actually survive properly. Expect to perform some (should only be one table) manual table 
+cleanup when you delploy this to your productive instance.
 
 ## What this is
 
