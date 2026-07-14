@@ -7,12 +7,37 @@ from typing import Annotated
 
 import cv2
 import numpy as np
+import onnxruntime
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from insightface.app import FaceAnalysis
+from insightface.model_zoo.model_zoo import PickableInferenceSession
 from nc_py_api import AsyncNextcloudApp, NextcloudApp, NextcloudException
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, anc_app, run_app, set_handlers
 from pydantic import BaseModel
+
+# insightface's FaceAnalysis/model_zoo.get_model() only ever forwards `providers`/
+# `provider_options` kwargs to onnxruntime - there's no supported way to pass a SessionOptions
+# through, so ONNX Runtime falls back to its default of one intra-op thread per detected CPU
+# core. On this homelab's host that meant every /detect call spiked all cores at once, which
+# correlated with repeated onnxruntime native-code segfaults (kernel log: simultaneous
+# `onnxruntime_pybind11_state.so` segfaults across worker threads) and the host hard-rebooting
+# shortly after. Patch the session class insightface actually instantiates so every model gets a
+# capped thread pool instead.
+_ORT_INTRA_OP_THREADS = int(os.environ.get("FACEWRIGHT_ORT_INTRA_OP_THREADS", "2"))
+_ORT_INTER_OP_THREADS = int(os.environ.get("FACEWRIGHT_ORT_INTER_OP_THREADS", "1"))
+_ORIGINAL_SESSION_INIT = PickableInferenceSession.__init__
+
+
+def _threadpool_limited_session_init(self, model_path, **kwargs):
+    session_options = onnxruntime.SessionOptions()
+    session_options.intra_op_num_threads = _ORT_INTRA_OP_THREADS
+    session_options.inter_op_num_threads = _ORT_INTER_OP_THREADS
+    kwargs.setdefault("sess_options", session_options)
+    _ORIGINAL_SESSION_INIT(self, model_path, **kwargs)
+
+
+PickableInferenceSession.__init__ = _threadpool_limited_session_init
 
 FACE_ANALYSIS: FaceAnalysis | None = None
 
