@@ -55,7 +55,7 @@ A `docker-compose.yml` spins up a throwaway Nextcloud + DB for testing the PHP s
 
 ```
 docker compose up -d
-bash dev-setup.sh   # first run only: installs AppAPI + recognize, registers the ExApp
+bash dev-setup.sh   # first run only: installs AppAPI + recognize + memories, registers the ExApp
 ```
 
 Then open <http://localhost:8080> (`admin` / `dev-admin-password`), enable the People page and

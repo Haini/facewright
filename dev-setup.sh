@@ -39,13 +39,18 @@ until $COMPOSE_EXEC status 2>/dev/null | grep -q "installed: true"; do
 	sleep 2
 done
 
-echo "--- installing AppAPI + recognize ---"
+echo "--- installing AppAPI + recognize + memories ---"
 # app_api ships enabled by default on recent Nextcloud (confirmed on NC 33 in this stack: no
 # "app_store" occ namespace exists, and "app:install app_api" exits 1 with "already installed").
 # Both are non-errors here - only fail if app_api ends up neither already-enabled nor freshly
 # installed.
 $COMPOSE_EXEC app:install app_api || $COMPOSE_EXEC app:enable app_api || true
 $COMPOSE_EXEC app:install recognize || true
+# Memories is the actual UI surface for everything this project writes (People page, cluster
+# rename) - without it there's no way to see detection/clustering results short of querying the
+# DB directly. Installed here, not just documented as a manual step, since "view the results" is
+# the whole point of running this stack locally.
+$COMPOSE_EXEC app:install memories || true
 $COMPOSE_EXEC app:enable facewright_bridge
 
 echo "--- registering the no-HaRP manual-install daemon ---"
