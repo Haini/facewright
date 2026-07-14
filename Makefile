@@ -6,8 +6,8 @@
 # so `make help`/`make build`/the `dev-*` local-compose targets work with no deploy.env at all.
 -include deploy.env
 
-APP_ID := recognaize
-APP_NAME := recognAIze
+APP_ID := facewright
+APP_NAME := Facewright
 APP_VERSION := 0.1.0
 # Must fall in one of HaRP's frps allowPorts ranges (see /run/harp/frps.toml inside the
 # appapi-harp container) - check yours before assuming a value is free (ranges/usage vary by
@@ -54,7 +54,7 @@ help:
 	@echo "  daemon-register   registers the '$(DAEMON_NAME)' manual-install daemon config"
 	@echo " "
 	@echo "  > Per-deploy (in order):"
-	@echo "  run               runs the recognaize container, tunneling through HaRP"
+	@echo "  run               runs the facewright container, tunneling through HaRP"
 	@echo "  register          registers/updates the running ExApp with AppAPI"
 	@echo "  unregister        unregisters the ExApp from AppAPI"
 	@echo " "
@@ -66,7 +66,7 @@ help:
 
 .PHONY: build
 build:
-	docker build --tag recognaize:latest .
+	docker build --tag facewright:latest .
 
 .PHONY: daemon-register
 daemon-register: check-nc-url
@@ -79,8 +79,8 @@ daemon-register: check-nc-url
 
 .PHONY: run
 run: check-nc-url check-harp-certs
-	docker rm -f recognaize 2>/dev/null || true
-	docker run -d --name recognaize --network $(DOCKER_NETWORK) --restart unless-stopped \
+	docker rm -f facewright 2>/dev/null || true
+	docker run -d --name facewright --network $(DOCKER_NETWORK) --restart unless-stopped \
 		-e APP_ID=$(APP_ID) \
 		-e APP_VERSION=$(APP_VERSION) \
 		-e APP_SECRET=$(APP_SECRET) \
@@ -90,7 +90,7 @@ run: check-nc-url check-harp-certs
 		-e HP_FRP_ADDRESS=appapi-harp \
 		-e HP_FRP_PORT=8782 \
 		-v $(HARP_CERTS_DIR):/certs/frp:ro \
-		recognaize:latest
+		facewright:latest
 
 .PHONY: register
 register:

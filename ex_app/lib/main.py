@@ -1,4 +1,4 @@
-"""InsightFace-based /detect endpoint for recognAIze."""
+"""InsightFace-based /detect endpoint for Facewright."""
 
 import os
 from contextlib import asynccontextmanager

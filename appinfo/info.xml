@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <info>
-	<id>recognaize</id>
-	<name>recognAIze</name>
+	<id>facewright</id>
+	<name>Facewright</name>
 	<summary>InsightFace-based face detection ExApp</summary>
 	<description>
 	<![CDATA[Detects faces and extracts embeddings using InsightFace, as a replacement backend for Recognize's face-detection pipeline]]>
@@ -9,7 +9,7 @@
 	<version>0.1.0</version>
 	<licence>agpl</licence>
 	<author>Constantin Schieber-Knoebl</author>
-	<namespace>Recognaize</namespace>
+	<namespace>Facewright</namespace>
 	<category>multimedia</category>
 	<dependencies>
 		<nextcloud min-version="31" max-version="35"/>
@@ -23,7 +23,7 @@
 		-->
 		<docker-install>
 			<registry>ghcr.io</registry>
-			<image>constantin-sk/recognaize</image>
+			<image>constantin-sk/facewright</image>
 			<image-tag>latest</image-tag>
 		</docker-install>
 		<routes>

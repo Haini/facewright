@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<info>
+	<id>facewright_bridge</id>
+	<name>Facewright Bridge</name>
+	<summary>Bridges Facewright's InsightFace ExApp detections into Recognize's database tables</summary>
+	<description>
+	<![CDATA[A thin, regular Nextcloud PHP app. Not an ExApp itself - it exists only because
+ExApps have no path to real database access. It calls the facewright ExApp for face detection
+and writes the results into Recognize's own oc_recognize_face_detections table via Nextcloud's
+QueryBuilder, since only first-party PHP code can do that.]]>
+	</description>
+	<version>0.2.5</version>
+	<licence>agpl</licence>
+	<author>Constantin Schieber-Knoebl</author>
+	<namespace>FacewrightBridge</namespace>
+	<category>multimedia</category>
+	<dependencies>
+		<nextcloud min-version="33" max-version="35"/>
+	</dependencies>
+	<commands>
+		<command>OCA\FacewrightBridge\Command\DetectFaces</command>
+		<command>OCA\FacewrightBridge\Command\ClusterFaces</command>
+		<command>OCA\FacewrightBridge\Command\ResetFacewrightData</command>
+		<command>OCA\FacewrightBridge\Command\ScanLibrary</command>
+		<command>OCA\FacewrightBridge\Command\ClusterScan</command>
+		<command>OCA\FacewrightBridge\Command\MergeClusters</command>
+	</commands>
+	<settings>
+		<admin>OCA\FacewrightBridge\Settings\AdminSettings</admin>
+		<admin-section>OCA\FacewrightBridge\Settings\AdminSection</admin-section>
+	</settings>
+</info>

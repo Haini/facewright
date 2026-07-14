@@ -1,14 +1,14 @@
-# recognAIze
+# Facewright
 
 A replacement backend for Nextcloud Recognize's face-detection pipeline, built as a Nextcloud
 AppAPI ExApp. Uses InsightFace instead of Recognize's face-api.js/tfjs-node stack, but keeps
 Recognize installed as a companion app rather than forking it.
 
 This repo holds two apps:
-- `appinfo/`, `ex_app/` etc. at the top level — `recognaize`, the Python AppAPI ExApp (InsightFace
+- `appinfo/`, `ex_app/` etc. at the top level — `facewright`, the Python AppAPI ExApp (InsightFace
   detection).
-- `recognaize_bridge/` — a small, separate, regular Nextcloud PHP app. It exists only because
-  ExApps have no path to real database access; it calls `recognaize` and writes results into
+- `facewright_bridge/` — a small, separate, regular Nextcloud PHP app. It exists only because
+  ExApps have no path to real database access; it calls `facewright` and writes results into
   Recognize's tables. See "Done: writing into Recognize's `oc_recognize_face_detections` table"
   below for why.
 
@@ -40,7 +40,7 @@ needs real experimentation against a labeled slice of the photo library.
 Scaffolded from `nextcloud/app-skeleton-python`, targeting CPU-only inference (no GPU in this
 homelab). Runs under an existing AppAPI + deploy daemon setup.
 
-- `appinfo/info.xml` — app id `recognaize`, single `POST /detect` route at `USER` access level
+- `appinfo/info.xml` — app id `facewright`, single `POST /detect` route at `USER` access level
 - `ex_app/lib/main.py` — FastAPI app; `AppAPIAuthMiddleware` kept intact; InsightFace
   `FaceAnalysis` (`buffalo_l`, CPU) loaded once in the `lifespan` hook (not per-request/per-fork);
   `/detect` reads a Nextcloud file path (see below), returns
@@ -58,8 +58,8 @@ clustering, background job / file-listener triggers, multi-user support.
 
 ### Done: registered live and verified end-to-end
 
-`recognaize` is registered, enabled, and reachable on this homelab's real Nextcloud instance —
-confirmed by POSTing a real test photo to `https://cloud.example.com/exapps/recognaize/detect`
+`facewright` is registered, enabled, and reachable on this homelab's real Nextcloud instance —
+confirmed by POSTing a real test photo to `https://cloud.example.com/exapps/facewright/detect`
 through the actual Traefik → HaRP → FRP tunnel path (not a local/direct test) and getting all 6
 faces back correctly.
 
@@ -126,7 +126,7 @@ direct request.
    unregister — but several stuck/concurrent `occ app_api:app:register` processes (from
    re-registering with different ports mid-debugging) left it holding a stale entry. Confirmed by
    directly querying Nextcloud's own internal endpoint AppAPI's PHP also uses
-   (`curl -H "harp-shared-key: <key>" http://127.0.0.1/index.php/apps/app_api/harp/exapp-meta?appId=recognaize`
+   (`curl -H "harp-shared-key: <key>" http://127.0.0.1/index.php/apps/app_api/harp/exapp-meta?appId=facewright`
    from inside `nextcloud-app-1`) — it reported the correct, current port, proving the DB was
    right and the *cache* was the liar. Fixed with `make bust-cache` (calls that same `DELETE`
    endpoint directly, scoped to just this app's cache key — doesn't touch other ExApps or
@@ -176,13 +176,13 @@ Two things discovered while doing this changed its shape from "just add a DB wri
   AppAPI docs, which describe ExApps as isolated microservices with only a private Docker volume
   for persistence. Recognize's own classifier also writes one detection row *per user with file
   access* (via `IUserMountCache`), which only Nextcloud-side PHP can determine. So the actual
-  write happens from a small **new, separate Nextcloud PHP app**, `recognaize_bridge/` (not an
-  ExApp) — it calls `recognaize`'s `/detect` via AppAPI's `OCA\AppAPI\PublicFunctions::exAppRequest()`
+  write happens from a small **new, separate Nextcloud PHP app**, `facewright_bridge/` (not an
+  ExApp) — it calls `facewright`'s `/detect` via AppAPI's `OCA\AppAPI\PublicFunctions::exAppRequest()`
   (the sanctioned way for one Nextcloud app to call another's ExApp), then writes rows via
   `IDBConnection`/`QueryBuilder`. Deployed by copying into this instance's `custom_apps` mount
-  (`/mnt/data/nextcloud/nc_apps` on the host) and `occ app:enable recognaize_bridge`.
+  (`/mnt/data/nextcloud/nc_apps` on the host) and `occ app:enable facewright_bridge`.
   Deliberately minimal: no controllers/routes/Entity-Mapper ceremony, just
-  `lib/Command/DetectFaces.php` implementing `occ recognaize:detect <user> <path>` as the manual
+  `lib/Command/DetectFaces.php` implementing `occ facewright:detect <user> <path>` as the manual
   trigger for this phase.
 
 Schema mapping (from Recognize's GitHub source, since it wasn't installed here to read
@@ -208,7 +208,7 @@ migrations from directly — `lib/Db/FaceDetection.php`, `lib/Classifiers/Images
   one): fan-out to every user with access to the file. This phase inserts exactly one row, for
   whichever user the command names.
 
-Verified end-to-end: `occ recognaize:detect alice "Family/Photos/2024 Trip Photos/IMG20240102T165818.jpg"`
+Verified end-to-end: `occ facewright:detect alice "Family/Photos/2024 Trip Photos/IMG20240102T165818.jpg"`
 inserted 2 rows; read them back directly (via a throwaway verification command, removed after
 confirming) and checked `user_id`/`file_id` matched, `x/y/width/height` all fell within `[0,1]`,
 `cluster_id` was `NULL`, and `face_vector` decoded to a 512-float array.
@@ -224,7 +224,7 @@ literally importable — different language, schema, and DB):
   space.
 - **Immich's** (`server/src/config.ts` /
   `machine-learning/immich_ml/models/facial_recognition/recognition.py`) is a much closer
-  match: its default model is `buffalo_l` — the *same* InsightFace model recognAIze already
+  match: its default model is `buffalo_l` — the *same* InsightFace model Facewright already
   uses. Its threshold is `maxDistance: 0.5` **cosine** distance (confirmed via
   `embedding <=> ${embedding}`, pgvector's cosine-distance operator, in `search.repository.ts`)
   with `minFaces: 3` before a face counts as a cluster "core" — directly comparable to our own
@@ -232,7 +232,7 @@ literally importable — different language, schema, and DB):
   face joins/starts a cluster once it has ≥3 matches within cosine distance 0.5), not a batch
   HDBSCAN pass.
 
-Implemented Immich's algorithm (not its code) as `recognaize_bridge`'s `occ recognaize:cluster
+Implemented Immich's algorithm (not its code) as `facewright_bridge`'s `occ facewright:cluster
 <user> [--max-distance=0.5] [--min-faces=3] [--reset]`: loads a user's face detections, and for
 each unclustered one, finds same-user detections within `max-distance` cosine distance; if the
 match count (including itself) is ≥ `min-faces`, it joins an existing matched cluster or starts
@@ -273,7 +273,7 @@ still needed before calling clustering "done":
 
 Naming clusters turned out to need no work at all — Memories' existing rename-a-person UI
 already writes into the same `title` column via Recognize's own DAV mechanism, confirmed working
-for recognAIze's own clusters too. See "Done: naming clusters" further down.
+for Facewright's own clusters too. See "Done: naming clusters" further down.
 
 ### Done: GUI toggle for Memories' People page
 
@@ -287,18 +287,18 @@ clustering work. Checked Recognize's own source (`lib/Settings/AdminSettings.php
 `AdminSection.php`, `lib/Controller/AdminController.php`) for the pattern, then built our own
 toggle that reuses it but skips that side effect:
 
-- `recognaize_bridge/lib/Settings/AdminSettings.php` + `AdminSection.php` — its own dedicated
-  "recognAIze" Administration section (own nav entry, own icon at `img/app.svg`), rather than
+- `facewright_bridge/lib/Settings/AdminSettings.php` + `AdminSection.php` — its own dedicated
+  "Facewright" Administration section (own nav entry, own icon at `img/app.svg`), rather than
   reusing Recognize's `'recognize'` section as originally built — the user tried the shared-page
   version live and preferred a dedicated section instead. `AdminSection` mirrors Recognize's own
   (`getID`/`getName`/`getPriority`/`getIcon` via `IIconSection`), just under our own section ID.
-- `recognaize_bridge/lib/Controller/PeopleSettingsController.php` — `PUT /people-enabled`
+- `facewright_bridge/lib/Controller/PeopleSettingsController.php` — `PUT /people-enabled`
   writes `recognize`'s `faces.enabled` config **directly via `IAppConfig`**, bypassing
   Recognize's `SettingsService` entirely, so Recognize's classifier never gets (re-)armed.
   Confirmed safe by checking for event listeners on appconfig changes in Recognize's source —
   there are none, so the only place that side effect happens is inside that one PHP method, and
   a direct `IAppConfig` write is a clean way around it.
-- `recognaize_bridge/templates/admin.php` + `js/admin.js` — plain PHP template + hand-written
+- `facewright_bridge/templates/admin.php` + `js/admin.js` — plain PHP template + hand-written
   vanilla JS (no build step/Vue). Nextcloud's classic (non-attribute) `$l->t()`/`p()` template
   convention, checkbox posts via `fetch()` using the `OC.requestToken` global for CSRF.
 - Route registered in `appinfo/routes.php`, matching Recognize's own convention (was asked to
@@ -328,13 +328,13 @@ resolve (still 404s otherwise, confirmed twice now).
 ### Done: included-paths allowlist for face detection
 
 Admin-configurable list of paths (relative to each user's files root, one per line) that
-`occ recognaize:detect` will actually process — anything outside them is skipped. Checked
+`occ facewright:detect` will actually process — anything outside them is skipped. Checked
 Recognize's own approach first (`lib/Service/IgnoreService.php`): it's a per-folder
 `.noimage`-style *exclusion marker* file, the opposite direction from what was asked (an
 explicit include list, everything else ignored) — so this is a fresh mechanism, not a port of
 theirs.
 
-- `recognaize_bridge/lib/Service/PathFilterService.php` — new small shared service (needed by
+- `facewright_bridge/lib/Service/PathFilterService.php` — new small shared service (needed by
   both the Controller that saves the list and the Command that checks it). Stores a
   `list<string>` via `IAppConfig::setValueArray`/`getValueArray` (native array support, no
   manual JSON encode/decode needed) under our own app id, key `included_paths`. Empty list =
@@ -356,7 +356,7 @@ theirs.
 **Bug found after initial "it works" report**: paths didn't persist across a page reload,
 reported specifically with a path containing spaces (`Bilder/2011 Fotos/OldPhone_Fotos`).
 Verified the backend (`PathFilterService`, the appconfig round-trip, the actual `occ
-recognaize:detect` matching) handles spaces fine on its own — not a backend bug at all. Real
+facewright:detect` matching) handles spaces fine on its own — not a backend bug at all. Real
 cause: the `<button>` in `templates/admin.php` had no explicit `type` attribute, so it defaulted
 to `type="submit"`. If a page-level `<form>` wraps the settings sections (plausible on
 Nextcloud's admin settings page), that submits/reloads the page in parallel with our `fetch()`
@@ -370,7 +370,7 @@ persist across reloads, including the originally-reported space-containing one.
 
 ### Done: automatic + manual batch triggers
 
-Detection no longer requires a manual `occ recognaize:detect` call per file. Researched
+Detection no longer requires a manual `occ facewright:detect` call per file. Researched
 Recognize's own trigger architecture first (`lib/Hooks/FileListener.php`,
 `lib/BackgroundJobs/ClassifyFacesJob.php`): file events → a queue → background jobs drain it on
 Nextcloud's own cron. Confirmed this instance's cron is genuinely running (`lastcron` was ~95s
@@ -426,7 +426,7 @@ and that second gap was a latent bug: zero-face files were being silently reproc
 batch-trigger/cron run forever, since the old idempotency check
 (`DetectionService::hasExistingDetections`) only looked at that table.
 
-Fixed both at once with a new table `recognaize_bridge` owns, `recognaize_processed`
+Fixed both at once with a new table `facewright_bridge` owns, `facewright_processed`
 (`user_id`, `file_id`, `processed_at`, `faces_found`, unique index on `user_id`+`file_id`) via
 this app's first-ever DB migration (`lib/Migration/Version000002000Date20260709120000.php`).
 New `lib/Service/ProcessedFileService.php` records a row after every detection attempt
@@ -444,7 +444,7 @@ count, processed-in-the-last-3600s count) and rendered in a plain new section in
 read-once-per-page-load data, and sidesteps the already-twice-hit "new routes.php entries need
 a container restart" gotcha entirely.
 
-**Real bug hit applying this app's very first schema migration**: `recognaize_bridge` is
+**Real bug hit applying this app's very first schema migration**: `facewright_bridge` is
 manually deployed (`docker cp`, not app-store), and `occ migrations:migrate`/`execute` aren't
 registered commands on this Nextcloud version — a dead end. The actual fix: bumping the app's
 `<version>` in `info.xml` (0.1.0 → 0.2.0) makes Nextcloud itself detect a pending app upgrade
@@ -455,7 +455,7 @@ mechanism, not a workaround; worth remembering for any future migration on eithe
 since it's not obvious the version bump alone is what unlocks it.
 
 **Second real bug, caught by testing manual re-detection, not by inspection**:
-`recognaize:detect` is deliberately designed to reprocess a file that's already been processed
+`facewright:detect` is deliberately designed to reprocess a file that's already been processed
 (unlike the automatic/batch paths) — but `ProcessedFileService::markProcessed()`'s first cut was
 a plain `INSERT`, which threw a duplicate-key error against the new unique index the moment the
 same file was detected twice. Fixed by making it a check-then-insert-or-update instead of a bare
@@ -464,7 +464,7 @@ worker homelab scale, consistent with how idempotency is handled everywhere else
 
 Verified against the real live instance, not just `php -l`: ran `occ upgrade` for real (user
 confirmed first, since it's a shared-system, maintenance-mode-inducing operation), confirmed
-`oc_recognaize_processed` exists via `occ db:schema:export`, ran `recognaize:detect` twice in a
+`oc_facewright_processed` exists via `occ db:schema:export`, ran `facewright:detect` twice in a
 row against a real test file to prove both the idempotency fix and the reprocessing-crash fix,
 queried the table directly to confirm exactly one row (not two), and rendered
 `AdminSettings::getForm()` through the real DI container to see actual output against the real
@@ -474,14 +474,14 @@ queried the table directly to confirm exactly one row (not two), and rendered
 
 Detection had been fully automated (file-event listener + batch trigger + cron), but clustering
 — the step that actually turns raw detections into "people" Memories can show and let you name —
-was still only reachable via the single-user `occ recognaize:cluster` CLI command, and hadn't
+was still only reachable via the single-user `occ facewright:cluster` CLI command, and hadn't
 been re-run since all the automatic-detection testing landed hundreds of new InsightFace
 detections. Checked the live data before building anything: of ~9k total rows in
 `recognize_face_detections`, ~8.3k are 128-dim (Recognize's own legacy classifier data, already
 clustered into 539 named people from before this project existed) and only ~740 are our own
 512-dim InsightFace rows, of which just 34 had a `cluster_id` — leftover from the original
 60-photo prototype run. So the people the user was already seeing tagged in Memories were
-**not** recognAIze's doing; recognAIze's own detections were sitting unclustered.
+**not** Facewright's doing; Facewright's own detections were sitting unclustered.
 
 Extracted the clustering algorithm out of `ClusterFaces` into `lib/Service/ClusteringService.php`
 (same "thin command, real logic in a service" pattern as `DetectionService`/`DetectFaces`), added
@@ -526,18 +526,18 @@ confirmed working, clusters showed up as people in Memories.
 ### Done: naming clusters — turned out to need no code at all
 
 Asked to "give the clusters real names/titles" (`recognize_face_clusters.title` is `''` for
-every cluster recognAIze creates). Before writing anything, checked how naming actually works
+every cluster Facewright creates). Before writing anything, checked how naming actually works
 in this stack, since Memories' People page is Recognize's UI surface, not ours: Recognize
 exposes each cluster as a virtual folder over WebDAV (`recognize/lib/Dav/Faces/FaceRoot.php`),
 and `FaceRoot::setName()` is what a rename actually calls — straight into
-`FaceClusterMapper->update()`, writing `title` on the exact same table/column recognAIze already
+`FaceClusterMapper->update()`, writing `title` on the exact same table/column Facewright already
 writes into. Memories' rename-a-person UI is just a DAV move/rename against that virtual folder
 under the hood. Confirmed this mechanism was already real and in use on this instance before
 touching any code: cluster id 16, from the pre-existing legacy 128-dim data, already had the
 title "Constantin Schieber-Knöbl" — set this exact way, at some point before this project
 existed.
 
-Since recognAIze's own clusters live in the identical table with the identical shape, there was
+Since Facewright's own clusters live in the identical table with the identical shape, there was
 no reason to expect Memories' existing rename UI wouldn't already work on them too — and it did,
 confirmed by the user directly in a real browser, no new code required. Worth remembering: this
 project's own writes into Recognize's tables get all of Recognize/Memories' *existing* read/write
@@ -547,7 +547,7 @@ covers it.
 
 ### Done: full-library scan, pause, and live queue/scan status
 
-Triggered by a real incident: the `recognaize` ExApp container had silently crashed (`Exited
+Triggered by a real incident: the `facewright` ExApp container had silently crashed (`Exited
 (139)` — SIGSEGV, no Python traceback despite `TRACE`-level logging, so almost certainly a
 native-code crash in ONNX Runtime/InsightFace's Cython extensions/OpenCV rather than an
 application bug) and sat dead for 16 hours before anyone noticed, since it had no restart
@@ -555,17 +555,17 @@ policy. Also discovered mid-investigation (unrelated to the crash, and turned ou
 intentional — the user had manually cleared both tables for a clean slate): `recognize_face_detections`
 and `recognize_face_clusters` were completely empty, legacy 128-dim data included.
 
-**Restart policy**: `docker update --restart=unless-stopped recognaize` (live) and the
+**Restart policy**: `docker update --restart=unless-stopped facewright` (live) and the
 `Makefile`'s `run` target both now set `--restart unless-stopped`, so a future crash self-heals
 instead of silently stalling for hours.
 
-**Clean-slate reset command**: `occ recognaize:reset [--dry-run] [--yes]`
-(`lib/Command/ResetRecognaizeData.php` + `lib/Service/ResetService.php`) deletes recognAIze's own
-512-dim detections, any cluster made up of them, and clears `recognaize_processed` entirely —
+**Clean-slate reset command**: `occ facewright:reset [--dry-run] [--yes]`
+(`lib/Command/ResetFacewrightData.php` + `lib/Service/ResetService.php`) deletes Facewright's own
+512-dim detections, any cluster made up of them, and clears `facewright_processed` entirely —
 instance-wide, not per-user, unlike `ClusteringService::resetUser()` (which has no dimensionality
 filter and would also wipe legacy 128-dim clusters/titles if pointed at the wrong thing — see the
 near-miss in the clustering section above). Safe because clustering never mixes dimensions in one
-cluster, so "every cluster referenced by a 512-dim detection" and "every cluster recognAIze ever
+cluster, so "every cluster referenced by a 512-dim detection" and "every cluster Facewright ever
 created" are the same set. `ClusteringService::EXPECTED_DIMENSIONS` was made `public const` so
 `ResetService` reuses the exact same "is this row ours" test rather than a second copy that could
 drift.
@@ -582,7 +582,7 @@ chunk waits for the next cron tick rather than everything being enqueued at once
 i.e. duplicate `(class, json-argument)` pairs are deduped server-side for free — so re-adding
 `self::class` with the same `chunkSize` argument every cycle is always safe, never creates
 duplicate queue rows, and naturally stops once a pass enqueues nothing new (backlog exhausted, or
-everything remaining already queued elsewhere). Both `occ recognaize:scan [--chunk-size=200]`
+everything remaining already queued elsewhere). Both `occ facewright:scan [--chunk-size=200]`
 (`lib/Command/ScanLibrary.php`) and the admin page's new "Scan entire library" button
 (`PeopleSettingsController::runScan`, `PUT /run-scan`) just enqueue the first `BatchScanJob` —
 same mechanism either way.
@@ -591,7 +591,7 @@ same mechanism either way.
 (`PeopleSettingsController::setProcessingPaused`, `PUT /processing-paused`). Checked at the top
 of both `DetectQueuedJob::run()` and `BatchScanJob::run()` — if paused, each just re-adds itself
 with its original argument and returns, doing no real work (no ExApp call, no enumeration) until
-unpaused, then resumes exactly where it left off. Deliberately scoped to only recognAIze's own
+unpaused, then resumes exactly where it left off. Deliberately scoped to only Facewright's own
 two job classes, not Nextcloud's cron generally or any other app's jobs — there's no sanctioned
 way to pause cron itself, and pausing the whole instance's background jobs to stop one app's CPU
 load would be a much bigger hammer than asked for.
@@ -642,7 +642,7 @@ loading, and (b) how many faces get matched-and-persisted per invocation:
   cluster assignment for up to `$chunkSize` currently-unclustered ids with `id > $afterId` —
   that's what bounds the comparison and per-call persisted-write cost. The actual
   matching/join/create logic was extracted into a shared private `assignClusters()` so
-  `clusterUser()` (the original one-shot, still used by `occ recognaize:cluster <user>` for
+  `clusterUser()` (the original one-shot, still used by `occ facewright:cluster <user>` for
   small manual runs) and `clusterUserChunk()` aren't two copies of the same algorithm.
   `persistAssignments()` was also changed to take an explicit list of changed ids rather than
   re-`UPDATE`ing every already-clustered row on every call — a real, pre-existing inefficient
@@ -665,7 +665,7 @@ loading, and (b) how many faces get matched-and-persisted per invocation:
   pending job's `getArgument()['userId']` — `IJobList::add()`'s own built-in dedup (see the
   scan-job section above) doesn't help here since `ClusterScanJob`'s argument changes every
   invocation (`afterId`/`passProgress` evolve), unlike `BatchScanJob`'s constant `chunkSize`.
-- `occ recognaize:cluster-scan [--chunk-size=300]` mirrors `occ recognaize:scan` — same
+- `occ facewright:cluster-scan [--chunk-size=300]` mirrors `occ facewright:scan` — same
   per-user-chain-guard, starts the background job and returns immediately rather than blocking.
 - Admin page: "Run now" under Clustering now starts the background chain (with a configurable
   chunk size, default 300) instead of blocking the request; the live status line (previous
@@ -691,7 +691,7 @@ preparing the public alpha release, since the original version of this note said
 Recognize's (also AGPL) DB schema/tables directly was "fine for personal homelab use, but would
 need reconsideration if this project left that context" — and it has now left that context.
 
-The actual analysis: `recognaize_bridge` never imports, `use`s, or links against any of
+The actual analysis: `facewright_bridge` never imports, `use`s, or links against any of
 Recognize's PHP — it writes into Recognize's tables using Nextcloud's own `IDBConnection`/
 `QueryBuilder`, knowing only the table/column names, the same way any external tool that knows
 a database's schema could. That's schema interoperability, not incorporating Recognize's code,

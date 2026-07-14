@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How recognAIze matches faces to files and clusters</title>
+<title>How Facewright matches faces to files and clusters</title>
 <style>
   :root {
     --bg: #f2f1ec;
@@ -367,21 +367,21 @@
 <div class="page">
 
   <header class="doc-head corner-br">
-    <p class="eyebrow">recognAIze<span class="sep">·</span>internal reference<span class="sep">·</span>schema &amp; matching</p>
+    <p class="eyebrow">Facewright<span class="sep">·</span>internal reference<span class="sep">·</span>schema &amp; matching</p>
     <h1>How a photo becomes a face, and a face becomes a person</h1>
     <p class="dek">What actually happens in the database between an uploaded photo and a named person on Memories' People page — table by table, row by row.</p>
   </header>
 
   <section>
     <p class="section-index">00 &nbsp;— &nbsp;the short version</p>
-    <p class="lede">Three tables carry the whole system. A Nextcloud <strong>file</strong> is linked to zero or more <strong>face detections</strong> (one row per face InsightFace found in that photo). A face detection is linked to zero or one <strong>cluster</strong> — a cluster being recognAIze's notion of "a person." Detection and clustering are two separate passes, run at different times, connected only through the data they leave behind.</p>
-    <p>Nothing here is recognAIze's own schema by choice — these are Recognize's tables. recognAIze writes into them so Memories' existing People page can read them without knowing recognAIze exists.</p>
+    <p class="lede">Three tables carry the whole system. A Nextcloud <strong>file</strong> is linked to zero or more <strong>face detections</strong> (one row per face InsightFace found in that photo). A face detection is linked to zero or one <strong>cluster</strong> — a cluster being Facewright's notion of "a person." Detection and clustering are two separate passes, run at different times, connected only through the data they leave behind.</p>
+    <p>Nothing here is Facewright's own schema by choice — these are Recognize's tables. Facewright writes into them so Memories' existing People page can read them without knowing Facewright exists.</p>
   </section>
 
   <section>
     <p class="section-index">01 &nbsp;— &nbsp;the three tables</p>
     <h2>What's actually on disk</h2>
-    <p>One table per concept. The fourth table you'll see mentioned elsewhere in this project, <code>recognaize_processed</code>, is <em>not</em> part of this — it only tracks which files have been attempted, for idempotency. It has no opinion about faces or people.</p>
+    <p>One table per concept. The fourth table you'll see mentioned elsewhere in this project, <code>facewright_processed</code>, is <em>not</em> part of this — it only tracks which files have been attempted, for idempotency. It has no opinion about faces or people.</p>
 
     <div class="schema-grid">
       <div class="schema-card">
@@ -394,7 +394,7 @@
           <li><span class="col-name">user_id</span><span class="col-desc">whose library this photo belongs to — detections are always scoped to one user</span></li>
           <li><span class="col-name"><span class="fk">file_id</span></span><span class="col-desc">Nextcloud's internal, rename-proof file id — the only link back to an actual photo</span></li>
           <li><span class="col-name">x, y, width, height</span><span class="col-desc">the face's bounding box, as fractions of the image (0.0–1.0), not pixels</span></li>
-          <li><span class="col-name">face_vector</span><span class="col-desc">the face embedding — a JSON array of floats. 512 numbers if recognAIze wrote it, 128 if Recognize's old classifier did</span></li>
+          <li><span class="col-name">face_vector</span><span class="col-desc">the face embedding — a JSON array of floats. 512 numbers if Facewright wrote it, 128 if Recognize's old classifier did</span></li>
           <li><span class="col-name"><span class="fk">cluster_id</span></span><span class="col-desc">which person this face belongs to — <code>NULL</code> until a clustering pass decides</span></li>
         </ul>
       </div>
@@ -413,7 +413,7 @@
 
       <div class="schema-card">
         <div class="schema-head">
-          <span class="tbl-name">oc_recognaize_processed</span>
+          <span class="tbl-name">oc_facewright_processed</span>
           <span class="tbl-tag">bookkeeping only</span>
         </div>
         <ul class="cols">
@@ -507,13 +507,13 @@
   <section>
     <p class="section-index">03 &nbsp;— &nbsp;detection</p>
     <h2>How a file gets its face rows</h2>
-    <p>Detection is triggered four different ways — a new upload, the admin page's "Run now," the self-requeuing "Scan entire library," or <code>occ recognaize:detect</code> by hand — but all four converge on the same steps:</p>
+    <p>Detection is triggered four different ways — a new upload, the admin page's "Run now," the self-requeuing "Scan entire library," or <code>occ facewright:detect</code> by hand — but all four converge on the same steps:</p>
     <ol class="steps">
       <li>A trigger identifies a candidate as <code>(user_id, file_id, path)</code> and hands it to <code>DetectionService</code>.</li>
-      <li><code>DetectionService</code> calls the <code>recognaize</code> ExApp's <code>POST /detect</code>, impersonating that user so the ExApp can read the file from their storage.</li>
+      <li><code>DetectionService</code> calls the <code>facewright</code> ExApp's <code>POST /detect</code>, impersonating that user so the ExApp can read the file from their storage.</li>
       <li>Inside the ExApp, InsightFace (<code>buffalo_l</code>, CPU) returns a pixel bounding box, a 512-float normalized embedding, and a confidence score — per face found.</li>
       <li>The bridge converts each pixel bbox to a 0.0–1.0 fraction of the image, and <code>INSERT</code>s one row per face into <code>recognize_face_detections</code>. <code>cluster_id</code> is left <code>NULL</code> — nothing here decides who anyone is.</li>
-      <li>Whether one face was found or none, <code>recognaize_processed</code> gets a row, so this file won't be attempted again automatically.</li>
+      <li>Whether one face was found or none, <code>facewright_processed</code> gets a row, so this file won't be attempted again automatically.</li>
     </ol>
 
     <div class="diagram-wrap">
@@ -527,7 +527,7 @@
           <text x="22" y="84" class="label-muted">upload / Run now / scan</text>
 
           <rect x="205" y="45" width="180" height="54" rx="5" class="node-fill"></rect>
-          <text x="217" y="68" font-size="12">recognaize ExApp</text>
+          <text x="217" y="68" font-size="12">facewright ExApp</text>
           <text x="217" y="84" class="label-muted">POST /detect (InsightFace)</text>
 
           <rect x="430" y="45" width="200" height="54" rx="5" class="node-fill accent"></rect>
@@ -535,7 +535,7 @@
           <text x="442" y="84" class="label-muted">cluster_id = NULL</text>
 
           <rect x="680" y="45" width="200" height="54" rx="5" class="node-fill"></rect>
-          <text x="692" y="68" font-size="12">recognaize_processed</text>
+          <text x="692" y="68" font-size="12">facewright_processed</text>
           <text x="692" y="84" class="label-muted">marks file attempted</text>
 
           <path d="M160,72 L205,72" class="edge" marker-end="url(#arrow2)"></path>
@@ -572,14 +572,14 @@
 
     <div class="callout">
       <p class="callout-label">why the 512 / 128 split matters</p>
-      <p>This instance still has roughly 8,300 old <code>128</code>-dimension rows from Recognize's original face-api.js classifier, sitting in the same table as recognAIze's own <code>512</code>-dimension InsightFace rows. Comparing across that boundary isn't just inaccurate — the vectors aren't in the same space at all, so a "distance" between them is meaningless. Every place that reads embeddings for clustering filters to exactly 512 first.</p>
+      <p>This instance still has roughly 8,300 old <code>128</code>-dimension rows from Recognize's original face-api.js classifier, sitting in the same table as Facewright's own <code>512</code>-dimension InsightFace rows. Comparing across that boundary isn't just inaccurate — the vectors aren't in the same space at all, so a "distance" between them is meaningless. Every place that reads embeddings for clustering filters to exactly 512 first.</p>
     </div>
   </section>
 
   <section>
     <p class="section-index">05 &nbsp;— &nbsp;reading it back</p>
     <h2>How Memories turns a cluster into "Anna's photos"</h2>
-    <p>There's no code in recognAIze for this — it's the same walk from §02, run backwards, by Recognize and Memories' own existing machinery:</p>
+    <p>There's no code in Facewright for this — it's the same walk from §02, run backwards, by Recognize and Memories' own existing machinery:</p>
     <ul class="plain">
       <li>Memories' People page lists <code>recognize_face_clusters</code> rows for the current user, showing <code>title</code> where one's been set.</li>
       <li>Opening a person queries <code>recognize_face_detections WHERE cluster_id = &lt;that id&gt;</code>, then follows each row's <code>file_id</code> back to the actual photo to render a thumbnail, cropped using that row's <code>x, y, width, height</code>.</li>
@@ -588,7 +588,7 @@
   </section>
 
   <footer class="doc-foot">
-    <p>Reflects <code>recognize_face_detections</code>, <code>recognize_face_clusters</code>, and <code>recognaize_processed</code> as written by <code>recognaize_bridge</code> — see the repo's <code>CLAUDE.md</code> for the full build history behind each piece.</p>
+    <p>Reflects <code>recognize_face_detections</code>, <code>recognize_face_clusters</code>, and <code>facewright_processed</code> as written by <code>facewright_bridge</code> — see the repo's <code>CLAUDE.md</code> for the full build history behind each piece.</p>
   </footer>
 
 </div>

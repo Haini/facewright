@@ -11,9 +11,9 @@ services:
     volumes:
       - nextcloud_db:/var/lib/mysql
     networks:
-      - recognaize-dev
+      - facewright-dev
 
-  # One-shot init: bind-mounting ./recognaize_bridge into a *subpath* of the nextcloud_html
+  # One-shot init: bind-mounting ./facewright_bridge into a *subpath* of the nextcloud_html
   # named volume (below) makes Docker create the missing "custom_apps" parent as root before
   # the nextcloud image's own entrypoint gets a chance to own it - occ then fails installing
   # any non-shipped app (e.g. "recognize") into it with a misleading "Cannot write into apps
@@ -27,7 +27,7 @@ services:
     volumes:
       - nextcloud_html:/var/www/html
     networks:
-      - recognaize-dev
+      - facewright-dev
 
   nextcloud:
     image: nextcloud:33-apache
@@ -45,7 +45,7 @@ services:
       NEXTCLOUD_ADMIN_USER: admin
       NEXTCLOUD_ADMIN_PASSWORD: dev-admin-password
       # "nextcloud" (the compose service/container name) must be trusted too, not just
-      # localhost: the recognaize container calls back into Nextcloud via NEXTCLOUD_URL=
+      # localhost: the facewright container calls back into Nextcloud via NEXTCLOUD_URL=
       # http://nextcloud (nc_py_api's set_init_status et al.), and Nextcloud's untrusted-domain
       # guard 400s that Host header otherwise - found by chasing a 400 on PUT
       # /ocs/v1.php/apps/app_api/ex-app/status back to an HTML "Access through untrusted domain"
@@ -55,17 +55,17 @@ services:
       - "8080:80"
     volumes:
       - nextcloud_html:/var/www/html
-      # Bind-mount recognaize_bridge straight from the repo so local edits show up without a
+      # Bind-mount facewright_bridge straight from the repo so local edits show up without a
       # copy step (occ app:enable still needs running once - see README's "Try it locally").
-      - ./recognaize_bridge:/var/www/html/custom_apps/recognaize_bridge
+      - ./facewright_bridge:/var/www/html/custom_apps/facewright_bridge
     networks:
-      - recognaize-dev
+      - facewright-dev
 
-  recognaize:
+  facewright:
     build: .
     restart: unless-stopped
     environment:
-      APP_ID: recognaize
+      APP_ID: facewright
       APP_VERSION: "0.1.0"
       APP_SECRET: dev-secret-not-for-real-use
       # No HP_SHARED_KEY/HP_FRP_* here on purpose: those trigger HaRP/FRP-tunnel mode, which
@@ -77,10 +77,10 @@ services:
       APP_PORT: "9030"
       NEXTCLOUD_URL: http://nextcloud
     networks:
-      - recognaize-dev
+      - facewright-dev
 
 networks:
-  recognaize-dev:
+  facewright-dev:
 
 volumes:
   nextcloud_db:

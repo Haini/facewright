@@ -1,4 +1,4 @@
-# recognAIze
+# Facewright
 
 An InsightFace-based replacement for the face-detection half of [Nextcloud
 Recognize](https://github.com/nextcloud/recognize)'s pipeline, built as a companion app rather
@@ -19,13 +19,13 @@ working normally for everything else Recognize does).
 
 Two apps live in this repo to make that possible:
 
-- **`recognaize`** (top-level `appinfo/`, `ex_app/`) - a Nextcloud AppAPI ExApp: a small Python
+- **`facewright`** (top-level `appinfo/`, `ex_app/`) - a Nextcloud AppAPI ExApp: a small Python
   service running InsightFace, reachable over HTTP as `POST /detect`. It knows nothing about
   Recognize's database - it downloads one file via Nextcloud's own API and returns bounding
   boxes + 512-d embeddings.
-- **`recognaize_bridge`** - a regular Nextcloud PHP app. ExApps have no sanctioned path to raw
+- **`facewright_bridge`** - a regular Nextcloud PHP app. ExApps have no sanctioned path to raw
   database access, and per-user fan-out needs real Nextcloud-side APIs
-  (`IUserMountCache` etc.), so this small app is what actually calls `recognaize`, then writes
+  (`IUserMountCache` etc.), so this small app is what actually calls `facewright`, then writes
   the results into Recognize's tables via Nextcloud's `QueryBuilder`. It also owns clustering
   (turning raw detections into "people"), file-event/background-job triggers, and an admin
   settings page.
@@ -51,7 +51,7 @@ full design history and every incident/gotcha hit building this, if you want the
 ## Quickstart: try it locally
 
 A `docker-compose.yml` spins up a throwaway Nextcloud + DB for testing the PHP side
-(`recognaize_bridge`) and the `recognaize` ExApp together, without touching a real instance:
+(`facewright_bridge`) and the `facewright` ExApp together, without touching a real instance:
 
 ```
 docker compose up -d
@@ -59,14 +59,14 @@ bash dev-setup.sh   # first run only: installs AppAPI + recognize, registers the
 ```
 
 Then open <http://localhost:8080> (`admin` / `dev-admin-password`), enable the People page and
-set an included-paths list under Administration settings > recognAIze, and upload some photos.
+set an included-paths list under Administration settings > Facewright, and upload some photos.
 
 This registers the ExApp as a **manual-install daemon without HaRP** - on the compose network,
-Nextcloud and the `recognaize` container can reach each other directly by container name, so the
+Nextcloud and the `facewright` container can reach each other directly by container name, so the
 FRP-tunnel layer the real deployment recipe below uses (to cross a network boundary) isn't
 needed here. See `dev-setup.sh`'s comments for a caveat: that specific no-HaRP registration
 command is a best-effort translation of the real recipe below, not yet verified end-to-end the
-way the HaRP one has been - if `occ app_api:app:list` doesn't show `recognaize` as enabled after
+way the HaRP one has been - if `occ app_api:app:list` doesn't show `facewright` as enabled after
 running it, compare against `occ app_api:daemon:register --help` on your stack.
 
 ## Deploying against a real Nextcloud instance
@@ -90,11 +90,11 @@ This recipe assumes an existing AppAPI + HaRP manual-install-daemon setup, match
 is commonly self-hosted outside Nextcloud's official AIO bundle. Adjust `deploy.env` if your
 setup differs (different container names, a docker-based daemon instead of manual, etc.).
 
-Once the ExApp is running, `recognaize_bridge` needs to be installed the same way any
+Once the ExApp is running, `facewright_bridge` needs to be installed the same way any
 non-app-store Nextcloud app is: copy (or bind-mount, for active development) the
-`recognaize_bridge/` directory into your instance's `custom_apps/`, then
-`occ app:enable recognaize_bridge`. Configure the People-page toggle, included-paths allowlist,
-and clustering/scan triggers from Administration settings > recognAIze.
+`facewright_bridge/` directory into your instance's `custom_apps/`, then
+`occ app:enable facewright_bridge`. Configure the People-page toggle, included-paths allowlist,
+and clustering/scan triggers from Administration settings > Facewright.
 
 ## License
 

@@ -1,0 +1,77 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OCA\FacewrightBridge\Settings;
+
+use OCA\FacewrightBridge\BackgroundJob\BatchScanJob;
+use OCA\FacewrightBridge\BackgroundJob\ClusterScanJob;
+use OCA\FacewrightBridge\BackgroundJob\DetectQueuedJob;
+use OCA\FacewrightBridge\Service\PathFilterService;
+use OCA\FacewrightBridge\Service\ProcessedFileService;
+use OCP\AppFramework\Http\TemplateResponse;
+use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\BackgroundJob\IJobList;
+use OCP\IAppConfig;
+use OCP\Settings\ISettings;
+use OCP\Util;
+
+class AdminSettings implements ISettings {
+	public function __construct(
+		private IAppConfig $appConfig,
+		private PathFilterService $pathFilter,
+		private ProcessedFileService $processedFiles,
+		private ITimeFactory $timeFactory,
+		private IJobList $jobList,
+	) {
+	}
+
+	public function getForm(): TemplateResponse {
+		$enabled = $this->appConfig->getValueString('recognize', 'faces.enabled', 'false') === 'true';
+		$paths = implode("\n", $this->pathFilter->getIncludedPaths());
+		$automaticDetectionEnabled = $this->appConfig->getValueString('facewright_bridge', 'automatic_detection_enabled', 'false') === 'true';
+		$processingPaused = $this->appConfig->getValueString('facewright_bridge', 'processing_paused', 'false') === 'true';
+		$batchSize = $this->appConfig->getValueInt('facewright_bridge', 'batch_size', 50);
+		$clusterMaxDistance = $this->appConfig->getValueFloat('facewright_bridge', 'cluster_max_distance', 0.5);
+		$clusterMinFaces = $this->appConfig->getValueInt('facewright_bridge', 'cluster_min_faces', 3);
+		$clusterChunkSize = $this->appConfig->getValueInt('facewright_bridge', 'cluster_chunk_size', 300);
+
+		$processedCount = $this->processedFiles->countProcessed();
+		$candidateCount = $this->processedFiles->countCandidates();
+		Util::addScript('facewright_bridge', 'admin');
+		return new TemplateResponse('facewright_bridge', 'admin', [
+			'enabled' => $enabled,
+			'paths' => $paths,
+			'automaticDetectionEnabled' => $automaticDetectionEnabled,
+			'processingPaused' => $processingPaused,
+			'batchSize' => $batchSize,
+			'clusterMaxDistance' => $clusterMaxDistance,
+			'clusterMinFaces' => $clusterMinFaces,
+			'clusterChunkSize' => $clusterChunkSize,
+			'processedLastHour' => $this->processedFiles->countProcessedSince($this->timeFactory->getTime() - 3600),
+			'processedCount' => $processedCount,
+			'unprocessedCount' => max(0, $candidateCount - $processedCount),
+			'queuedDetections' => $this->countJobs(DetectQueuedJob::class),
+			'scanActive' => $this->countJobs(BatchScanJob::class) > 0,
+			'clusteringActive' => $this->countJobs(ClusterScanJob::class) > 0,
+		], '');
+	}
+
+	public function getSection(): string {
+		return 'facewright_bridge';
+	}
+
+	public function getPriority(): int {
+		return 10;
+	}
+
+	/** @param class-string $class */
+	private function countJobs(string $class): int {
+		foreach ($this->jobList->countByClass() as $row) {
+			if ($row['class'] === $class) {
+				return $row['count'];
+			}
+		}
+		return 0;
+	}
+}
