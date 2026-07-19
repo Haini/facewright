@@ -3,6 +3,7 @@
 $enabled = !empty($_['enabled']);
 $paths = $_['paths'] ?? '';
 $automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
+$automaticClusteringEnabled = !empty($_['automaticClusteringEnabled']);
 $processingPaused = !empty($_['processingPaused']);
 $batchSize = $_['batchSize'] ?? 50;
 $clusterMaxDistance = $_['clusterMaxDistance'] ?? 0.5;
@@ -11,6 +12,7 @@ $clusterChunkSize = $_['clusterChunkSize'] ?? 300;
 $processedLastHour = $_['processedLastHour'] ?? 0;
 $processedCount = $_['processedCount'] ?? 0;
 $unprocessedCount = $_['unprocessedCount'] ?? 0;
+$unclusteredCount = $_['unclusteredCount'] ?? 0;
 $queuedDetections = $_['queuedDetections'] ?? 0;
 $scanActive = !empty($_['scanActive']);
 $clusteringActive = !empty($_['clusteringActive']);
@@ -65,6 +67,12 @@ $clusteringActive = !empty($_['clusteringActive']);
 	<h2><?php p($l->t('Clustering')); ?></h2>
 	<p><?php p($l->t('Groups detected faces into people Memories can show and let you name. Prototype thresholds - see CLAUDE.md before trusting them at scale. Only newly-detected faces are considered on each run; already-clustered ones are left alone.')); ?></p>
 	<p>
+		<input type="checkbox" id="facewright-automatic-clustering-enabled" class="checkbox" <?php p($automaticClusteringEnabled ? 'checked' : ''); ?>>
+		<label for="facewright-automatic-clustering-enabled"><?php p($l->t('Automatically re-cluster new faces')); ?></label>
+	</p>
+	<p><?php p($l->t('Detection runs continuously, but a clustering run stops itself once it runs out of progress to make - nothing restarts it as new faces get detected afterward. This periodically starts a new run (using the settings below) for any user with unclustered faces, so newly-detected people don\'t silently sit off Memories\' People page until someone clicks "Run now" again.')); ?></p>
+	<p id="facewright-automatic-clustering-status"></p>
+	<p>
 		<label for="facewright-cluster-max-distance"><?php p($l->t('Max cosine distance')); ?></label>
 		<input type="number" id="facewright-cluster-max-distance" min="0" max="2" step="0.01" value="<?php p((string)$clusterMaxDistance); ?>">
 	</p>
@@ -82,21 +90,21 @@ $clusteringActive = !empty($_['clusteringActive']);
 </div>
 <div id="facewright-merge-settings" class="section">
 	<h2><?php p($l->t('Merge clusters')); ?></h2>
-	<p><?php p($l->t('Combines two clusters that turned out to be the same person into one. Recognize\'s own rename UI refuses this - renaming a person to an existing name is treated as an error there, not a merge request. This moves every face from "merge in" onto "keep", then deletes the now-empty cluster.')); ?></p>
+	<p><?php p($l->t('Combines two clusters that turned out to be the same person into one. Recognize\'s own rename UI refuses this - renaming a person to an existing name is treated as an error there ("Not allowed to create duplicate names"), not a merge request. This is exactly what you hit if you try to rename a newly-detected face to an existing person\'s name in Memories. This moves every face from "merge in" onto "keep", then deletes the now-empty cluster.')); ?></p>
 	<p>
 		<label for="facewright-merge-user"><?php p($l->t('User')); ?></label>
 		<input type="text" id="facewright-merge-user" placeholder="e.g. alice">
 	</p>
 	<p>
-		<label for="facewright-merge-keep-id"><?php p($l->t('Cluster ID to keep')); ?></label>
-		<input type="number" id="facewright-merge-keep-id" min="1">
+		<label for="facewright-merge-keep"><?php p($l->t('Person to keep')); ?></label>
+		<input type="text" id="facewright-merge-keep" placeholder="e.g. Jane Doe, or a numeric cluster ID">
 	</p>
 	<p>
-		<label for="facewright-merge-id"><?php p($l->t('Cluster ID to merge in (deleted afterward)')); ?></label>
-		<input type="number" id="facewright-merge-id" min="1">
+		<label for="facewright-merge-id"><?php p($l->t('Person to merge in (deleted afterward)')); ?></label>
+		<input type="text" id="facewright-merge-id" placeholder="e.g. 757, or a numeric cluster ID">
 		<button type="button" id="facewright-merge-clusters"><?php p($l->t('Merge')); ?></button>
 	</p>
-	<p><?php p($l->t('Find cluster IDs on Memories\' People page - an unnamed cluster is shown using its numeric ID as the tile\'s label.')); ?></p>
+	<p><?php p($l->t('Either field accepts a person\'s existing name, or a numeric cluster ID for an unnamed one - Memories shows an unnamed cluster\'s tile labeled with its numeric ID.')); ?></p>
 	<p id="facewright-merge-clusters-status"></p>
 </div>
 <div id="facewright-stats-settings" class="section">
@@ -120,4 +128,5 @@ $clusteringActive = !empty($_['clusteringActive']);
 	<p><?php p($l->n('%n file queued for detection right now', '%n files queued for detection right now', $queuedDetections, [$queuedDetections])); ?><?php if ($processingPaused && $queuedDetections > 0): ?> <?php p($l->t('(held, not shrinking, while paused)')); ?><?php endif; ?></p>
 	<p><?php p($l->n('%n picture processed in the last hour', '%n pictures processed in the last hour', $processedLastHour, [$processedLastHour])); ?></p>
 	<p><?php p($l->t('%s processed, %s not yet processed', [(string)$processedCount, (string)$unprocessedCount])); ?></p>
+	<p><?php p($l->n('%n picture still needs to be clustered', '%n pictures still need to be clustered', $unclusteredCount, [$unclusteredCount])); ?></p>
 </div>

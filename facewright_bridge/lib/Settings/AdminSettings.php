@@ -7,6 +7,7 @@ namespace OCA\FacewrightBridge\Settings;
 use OCA\FacewrightBridge\BackgroundJob\BatchScanJob;
 use OCA\FacewrightBridge\BackgroundJob\ClusterScanJob;
 use OCA\FacewrightBridge\BackgroundJob\DetectQueuedJob;
+use OCA\FacewrightBridge\Service\ClusteringService;
 use OCA\FacewrightBridge\Service\PathFilterService;
 use OCA\FacewrightBridge\Service\ProcessedFileService;
 use OCP\AppFramework\Http\TemplateResponse;
@@ -21,6 +22,7 @@ class AdminSettings implements ISettings {
 		private IAppConfig $appConfig,
 		private PathFilterService $pathFilter,
 		private ProcessedFileService $processedFiles,
+		private ClusteringService $clustering,
 		private ITimeFactory $timeFactory,
 		private IJobList $jobList,
 	) {
@@ -30,6 +32,7 @@ class AdminSettings implements ISettings {
 		$enabled = $this->appConfig->getValueString('recognize', 'faces.enabled', 'false') === 'true';
 		$paths = implode("\n", $this->pathFilter->getIncludedPaths());
 		$automaticDetectionEnabled = $this->appConfig->getValueString('facewright_bridge', 'automatic_detection_enabled', 'false') === 'true';
+		$automaticClusteringEnabled = $this->appConfig->getValueString('facewright_bridge', 'automatic_clustering_enabled', 'true') === 'true';
 		$processingPaused = $this->appConfig->getValueString('facewright_bridge', 'processing_paused', 'false') === 'true';
 		$batchSize = $this->appConfig->getValueInt('facewright_bridge', 'batch_size', 50);
 		$clusterMaxDistance = $this->appConfig->getValueFloat('facewright_bridge', 'cluster_max_distance', 0.5);
@@ -38,11 +41,13 @@ class AdminSettings implements ISettings {
 
 		$processedCount = $this->processedFiles->countProcessed();
 		$candidateCount = $this->processedFiles->countCandidates();
+		$unclusteredCount = array_sum($this->clustering->countUnclusteredByUser());
 		Util::addScript('facewright_bridge', 'admin');
 		return new TemplateResponse('facewright_bridge', 'admin', [
 			'enabled' => $enabled,
 			'paths' => $paths,
 			'automaticDetectionEnabled' => $automaticDetectionEnabled,
+			'automaticClusteringEnabled' => $automaticClusteringEnabled,
 			'processingPaused' => $processingPaused,
 			'batchSize' => $batchSize,
 			'clusterMaxDistance' => $clusterMaxDistance,
@@ -51,6 +56,7 @@ class AdminSettings implements ISettings {
 			'processedLastHour' => $this->processedFiles->countProcessedSince($this->timeFactory->getTime() - 3600),
 			'processedCount' => $processedCount,
 			'unprocessedCount' => max(0, $candidateCount - $processedCount),
+			'unclusteredCount' => $unclusteredCount,
 			'queuedDetections' => $this->countJobs(DetectQueuedJob::class),
 			'scanActive' => $this->countJobs(BatchScanJob::class) > 0,
 			'clusteringActive' => $this->countJobs(ClusterScanJob::class) > 0,

@@ -5,18 +5,15 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Controller;
 
 use OCA\FacewrightBridge\BackgroundJob\BatchScanJob;
-use OCA\FacewrightBridge\BackgroundJob\ClusterScanJob;
 use OCA\FacewrightBridge\Service\BatchTriggerService;
 use OCA\FacewrightBridge\Service\ClusterMergeService;
-use OCA\FacewrightBridge\Service\ClusteringService;
+use OCA\FacewrightBridge\Service\ClusterTriggerService;
 use OCA\FacewrightBridge\Service\PathFilterService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\BackgroundJob\IJobList;
 use OCP\IAppConfig;
 use OCP\IRequest;
-use OCP\IUser;
-use OCP\IUserManager;
 
 /**
  * Backs the Facewright admin settings page (kept the name from when it only handled the
@@ -40,10 +37,9 @@ class PeopleSettingsController extends Controller {
 		private IAppConfig $appConfig,
 		private PathFilterService $pathFilter,
 		private BatchTriggerService $batchTrigger,
-		private ClusteringService $clustering,
 		private ClusterMergeService $clusterMerge,
+		private ClusterTriggerService $clusterTrigger,
 		private IJobList $jobList,
-		private IUserManager $userManager,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -94,13 +90,11 @@ class PeopleSettingsController extends Controller {
 	}
 
 	/**
-	 * Starts a self-requeuing, chunked ClusterScanJob per seen user, instead of running
-	 * ClusteringService::runForAllUsers() synchronously in this request - that used to load and
-	 * all-pairs-match a user's *entire* detection set in one go, which was fine at prototype
-	 * scale but started hitting PHP's memory limit once a real account passed several thousand
-	 * detections (see CLAUDE.md). Skips starting a second chain for a user who already has one
-	 * in flight (harmless either way since matching is idempotent against already-clustered
-	 * rows, but wasteful).
+	 * Manual counterpart to ClusteringMaintenanceJob's automatic re-trigger - both go through
+	 * ClusterTriggerService so "who needs a chain started" is defined exactly once. Only starts
+	 * chains for users who actually have unclustered Facewright detections (see
+	 * ClusteringService::countUnclusteredByUser()), skipping anyone who already has one in
+	 * flight.
 	 */
 	public function runClustering(float $maxDistance, int $minFaces, int $chunkSize = 300): JSONResponse {
 		$maxDistance = max(0.0, $maxDistance);
@@ -110,45 +104,28 @@ class PeopleSettingsController extends Controller {
 		$this->appConfig->setValueInt('facewright_bridge', 'cluster_min_faces', $minFaces);
 		$this->appConfig->setValueInt('facewright_bridge', 'cluster_chunk_size', $chunkSize);
 
-		$alreadyRunning = $this->usersWithPendingClusterScan();
-		$started = 0;
-		$this->userManager->callForSeenUsers(function (IUser $user) use (&$started, $maxDistance, $minFaces, $chunkSize, $alreadyRunning): void {
-			if (isset($alreadyRunning[$user->getUID()])) {
-				return;
-			}
-			$this->jobList->add(ClusterScanJob::class, [
-				'userId' => $user->getUID(),
-				'maxDistance' => $maxDistance,
-				'minFaces' => $minFaces,
-				'chunkSize' => $chunkSize,
-				'afterId' => 0,
-				'passProgress' => false,
-			]);
-			$started++;
-		});
+		$started = $this->clusterTrigger->startForUsersWithUnclustered($maxDistance, $minFaces, $chunkSize);
 
 		return new JSONResponse(['started' => $started]);
 	}
 
-	/** @return array<string, true> user ids that already have a ClusterScanJob pending */
-	private function usersWithPendingClusterScan(): array {
-		$userIds = [];
-		foreach ($this->jobList->getJobsIterator(ClusterScanJob::class, null, 0) as $job) {
-			$argument = $job->getArgument();
-			if (is_array($argument) && isset($argument['userId'])) {
-				$userIds[$argument['userId']] = true;
-			}
-		}
-		return $userIds;
+	/**
+	 * Gates ClusteringMaintenanceJob - see that class for why it defaults to enabled, unlike
+	 * automatic_detection_enabled.
+	 */
+	public function setAutomaticClusteringEnabled(bool $enabled): JSONResponse {
+		$this->appConfig->setValueString('facewright_bridge', 'automatic_clustering_enabled', $enabled ? 'true' : 'false');
+		return new JSONResponse(['enabled' => $enabled]);
 	}
 
 	/**
 	 * See ClusterMergeService - does what Recognize's own rename-based DAV UI has no path to at
 	 * all (renaming a cluster to an existing name is treated as an error there, not a merge).
+	 * $keep/$merge each accept either a numeric cluster ID or a person's name.
 	 */
-	public function mergeClusters(string $userId, int $keepId, int $mergeId): JSONResponse {
+	public function mergeClusters(string $userId, string $keep, string $merge): JSONResponse {
 		try {
-			$moved = $this->clusterMerge->merge($userId, $keepId, $mergeId);
+			$moved = $this->clusterMerge->merge($userId, $keep, $merge);
 		} catch (\InvalidArgumentException $e) {
 			return new JSONResponse(['error' => $e->getMessage()], 400);
 		}

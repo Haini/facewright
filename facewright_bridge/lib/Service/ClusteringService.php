@@ -128,6 +128,38 @@ class ClusteringService {
 		return $totals;
 	}
 
+	/**
+	 * Counts unclustered Facewright (512-dim) detections per user - the denominator behind the
+	 * admin page's "still need to be clustered" indicator, and how ClusterTriggerService decides
+	 * which users actually need a fresh ClusterScanJob rather than starting one for every seen
+	 * user regardless of whether they have anything unclustered.
+	 *
+	 * Same dimension-filter-in-PHP approach as loadDetections() (see its docblock) rather than a
+	 * SQL JSON_LENGTH() filter, for the same portability reason - this project runs across
+	 * whatever DB backend the Nextcloud instance uses, not just MySQL/MariaDB.
+	 *
+	 * @return array<string, int> userId => count
+	 */
+	public function countUnclusteredByUser(): array {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('user_id', 'face_vector')
+			->from('recognize_face_detections')
+			->where($qb->expr()->isNull('cluster_id'));
+		$result = $qb->executeQuery();
+
+		$counts = [];
+		while ($row = $result->fetch()) {
+			$vector = json_decode($row['face_vector'], true);
+			if (!is_array($vector) || count($vector) !== self::EXPECTED_DIMENSIONS) {
+				continue;
+			}
+			$counts[$row['user_id']] = ($counts[$row['user_id']] ?? 0) + 1;
+		}
+		$result->closeCursor();
+
+		return $counts;
+	}
+
 	public function resetUser(string $userId): void {
 		$qb = $this->db->getQueryBuilder();
 		$qb->update('recognize_face_detections')

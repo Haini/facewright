@@ -31,6 +31,7 @@
 	document.addEventListener('DOMContentLoaded', function () {
 		bindToggle('facewright-people-enabled', 'facewright-people-status', 'people-enabled', 'enabled');
 		bindToggle('facewright-automatic-detection-enabled', 'facewright-automatic-detection-status', 'automatic-detection-enabled', 'enabled');
+		bindToggle('facewright-automatic-clustering-enabled', 'facewright-automatic-clustering-status', 'automatic-clustering-enabled', 'enabled');
 		bindToggle('facewright-processing-paused', 'facewright-processing-paused-status', 'processing-paused', 'paused');
 
 		var pathsField = document.getElementById('facewright-included-paths');
@@ -147,7 +148,7 @@
 		}
 
 		var mergeUserField = document.getElementById('facewright-merge-user');
-		var mergeKeepIdField = document.getElementById('facewright-merge-keep-id');
+		var mergeKeepField = document.getElementById('facewright-merge-keep');
 		var mergeIdField = document.getElementById('facewright-merge-id');
 		var mergeButton = document.getElementById('facewright-merge-clusters');
 		var mergeStatus = document.getElementById('facewright-merge-clusters-status');
@@ -155,13 +156,13 @@
 			mergeButton.addEventListener('click', function (event) {
 				event.preventDefault();
 				var userId = mergeUserField.value.trim();
-				var keepId = parseInt(mergeKeepIdField.value, 10);
-				var mergeId = parseInt(mergeIdField.value, 10);
-				if (!userId || !keepId || !mergeId) {
-					mergeStatus.textContent = 'Fill in the user and both cluster IDs.';
+				var keep = mergeKeepField.value.trim();
+				var merge = mergeIdField.value.trim();
+				if (!userId || !keep || !merge) {
+					mergeStatus.textContent = 'Fill in the user and both people (name or cluster ID).';
 					return;
 				}
-				if (!window.confirm('Merge cluster ' + mergeId + ' into cluster ' + keepId + ' for user ' + userId + '? Cluster ' + mergeId + ' will be deleted.')) {
+				if (!window.confirm('Merge "' + merge + '" into "' + keep + '" for user ' + userId + '? "' + merge + '" will be deleted.')) {
 					return;
 				}
 				mergeStatus.textContent = 'Merging...';
@@ -171,7 +172,7 @@
 						'Content-Type': 'application/json',
 						requesttoken: OC.requestToken,
 					},
-					body: JSON.stringify({ userId: userId, keepId: keepId, mergeId: mergeId }),
+					body: JSON.stringify({ userId: userId, keep: keep, merge: merge }),
 				}).then(function (response) {
 					return response.json().then(function (data) {
 						if (!response.ok) {
@@ -180,7 +181,7 @@
 						return data;
 					});
 				}).then(function (data) {
-					mergeStatus.textContent = 'Moved ' + data.moved + ' face(s) into cluster ' + keepId + '. Cluster ' + mergeId + ' deleted.';
+					mergeStatus.textContent = 'Moved ' + data.moved + ' face(s) into "' + keep + '". "' + merge + '" deleted.';
 				}).catch(function (err) {
 					mergeStatus.textContent = 'Failed: ' + err.message;
 				});

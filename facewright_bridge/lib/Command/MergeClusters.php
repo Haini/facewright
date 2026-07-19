@@ -25,23 +25,23 @@ class MergeClusters extends Command {
 		$this->setName('facewright:merge-clusters')
 			->setDescription('Merge two face clusters belonging to the same user into one, for when the same person ended up as two separate clusters')
 			->addArgument('user', InputArgument::REQUIRED, 'Nextcloud user id who owns both clusters')
-			->addArgument('keep-id', InputArgument::REQUIRED, 'Cluster id to keep (its title, if any, survives)')
-			->addArgument('merge-id', InputArgument::REQUIRED, 'Cluster id to merge in and delete');
+			->addArgument('keep', InputArgument::REQUIRED, 'Cluster to keep (its title, if any, survives) - numeric ID or name')
+			->addArgument('merge', InputArgument::REQUIRED, 'Cluster to merge in and delete - numeric ID or name');
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$userId = $input->getArgument('user');
-		$keepId = (int)$input->getArgument('keep-id');
-		$mergeId = (int)$input->getArgument('merge-id');
+		$keep = $input->getArgument('keep');
+		$merge = $input->getArgument('merge');
 
 		try {
-			$moved = $this->merge->merge($userId, $keepId, $mergeId);
+			$moved = $this->merge->merge($userId, $keep, $merge);
 		} catch (\InvalidArgumentException $e) {
 			$output->writeln('<error>' . $e->getMessage() . '</error>');
 			return 1;
 		}
 
-		$output->writeln("Moved {$moved} face(s) from cluster {$mergeId} into cluster {$keepId}, and deleted cluster {$mergeId}.");
+		$output->writeln("Moved {$moved} face(s) into \"{$keep}\", and deleted \"{$merge}\".");
 		return 0;
 	}
 }
