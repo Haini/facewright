@@ -70,6 +70,15 @@ class DetectQueuedJob extends QueuedJob {
 			// the supported list, and a file's mimetype can be corrected by a later rescan.
 			return;
 		}
+		if ($node->getSize() === 0) {
+			// Nothing to send, and worth catching on this side: an empty body makes OpenCV raise
+			// rather than return None, which surfaces as a 500 and so reads as retryable. Marked
+			// processed rather than merely skipped, because unlike an unsupported mimetype this
+			// is a broken file rather than a capability we might gain later.
+			$this->logger->warning("facewright: skipping zero-byte file {$path} (user {$userId}).");
+			$this->processedFiles->markProcessed($userId, $fileId, ProcessedFileService::FACES_FAILED);
+			return;
+		}
 		if ($this->processedFiles->isProcessed($userId, $fileId)) {
 			return;
 		}

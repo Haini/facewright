@@ -70,8 +70,21 @@ async def detect(payload: DetectRequest, nc: Annotated[AsyncNextcloudApp, Depend
             raise HTTPException(status_code=404, detail=f"No such file: {payload.path}") from None
         raise HTTPException(status_code=502, detail=f"Nextcloud error downloading {payload.path}: {exc}") from exc
 
+    # Guarded separately from the imdecode() below: cv2 does not return None for an empty
+    # buffer, it raises cv2.error("!buf.empty()"), which escapes as an uncaught 500. A 500 reads
+    # as "the ExApp is broken, retry later" to the caller, so a zero-byte file would be retried
+    # forever instead of being recorded as a permanent failure. Zero-byte images are not
+    # hypothetical here - this instance has ~2,700 of them.
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail=f"Empty file: {payload.path}")
+
     npbuf = np.frombuffer(image_bytes, dtype=np.uint8)
-    img = cv2.imdecode(npbuf, cv2.IMREAD_COLOR)
+    try:
+        img = cv2.imdecode(npbuf, cv2.IMREAD_COLOR)
+    except cv2.error as exc:
+        # Any other malformed input that trips an assertion inside OpenCV rather than returning
+        # None. Still the file's fault, not ours, so keep it a 4xx.
+        raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
     if img is None:
         raise HTTPException(status_code=400, detail="Could not decode image")
 
