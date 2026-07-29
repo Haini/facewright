@@ -65,6 +65,11 @@ class DetectQueuedJob extends QueuedJob {
 		if (!$this->pathFilter->isIncluded($path)) {
 			return;
 		}
+		if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
+			// Re-checked here as well as at both enqueue sites: the queue can outlive a change to
+			// the supported list, and a file's mimetype can be corrected by a later rescan.
+			return;
+		}
 		if ($this->processedFiles->isProcessed($userId, $fileId)) {
 			return;
 		}
@@ -72,6 +77,13 @@ class DetectQueuedJob extends QueuedJob {
 		$result = $this->detectionService->detect($userId, $path, $fileId);
 		if (!$result['success']) {
 			$this->logger->warning("facewright: detection failed for {$path} (user {$userId}): {$result['error']}");
+			if ($result['permanent']) {
+				// Record it so the backlog scan stops re-enqueueing a file that cannot succeed.
+				// Without this a handful of undecodable files are retried on every pass forever:
+				// on this instance 5 such files produced 5,595 identical warnings. Transient
+				// failures deliberately fall through unmarked so they are picked up again.
+				$this->processedFiles->markProcessed($userId, $fileId, ProcessedFileService::FACES_FAILED);
+			}
 			return;
 		}
 		$this->logger->info("facewright: inserted {$result['inserted']} face detection(s) for {$path} (user {$userId}).");

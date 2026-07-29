@@ -19,6 +19,12 @@ use OCP\IUserManager;
  * and BatchTriggerService rely on, and the admin-page stats.
  */
 class ProcessedFileService {
+	// faces_found value recording "detection was attempted and permanently failed", as opposed
+	// to 0, which is a genuine zero-face photo. Both count as processed - the point of marking a
+	// permanent failure is precisely that it must not be retried - but conflating them would
+	// lose the distinction in a column that already exists to answer what happened to a file.
+	public const FACES_FAILED = -1;
+
 	public function __construct(
 		private IDBConnection $db,
 		private ITimeFactory $timeFactory,

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Listener;
 
 use OCA\FacewrightBridge\BackgroundJob\DetectQueuedJob;
+use OCA\FacewrightBridge\Service\DetectionService;
 use OCP\BackgroundJob\IJobList;
 use OCP\EventDispatcher\Event;
 use OCP\EventDispatcher\IEventListener;
@@ -29,8 +30,6 @@ use OCP\IAppConfig;
  * @template-implements IEventListener<Event>
  */
 class FileCreatedListener implements IEventListener {
-	private const IMAGE_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
-
 	public function __construct(
 		private IAppConfig $appConfig,
 		private IRootFolder $rootFolder,
@@ -56,7 +55,7 @@ class FileCreatedListener implements IEventListener {
 	}
 
 	private function handleNode(Node $node): void {
-		if (!in_array($node->getMimetype(), self::IMAGE_MIMETYPES, true)) {
+		if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
 			return;
 		}
 		$owner = $node->getOwner();

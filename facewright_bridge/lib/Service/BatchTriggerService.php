@@ -35,7 +35,14 @@ class BatchTriggerService {
 			$searchRoots = $this->pathFilter->resolveSearchRoots($userFolder);
 
 			foreach ($searchRoots as $folder) {
+				// searchByMime('image') matches the whole `image/*` prefix, which includes
+				// Nextcloud's `image/x-dcraw` catch-all for raw camera files (.RW2, .CR2, ...).
+				// The ExApp decodes with cv2.imdecode() and cannot read those, so enumerating
+				// them only produces work that is guaranteed to fail.
 				foreach ($folder->searchByMime('image') as $node) {
+					if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
+						continue;
+					}
 					if ($this->processedFiles->isProcessed($user->getUID(), $node->getId())) {
 						continue;
 					}

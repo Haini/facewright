@@ -15,6 +15,18 @@ use OCP\IDBConnection;
  * oc_recognize_face_detections table - see CLAUDE.md for the column mapping this mirrors.
  */
 class DetectionService {
+	/**
+	 * Mimetypes the ExApp can actually decode. It hands bytes to cv2.imdecode(), so this is
+	 * OpenCV's format support, not "anything Nextcloud calls an image" - notably `image/x-dcraw`
+	 * (Nextcloud's catch-all for raw camera files: .RW2, .CR2, .NEF, ...) always fails there.
+	 *
+	 * Both entry points into detection filter on this: FileCreatedListener when an upload fires,
+	 * and BatchTriggerService when enumerating the backlog, which searches by the `image` prefix
+	 * and so would otherwise sweep raw files in. DetectQueuedJob re-checks it as well, since the
+	 * queue can outlive a change here.
+	 */
+	public const SUPPORTED_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+
 	public function __construct(
 		private IDBConnection $db,
 		private PublicFunctions $appAPI,
@@ -22,7 +34,13 @@ class DetectionService {
 	) {
 	}
 
-	/** @return array{success: bool, inserted: int, error: ?string} */
+	/**
+	 * `permanent` distinguishes "this file will never decode" from "facewright was unreachable
+	 * this time". Only the former may be recorded as processed - marking a transient failure
+	 * would silently drop the file for good the next time the ExApp restarts mid-scan.
+	 *
+	 * @return array{success: bool, inserted: int, error: ?string, permanent: bool}
+	 */
 	public function detect(string $userId, string $path, int $fileId): array {
 		// facewright's own inference can take longer than AppAPI's default 3s request timeout.
 		$response = $this->appAPI->exAppRequest(
@@ -34,10 +52,20 @@ class DetectionService {
 			['timeout' => 30],
 		);
 		if (!$response instanceof IResponse) {
-			return ['success' => false, 'inserted' => 0, 'error' => 'Request to facewright failed: ' . ($response['error'] ?? 'unknown error')];
+			// Transport-level: ExApp down, HaRP tunnel stale, timeout. Always worth retrying.
+			return ['success' => false, 'inserted' => 0, 'error' => 'Request to facewright failed: ' . ($response['error'] ?? 'unknown error'), 'permanent' => false];
 		}
-		if ($response->getStatusCode() !== 200) {
-			return ['success' => false, 'inserted' => 0, 'error' => 'facewright returned HTTP ' . $response->getStatusCode() . ': ' . $response->getBody()];
+		$status = $response->getStatusCode();
+		if ($status !== 200) {
+			// 4xx is the ExApp's verdict on this specific file and will not change on a retry -
+			// 400 "Could not decode image" for a truncated/unsupported file, 404 for one that has
+			// gone away. 5xx is the ExApp itself failing, so that stays retryable.
+			return [
+				'success' => false,
+				'inserted' => 0,
+				'error' => 'facewright returned HTTP ' . $status . ': ' . $response->getBody(),
+				'permanent' => $status >= 400 && $status < 500,
+			];
 		}
 
 		$data = json_decode($response->getBody(), true);
@@ -45,7 +73,10 @@ class DetectionService {
 		$imageWidth = $data['image_width'] ?? null;
 		$imageHeight = $data['image_height'] ?? null;
 		if (!$imageWidth || !$imageHeight) {
-			return ['success' => false, 'inserted' => 0, 'error' => 'facewright response is missing image dimensions'];
+			// A 200 in the wrong shape means the two halves are out of step (ExApp deployed
+			// without image_width/image_height). That is a deploy to fix, not a bad file, so it
+			// stays retryable rather than burning every file scanned during the mismatch.
+			return ['success' => false, 'inserted' => 0, 'error' => 'facewright response is missing image dimensions', 'permanent' => false];
 		}
 
 		$inserted = 0;
@@ -70,6 +101,6 @@ class DetectionService {
 		// which used to mean such files were reprocessed on every subsequent trigger run.
 		$this->processedFiles->markProcessed($userId, $fileId, $inserted);
 
-		return ['success' => true, 'inserted' => $inserted, 'error' => null];
+		return ['success' => true, 'inserted' => $inserted, 'error' => null, 'permanent' => false];
 	}
 }
