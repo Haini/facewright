@@ -32,6 +32,18 @@ class ClusteringService {
 	// drift apart into different definitions of "our data".
 	public const EXPECTED_DIMENSIONS = 512;
 
+	// Once a pre-existing cluster has this many representatives loaded in loadDetections(),
+	// further members are skipped entirely (never fetched, decoded, or held in memory) instead
+	// of loading the full cluster - at this project's current scale (a handful of clusters
+	// holding tens of thousands of members each), re-verifying a candidate against, say, a
+	// cluster's 639th member buys nothing a match against its first 20 wouldn't already tell us.
+	private const CLUSTER_REPRESENTATIVE_CAP = 20;
+
+	// How many detections to fetch vectors for per round-trip in loadDetections()'s second pass.
+	// Sized so one batch stays well clear of max_allowed_packet (500 x ~10.7 KB ~= 5 MB against
+	// MariaDB's 16 MB default) and clear of per-statement placeholder limits on other backends.
+	private const VECTOR_FETCH_BATCH = 500;
+
 	public function __construct(
 		private IDBConnection $db,
 		private IUserManager $userManager,
@@ -61,12 +73,11 @@ class ClusteringService {
 	/**
 	 * Chunked counterpart to clusterUser(), for users with too many detections to match and
 	 * persist in one synchronous request/job run - see ClusterScanJob, which owns pacing this
-	 * across cron cycles via the $afterId cursor. Still loads and matches against every one of
-	 * the user's detections (correct nearest-neighbor matching needs the full candidate pool
-	 * regardless of chunk size), but only *attempts* up to $chunkSize currently-unclustered ids
-	 * with id > $afterId this call - that's what bounds the O(chunk x total) comparison cost and
-	 * the persisted-write cost per invocation, not the memory floor of holding the candidate
-	 * pool, which stays proportional to the user's total detection count either way.
+	 * across cron cycles via the $afterId cursor. Matches against every unclustered detection
+	 * plus up to CLUSTER_REPRESENTATIVE_CAP representatives of each pre-existing cluster (see
+	 * loadDetections()), but only *attempts* up to $chunkSize currently-unclustered ids with
+	 * id > $afterId this call - that's what bounds the O(chunk x pool) comparison cost and the
+	 * persisted-write cost per invocation.
 	 *
 	 * @return array{attempted: int, newClusters: int, joined: int, skipped: int,
 	 *     skippedForeign: int, lastId: ?int, remainingUnclustered: int}
@@ -233,39 +244,105 @@ class ClusteringService {
 	}
 
 	/**
+	 * Loads every unclustered detection for $userId in full, plus up to
+	 * CLUSTER_REPRESENTATIVE_CAP representatives (earliest by id) of each pre-existing cluster
+	 * - not full cluster membership. See CLUSTER_REPRESENTATIVE_CAP's docblock for why capping
+	 * only the already-clustered side is safe: those faces' cluster assignment is already
+	 * settled, so a few representatives are enough to recognize a new match against that
+	 * cluster; the unclustered side still needs every candidate since new-cluster formation
+	 * depends on it.
+	 *
+	 * Split into two passes on purpose, and that split is what makes the cap cost anything at
+	 * all. A single "SELECT ... face_vector ... WHERE user_id = ?" pass transfers every row's
+	 * vector and only then discards the over-cap ones in PHP - which saves memory but zero I/O,
+	 * because face_vector is a longtext: at ~10.7 KB it lives off-page in DYNAMIC row format, so
+	 * InnoDB spends a dedicated 16 KB page read on each row whether or not we keep it, and
+	 * read-ahead can't batch those. So pass 1 selects no vector column at all (clustered-index
+	 * leaf pages only, never faulting in a BLOB page) purely to decide *which* ids are wanted,
+	 * and pass 2 fetches vectors for just those. On this instance that is 22,233 rows fetched
+	 * rather than 65,556 - see CLAUDE.md for the measurements behind this.
+	 *
+	 * Note $skippedForeign now counts foreign-dimension rows only among the rows actually
+	 * fetched, not across the user's whole table, since over-cap cluster members are never
+	 * examined. It's a diagnostic counter rather than a control input, so undercounting it is
+	 * harmless - but don't start treating it as a total.
+	 *
 	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, skippedForeign: int}
 	 */
 	private function loadDetections(string $userId): array {
+		$wantedIds = $this->selectWantedIds($userId);
+
+		// Rows are streamed and decoded one at a time rather than fetchAll()'d: at real-library
+		// scale fetchAll() would hold a batch's entire raw result set (JSON text) in memory on
+		// top of the decoded vectors being accumulated alongside it. Holding both forms at once
+		// is what originally pushed this past PHP's memory_limit.
+		$detections = [];
+		$skippedForeign = 0;
+		foreach (array_chunk($wantedIds, self::VECTOR_FETCH_BATCH) as $batch) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->select('id', 'file_id', 'face_vector', 'cluster_id')
+				->from('recognize_face_detections')
+				->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
+				->orderBy('id', 'ASC');
+			$result = $qb->executeQuery();
+
+			while ($row = $result->fetch()) {
+				$vector = json_decode($row['face_vector'], true);
+				if (!is_array($vector) || count($vector) !== self::EXPECTED_DIMENSIONS) {
+					$skippedForeign++;
+					continue;
+				}
+				$detections[(int)$row['id']] = [
+					'file_id' => (int)$row['file_id'],
+					'vector' => $vector,
+					'cluster_id' => $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null,
+				];
+			}
+			$result->closeCursor();
+		}
+
+		return ['detections' => $detections, 'skippedForeign' => $skippedForeign];
+	}
+
+	/**
+	 * Pass 1 of loadDetections(): works out which detection ids are worth fetching vectors for -
+	 * every unclustered row of $userId's, plus the first CLUSTER_REPRESENTATIVE_CAP rows of each
+	 * cluster they already have. Selects no face_vector precisely so it never faults in an
+	 * off-page BLOB page; see loadDetections()'s docblock for why that distinction is the whole
+	 * point.
+	 *
+	 * Returns ids ascending, and loadDetections() preserves that order (batches are consecutive
+	 * slices, each re-sorted by id) because clusterUserChunk()'s $afterId cursor walks
+	 * $detections in id order.
+	 *
+	 * @return list<int> ascending
+	 */
+	private function selectWantedIds(string $userId): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('id', 'file_id', 'face_vector', 'cluster_id')
+		$qb->select('id', 'cluster_id')
 			->from('recognize_face_detections')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->orderBy('id', 'ASC');
 		$result = $qb->executeQuery();
 
-		// Streamed row-by-row rather than fetchAll(): at real-library scale (tens of thousands
-		// of rows) fetchAll() would hold the *entire* raw result set (including every legacy
-		// 128-dim row's JSON text, discarded a moment later) in memory at once, on top of the
-		// decoded vectors being built up alongside it - the combination is what pushed this past
-		// PHP's memory_limit. Discarding each row's raw data as soon as it's decoded avoids
-		// holding both forms of the whole dataset simultaneously.
-		$detections = [];
-		$skippedForeign = 0;
+		$wantedIds = [];
+		$representativeCounts = []; // cluster_id => representatives already taken this call
 		while ($row = $result->fetch()) {
-			$vector = json_decode($row['face_vector'], true);
-			if (!is_array($vector) || count($vector) !== self::EXPECTED_DIMENSIONS) {
-				$skippedForeign++;
-				continue;
+			if ($row['cluster_id'] !== null) {
+				$clusterId = (int)$row['cluster_id'];
+				$kept = $representativeCounts[$clusterId] ?? 0;
+				if ($kept >= self::CLUSTER_REPRESENTATIVE_CAP) {
+					// Enough representatives of this pre-existing cluster already; unclustered
+					// rows are never subject to the cap, see the class docblock.
+					continue;
+				}
+				$representativeCounts[$clusterId] = $kept + 1;
 			}
-			$detections[(int)$row['id']] = [
-				'file_id' => (int)$row['file_id'],
-				'vector' => $vector,
-				'cluster_id' => $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null,
-			];
+			$wantedIds[] = (int)$row['id'];
 		}
 		$result->closeCursor();
 
-		return ['detections' => $detections, 'skippedForeign' => $skippedForeign];
+		return $wantedIds;
 	}
 
 	/** @return list<array{id: int, distance: float}> sorted closest-first */
