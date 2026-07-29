@@ -56,6 +56,13 @@ class ClusterFaces extends Command {
 			$result['skipped'],
 			$minFaces,
 		));
+		if ($result['markedUnclusterable'] > 0) {
+			$output->writeln(sprintf(
+				'Marked %d detection(s) unclusterable - this pass assigned nothing, so they are retired '
+				. 'out of NULL until new detections give them something to match.',
+				$result['markedUnclusterable'],
+			));
+		}
 		$this->printClusterSizes($output, $userId);
 
 		return 0;

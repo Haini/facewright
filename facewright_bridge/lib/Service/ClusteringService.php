@@ -32,6 +32,36 @@ class ClusteringService {
 	// drift apart into different definitions of "our data".
 	public const EXPECTED_DIMENSIONS = 512;
 
+	// Sentinel written to cluster_id for a detection Facewright has evaluated against the full
+	// candidate pool and found unclusterable at the current thresholds. It does NOT mean
+	// "excluded forever": such rows stay in the matching pool and are still assignable as a
+	// side effect of a later face matching them (see assignClusters()), so a person who only
+	// becomes clusterable once a third photo of them lands still clusters.
+	//
+	// The reason for marking at all is that a NULL cluster_id is what Recognize's own
+	// MaintenanceJob queries (FaceDetectionMapper::getUsersForUnclustered(), filtered only on
+	// "cluster_id IS NULL" plus a minimum detection size - no embedding-dimension filter). Any
+	// row left NULL keeps that job enqueueing Recognize's ClusterFacesJob, which loads our
+	// 512-dim vectors into its 128-dim HDBSCAN, balloons to ~3.2 GB (it does
+	// ini_set('memory_limit', '-1')) and dies on "Column at offset 128 does not exist".
+	//
+	// -2 rather than -1, which looks like the natural choice since -1 is Recognize's own noise
+	// label: Recognize *deliberately re-reads* its -1 rows via
+	// FaceDetectionMapper::sampleRejectedDetectionsByUserId() ("WHERE cluster_id = -1") and
+	// feeds them straight back into the same HDBSCAN run. Marking -1 would therefore hide our
+	// rows from the trigger while leaving them in the crash path. Recognize has no predicate
+	// matching -2 anywhere (its only cluster_id filters are IS NULL, = -1, = <real id>, and
+	// IS NOT NULL), and Memories inner-joins detections to recognize_face_clusters, so a
+	// sentinel with no cluster row is invisible there too.
+	public const UNCLUSTERABLE = -2;
+
+	// Recognize's own noise label. Rows sitting at -1 are ones *Recognize* ran through its
+	// 128-dim HDBSCAN and rejected - including ours, which it had no business judging, since
+	// analyzing 512-dim vectors in a 128-dim space is meaningless. Facewright therefore treats
+	// -1 as "not yet evaluated by us" (i.e. pending), re-evaluates it properly, and settles it
+	// at UNCLUSTERABLE - which also drains Recognize's rejected-sample pool over time.
+	public const RECOGNIZE_REJECTED = -1;
+
 	// Once a pre-existing cluster has this many representatives loaded in loadDetections(),
 	// further members are skipped entirely (never fetched, decoded, or held in memory) instead
 	// of loading the full cluster - at this project's current scale (a handful of clusters
@@ -50,23 +80,31 @@ class ClusteringService {
 	) {
 	}
 
-	/** @return array{newClusters: int, joined: int, skipped: int, skippedForeign: int} */
+	/** @return array{newClusters: int, joined: int, skipped: int, skippedForeign: int, markedUnclusterable: int} */
 	public function clusterUser(string $userId, float $maxDistance, int $minFaces): array {
-		['detections' => $detections, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
-
-		$idsToProcess = array_values(array_filter(
-			array_keys($detections),
-			fn (int $id): bool => $detections[$id]['cluster_id'] === null,
-		));
+		['detections' => $detections, 'pendingIds' => $idsToProcess, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
 
 		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
 		$this->persistAssignments($detections, $stats['changedIds']);
+
+		// One full pass that assigned nothing is the same proof ClusterScanJob's chain uses: with
+		// the data and thresholds unchanged, re-running it would decide identically. Everything
+		// still pending is therefore evaluated-and-unclusterable, not merely unvisited.
+		$markedUnclusterable = 0;
+		if ($idsToProcess !== [] && ($stats['newClusters'] + $stats['joined']) === 0) {
+			$stillPending = array_values(array_filter(
+				$idsToProcess,
+				fn (int $id): bool => $detections[$id]['cluster_id'] === null,
+			));
+			$markedUnclusterable = $this->markUnclusterable($userId, $stillPending);
+		}
 
 		return [
 			'newClusters' => $stats['newClusters'],
 			'joined' => $stats['joined'],
 			'skipped' => $stats['skipped'],
 			'skippedForeign' => $skippedForeign,
+			'markedUnclusterable' => $markedUnclusterable,
 		];
 	}
 
@@ -79,27 +117,37 @@ class ClusteringService {
 	 * id > $afterId this call - that's what bounds the O(chunk x pool) comparison cost and the
 	 * persisted-write cost per invocation.
 	 *
+	 * `pendingUnassignedIds` is every id that was pending on entry and still has no cluster after
+	 * this call - i.e. exactly what markUnclusterable() should be given once the chain concludes
+	 * a pass changed nothing. It is returned rather than recomputed there so the marking can
+	 * never drift from the dimension-filtered set this actually evaluated.
+	 *
 	 * @return array{attempted: int, newClusters: int, joined: int, skipped: int,
-	 *     skippedForeign: int, lastId: ?int, remainingUnclustered: int}
+	 *     skippedForeign: int, lastId: ?int, remainingUnclustered: int,
+	 *     pendingUnassignedIds: list<int>}
 	 */
 	public function clusterUserChunk(string $userId, float $maxDistance, int $minFaces, int $afterId, int $chunkSize): array {
-		['detections' => $detections, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
+		['detections' => $detections, 'pendingIds' => $pendingIds, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
 
 		$unclusteredIds = array_values(array_filter(
-			array_keys($detections),
-			fn (int $id): bool => $detections[$id]['cluster_id'] === null && $id > $afterId,
+			$pendingIds,
+			fn (int $id): bool => $id > $afterId,
 		));
 		$idsToProcess = array_slice($unclusteredIds, 0, $chunkSize);
 
 		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
 		$this->persistAssignments($detections, $stats['changedIds']);
 
-		$remainingUnclustered = 0;
-		foreach ($detections as $d) {
-			if ($d['cluster_id'] === null) {
-				$remainingUnclustered++;
+		// Only rows that were pending on entry and are still unassigned - not every null in the
+		// pool, which now also includes already-evaluated UNCLUSTERABLE rows. This feeds
+		// ClusterScanJob's "nothing left" stop condition, so counting those would wedge the chain.
+		$pendingUnassignedIds = [];
+		foreach ($pendingIds as $pendingId) {
+			if ($detections[$pendingId]['cluster_id'] === null) {
+				$pendingUnassignedIds[] = $pendingId;
 			}
 		}
+		$remainingUnclustered = count($pendingUnassignedIds);
 
 		return [
 			'attempted' => count($idsToProcess),
@@ -109,6 +157,7 @@ class ClusteringService {
 			'skippedForeign' => $skippedForeign,
 			'lastId' => $idsToProcess === [] ? null : max($idsToProcess),
 			'remainingUnclustered' => $remainingUnclustered,
+			'pendingUnassignedIds' => $pendingUnassignedIds,
 		];
 	}
 
@@ -149,13 +198,23 @@ class ClusteringService {
 	 * SQL JSON_LENGTH() filter, for the same portability reason - this project runs across
 	 * whatever DB backend the Nextcloud instance uses, not just MySQL/MariaDB.
 	 *
+	 * Counts exactly what loadDetections() treats as pending - NULL plus RECOGNIZE_REJECTED -
+	 * and deliberately excludes UNCLUSTERABLE. This answers "is there new work?", which decides
+	 * whether to start a chain at all. Counting UNCLUSTERABLE here would make the answer
+	 * permanently yes, since those rows persist by design, so every trigger check would start a
+	 * fresh chain over the whole backlog. The chain still reconsiders them once started - they
+	 * stay in the matching pool - they just don't get a vote on starting one.
+	 *
 	 * @return array<string, int> userId => count
 	 */
 	public function countUnclusteredByUser(): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('user_id', 'face_vector')
 			->from('recognize_face_detections')
-			->where($qb->expr()->isNull('cluster_id'));
+			->where($qb->expr()->orX(
+				$qb->expr()->isNull('cluster_id'),
+				$qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::RECOGNIZE_REJECTED, IQueryBuilder::PARAM_INT)),
+			));
 		$result = $qb->executeQuery();
 
 		$counts = [];
@@ -169,6 +228,33 @@ class ClusteringService {
 		$result->closeCursor();
 
 		return $counts;
+	}
+
+	/**
+	 * Marks the given detections UNCLUSTERABLE. Called only once a full pass has demonstrably
+	 * assigned nothing - see UNCLUSTERABLE's docblock for why leaving rows NULL is what keeps
+	 * Recognize's MaintenanceJob re-arming its 3.2 GB ClusterFacesJob.
+	 *
+	 * Takes an explicit id list rather than a "WHERE cluster_id IS NULL" sweep on purpose. Such
+	 * a sweep also catches this user's legacy 128-dim rows, which Facewright never evaluated and
+	 * has no business relabelling - the dimensionality filter is this project's whole definition
+	 * of "our data" (see EXPECTED_DIMENSIONS), and a bulk UPDATE would quietly cross it. The
+	 * caller passes exactly the ids it loaded, dimension-filtered, and found no cluster for.
+	 *
+	 * @param list<int> $ids
+	 * @return int rows marked
+	 */
+	public function markUnclusterable(string $userId, array $ids): int {
+		$marked = 0;
+		foreach (array_chunk($ids, self::VECTOR_FETCH_BATCH) as $batch) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->update('recognize_face_detections')
+				->set('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT))
+				->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
+				->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			$marked += $qb->executeStatement();
+		}
+		return $marked;
 	}
 
 	public function resetUser(string $userId): void {
@@ -267,7 +353,16 @@ class ClusteringService {
 	 * examined. It's a diagnostic counter rather than a control input, so undercounting it is
 	 * harmless - but don't start treating it as a total.
 	 *
-	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, skippedForeign: int}
+	 * UNCLUSTERABLE (-1) rows are normalized to a null cluster_id in the returned pool. That is
+	 * deliberate and load-bearing in two places in assignClusters(): they must not be offered as
+	 * a cluster for a new face to *join* (they aren't a real cluster), and they must remain
+	 * eligible for side-effect assignment when some other face pulls them into a new cluster.
+	 * What that normalization must NOT be used for is deciding what to attempt - a -1 row has
+	 * already been evaluated, so re-attempting it every pass is pure cost. Hence `pendingIds`,
+	 * which lists only the ids whose stored cluster_id was genuinely NULL; callers drive
+	 * $idsToProcess off that, never off the normalized cluster_id.
+	 *
+	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, pendingIds: list<int>, skippedForeign: int}
 	 */
 	private function loadDetections(string $userId): array {
 		$wantedIds = $this->selectWantedIds($userId);
@@ -277,6 +372,7 @@ class ClusteringService {
 		// top of the decoded vectors being accumulated alongside it. Holding both forms at once
 		// is what originally pushed this past PHP's memory_limit.
 		$detections = [];
+		$pendingIds = [];
 		$skippedForeign = 0;
 		foreach (array_chunk($wantedIds, self::VECTOR_FETCH_BATCH) as $batch) {
 			$qb = $this->db->getQueryBuilder();
@@ -292,16 +388,27 @@ class ClusteringService {
 					$skippedForeign++;
 					continue;
 				}
-				$detections[(int)$row['id']] = [
+				$id = (int)$row['id'];
+				$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
+				if ($clusterId === null || $clusterId === self::RECOGNIZE_REJECTED) {
+					// Never evaluated by us - Recognize's -1 verdict does not count, see its
+					// constant docblock.
+					$pendingIds[] = $id;
+					$clusterId = null;
+				} elseif ($clusterId === self::UNCLUSTERABLE) {
+					// Evaluated already: matchable, but not attempted again - see the docblock.
+					$clusterId = null;
+				}
+				$detections[$id] = [
 					'file_id' => (int)$row['file_id'],
 					'vector' => $vector,
-					'cluster_id' => $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null,
+					'cluster_id' => $clusterId,
 				];
 			}
 			$result->closeCursor();
 		}
 
-		return ['detections' => $detections, 'skippedForeign' => $skippedForeign];
+		return ['detections' => $detections, 'pendingIds' => $pendingIds, 'skippedForeign' => $skippedForeign];
 	}
 
 	/**
@@ -328,8 +435,12 @@ class ClusteringService {
 		$wantedIds = [];
 		$representativeCounts = []; // cluster_id => representatives already taken this call
 		while ($row = $result->fetch()) {
-			if ($row['cluster_id'] !== null) {
-				$clusterId = (int)$row['cluster_id'];
+			$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
+			// Only real clusters (positive ids) get capped. The sentinels are not clusters, and
+			// capping them would strand all but 20 of those rows outside the pool, so they could
+			// never be matched into a cluster later. They belong with the unclustered side:
+			// loaded in full, every time.
+			if ($clusterId !== null && $clusterId > 0) {
 				$kept = $representativeCounts[$clusterId] ?? 0;
 				if ($kept >= self::CLUSTER_REPRESENTATIVE_CAP) {
 					// Enough representatives of this pre-existing cluster already; unclustered

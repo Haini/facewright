@@ -73,9 +73,16 @@ class ClusterScanJob extends QueuedJob {
 		if ($result['attempted'] === 0) {
 			// Reached the end of this pass through the ordered unclustered set.
 			if ($result['remainingUnclustered'] === 0 || !$passProgress) {
+				// A pass that assigned nothing proves everything still pending is unclusterable
+				// at these thresholds, not merely unvisited - so retire those rows out of NULL.
+				// That is what stops Recognize's MaintenanceJob re-arming ClusterFacesJob against
+				// our 512-dim vectors; see ClusteringService::UNCLUSTERABLE.
+				$marked = $passProgress
+					? 0
+					: $this->clustering->markUnclusterable($userId, $result['pendingUnassignedIds']);
 				$this->logger->info('facewright: clustering for ' . $userId . ' stopping - ' . (
 					$result['remainingUnclustered'] === 0 ? 'nothing left unclustered.' : 'a full pass made no further progress.'
-				));
+				) . ($marked > 0 ? " Marked {$marked} detection(s) unclusterable." : ''));
 				return;
 			}
 			$this->jobList->add(self::class, [...$argument, 'afterId' => 0, 'passProgress' => false]);
