@@ -171,6 +171,12 @@ Two things discovered while doing this changed its shape from "just add a DB wri
   11.0.1 — confirmed compatible with this instance's NC 33.0.6). Its own face classifier
   (`faces.enabled`) defaults to `false` in `SettingsService.php`, so no extra step was needed to
   keep it from competing with our writes.
+
+  **This turned out to be only half true, and the other half cost a lot** — see "Recognize's
+  MaintenanceJob was eating 3.2 GB" below. Keeping the *classifier* off is not the same as
+  keeping Recognize's *clustering* off: `MaintenanceJob` is registered unconditionally in
+  Recognize's `info.xml` and checks no setting at all. Don't read this bullet as "Recognize is
+  inert once faces.enabled is handled".
 - **ExApps have no sanctioned path to raw DB access** — confirmed by grepping `nc_py_api`'s
   source (files/users/notifications/etc. APIs, nothing for arbitrary SQL) and by the official
   AppAPI docs, which describe ExApps as isolated microservices with only a private Docker volume
@@ -676,6 +682,178 @@ Confirmed live: clicking "Run now" started clustering for all 5 seen users witho
 erroring, where the old synchronous version reliably failed for the one account that had grown
 past prototype scale.
 
+**This section fixed the PHP-side memory crash but not the cost underneath it** — chunking bounds
+how many faces are *attempted* per call while still re-reading the user's whole detection set,
+`face_vector` included, on every chunk. That turned out to be ~1 GB of disk reads per invocation.
+See "cut clustering's disk reads 3x" below for the measurements and the fix; read the two
+sections together rather than treating this one as the end of the story.
+
+### Done: cut clustering's disk reads 3x (`face_vector` is an off-page BLOB)
+
+Triggered by "investigate the RAM usage of my mariadb service, I assume it's the facewright
+clustering". The assumption was half right, and getting the other half right mattered: **MariaDB's
+own memory was never the problem.** Reading 1 GB through the server moved its RSS by 164 kB.
+Its ~1.65 GB resident is essentially static config (`Memory_used_initial` = 846 MB: 512 MB buffer
+pool + 128 MB `key_buffer` + 128 MB aria pagecache + 16 MB log buffer + ~62 MB misc) plus
+allocator residue from a past peak that only a restart releases. `key_buffer_size` is pure waste
+here — `Key_read_requests` is 0 and every table is InnoDB.
+
+What clustering *was* doing is enormous I/O. `ClusteringService::loadDetections()` selected
+`face_vector` for every one of a user's detections on every chunk. That column is a `longtext`
+averaging ~10.7 KB, so in DYNAMIC row format it lives **off-page**: InnoDB spends a dedicated
+16 KB page read per row, and read-ahead cannot batch those. Measured, one call: **8.4 s, 1023 MB
+from disk, 65,426 pages** for 65,556 rows. `ClusterScanJob` self-requeues every cron tick, so
+that ran ~1,119 times over 3.86 days — **1.199 TB, >99% of the instance's total InnoDB physical
+reads**, confirmed three ways (PROCESSLIST capture mid-burst, 25 min of 20 s sampling, and
+counter arithmetic).
+
+Fixed by splitting `loadDetections()` into two passes. `selectWantedIds()` reads `id` +
+`cluster_id` only — never faulting in a BLOB page, measured at 0 MB from disk — to decide which
+ids are wanted; then vectors are fetched for just those, batched under `max_allowed_packet`.
+**1023 MB → 340 MB, 8.4 s → 3.2 s.** Results are identical: the representative cap is applied in
+the same id order.
+
+Note for anything that ever touches this table again: **capping rows in PHP saves no I/O.** The
+rows are already fetched by the time the cap discards them. The saving has to happen in the
+`SELECT`, which is why the id/vector split exists.
+
+Also worth knowing: `information_schema.TABLES.table_rows` is an InnoDB *estimate*. It reported
+68,499 rows in `oc_recognize_queue_faces` when the real count was 0 — enough to send an
+investigation down the wrong path. Use `COUNT(*)` when the number matters.
+
+### Done: Recognize's MaintenanceJob was eating 3.2 GB, and Facewright's data was feeding it
+
+The actual cause of the host's memory pressure, found only after the above ruled MariaDB out.
+From `nextcloud.log`:
+
+```
+Cron job used more than 300 MiB of RAM after executing job
+OCA\Recognize\BackgroundJobs\ClusterFacesJob (arguments: {"userId":"..."}): 3.2 GB
+Failed to calculate face clusters
+  Rubix\ML\Exceptions\InvalidArgumentException: Column at offset 128 does not exist.
+```
+
+**28 crashes in the 3.4 days of log retained**, at 3.1–3.2 GB each. `FaceClusterAnalyzer.php`
+does `ini_set('memory_limit', '-1')`, so nothing caps it. The error is Recognize's 128-dim
+HDBSCAN choking on our 512-dim vectors.
+
+The loop, which cannot self-terminate:
+
+1. Facewright leaves faces below `min-faces` unclustered — permanently, by design.
+2. `MaintenanceJob` (12 h `TimedJob`, registered unconditionally in Recognize's `info.xml`,
+   **gated by no setting**) calls `FaceDetectionMapper::getUsersForUnclustered()`, which filters
+   on `cluster_id IS NULL` plus a minimum detection size and **no embedding-dimension filter**.
+3. So every user is permanently in that result set → `ClusterFacesJob` enqueued forever.
+
+Turning `faces.enabled` off would not stop it, and that key has to stay `true` for Memories'
+People page anyway.
+
+**Fix: retire evaluated rows out of NULL.** A face that survives a full pass with zero
+assignments is marked with a sentinel instead of left NULL. It stays in the matching pool and is
+still assignable as a side effect of a later face matching it, so someone who only becomes
+clusterable once a third photo lands still clusters — the mark means "evaluated", not "excluded".
+Marking happens only at `ClusterScanJob`'s existing `!$passProgress` branch, which is already the
+job's proof that a complete pass changed nothing.
+
+**The sentinel is -2, not -1**, and this is the non-obvious part. -1 looks right — it's
+Recognize's own noise label — but `sampleRejectedDetectionsByUserId()` selects
+`WHERE cluster_id = -1` and feeds those rows straight back into the same HDBSCAN run. Marking -1
+would hide our rows from the trigger while leaving them in the crash path. Recognize has no
+predicate matching -2 anywhere (its only `cluster_id` filters are `IS NULL`, `= -1`,
+`= <real id>`, `IS NOT NULL`), and Memories inner-joins detections to `recognize_face_clusters`,
+so a sentinel with no cluster row is invisible there too.
+
+Rows already at -1 are treated as **pending**, not clustered: Recognize judged 512-dim vectors in
+a 128-dim space, which is meaningless. They get re-evaluated properly and settle at -2, which
+also drains Recognize's rejected-sample pool. On this instance that recovered 2,354 stranded rows
+— the count fell 1,360 → 298 within hours of deploying, and clustered rose correspondingly.
+
+Two traps found while implementing, both caught by testing rather than inspection:
+
+- **Normalizing -2 to null in the pool is correct, but `idsToProcess` must not be derived from
+  it.** The normalization is load-bearing (a -2 row must not be offered as a cluster to *join*,
+  but must stay eligible for side-effect assignment). Deriving the work list from it would
+  re-attempt the whole backlog on every pass — one new photo would have triggered ~44 chunk jobs
+  and ~15 GB of reads. Hence `pendingIds`, tracked separately from the normalized field.
+- **`markUnclusterable()` takes an explicit id list, never a `WHERE cluster_id IS NULL` sweep.**
+  A sweep also catches legacy 128-dim rows Facewright never evaluated, quietly crossing the
+  dimensionality filter that is this project's whole definition of "our data".
+
+Verified inside a rolled-back transaction against the live library before deploying: 15,334
+pending ids marked, the 156 legacy 128-dim rows untouched, DB state identical after rollback.
+
+**Residual risk, unfixed:** the sentinel does not make Recognize's job *safe*, only unenqueued.
+`calculateClusters()` also samples existing clusters via `findClusterSample()` — and those are
+our 512-dim clusters — so if `ClusterFacesJob` ever runs for one of these users it will mix
+dimensions regardless. The real protection is that `MaintenanceJob` is deleted from `oc_jobs`
+(done manually). **It comes back on any Recognize upgrade or re-enable** — check for it after
+updating Recognize. `FsActionService.php:194,354` can also enqueue it on share/mount changes.
+
+The instance's 239 orphaned legacy 128-dim rows (all unclustered, from the defunct classifier)
+were deleted to stop them holding the trigger open. The table is now homogeneous 512-dim.
+
+### Done: no, Recognize cannot be uninstalled — the tables were never the blocker
+
+Revisited "could we bootstrap the tables ourselves and drop Recognize?". The answer is no, and
+the earlier "not worth it" verdict was right for the wrong reason. Three independent hard
+dependencies on the app being **enabled**:
+
+1. `Memories\Util::recognizeIsInstalled()` requires `$appManager->isEnabledForUser('recognize')`
+   **and** version ≥ 3.8.0. Fail it and the People page never renders, whatever the tables hold.
+2. Every *write* is Recognize's WebDAV — `moveFile('/recognize/{user}/faces/{old}', …)` to
+   rename, `deleteFile(…)` to delete a cluster or remove one face, `createDirectory(…)` to create
+   one. All served by `OCA\Recognize\Dav\RootCollection` via its `info.xml` `<sabre><collections>`.
+   Memories has no rename/delete methods of its own.
+3. The frontend hardcodes `recognize` and `facerecognition` as the only people backends.
+   `ClustersBackend\Manager::register()` is public static, but Memories only calls it for its own
+   five, and a third would get no route and no UI.
+
+Only *reads* are decoupled: `RecognizeBackend.php` imports **zero** `OCA\Recognize` classes and
+queries the tables directly. That is exactly the part "bootstrap the tables" would have covered,
+and the only part that works that way.
+
+### Done: mimetype gate + permanent-vs-transient failure classification
+
+Five files were failing detection on every backlog pass forever — 5,595 identical warnings from
+5 distinct files. Two unrelated causes:
+
+- **Raw files were being enqueued at all.** `BatchTriggerService` enumerates with
+  `searchByMime('image')`, and that prefix match includes Nextcloud's `image/x-dcraw` catch-all
+  (.RW2, .CR2, .NEF, …). The ExApp decodes with `cv2.imdecode()` and cannot read those.
+  `FileCreatedListener` already had an allowlist; it just wasn't shared. The list now lives on
+  `DetectionService::SUPPORTED_MIMETYPES` and all three sites use it — listener, batch
+  enumeration, and `DetectQueuedJob`, which re-checks because the queue can outlive a change.
+- **A failed detection was never recorded**, so the next scan re-enqueued it. Correct for a
+  transient failure, wrong for a file that will never decode. The remaining 3 were JPEGs
+  **truncated at exactly 2 MiB and zero-padded** to their nominal 4–5 MB size — valid `SOF0`
+  headers, no `EOI` marker. Genuine corruption in the library, not a format issue.
+
+`detect()` now reports `permanent`: a 4xx is the ExApp's verdict on that specific file, while
+transport errors, 5xx, and a malformed 200 stay retryable. Only permanent failures are marked
+processed, with `faces_found = ProcessedFileService::FACES_FAILED` (-1) so they stay
+distinguishable from a genuine zero-face photo. Gated files are *not* marked — they are never
+attempted, so raw support could be added later and they'd be picked up naturally.
+
+That split is load-bearing, not defensive: a power outage left the containers with no external
+DNS and every detection failed for four hours. Marking failures indiscriminately would have
+permanently skipped every file the scan touched in that window. Nothing was marked.
+
+### Gotcha: Docker DNS silently breaks on power loss (host-level, not this project)
+
+After a power cut, every detection failed with `cURL error 6: Could not resolve host`. Not a
+Facewright bug and not visible from the repo. The host's `/etc/resolv.conf` (systemd-resolved)
+lists an IPv6 link-local nameserver with a zone index (`fe80::…%3`, unusable inside a container)
+ahead of the real IPv4 ones. Docker built the containers' `resolv.conf` at boot **before DHCP had
+populated the IPv4 entries**, so they ended up with no external upstream —
+`NO EXTERNAL NAMESERVERS DEFINED`, while a container started later resolves fine.
+
+Diagnosis in one command: `docker run --rm alpine cat /etc/resolv.conf` and compare against
+`docker exec nextcloud-app-1 cat /etc/resolv.conf`. Fix is `docker restart` on the affected
+containers (both `nextcloud-app-1` and `facewright` — the ExApp resolves `NEXTCLOUD_URL` for
+`nc.files.download()`). Durable fix, still outstanding: pin
+`{"dns": ["192.0.2.1", "192.0.2.2"]}` in `/etc/docker/daemon.json`. The failure mode is silent
+— detection just stops — so check this first after any unclean reboot.
+
 ### Next
 
 1. **Multi-user + robustness.** Everything above targets a single-user prototype first
@@ -683,6 +861,28 @@ past prototype scale.
    Recognize's own behavior); resilience to Recognize updates is a separate, larger step after
    the prototype proves clustering quality at scale. Rename/delete/mount-change handling for the
    file-event listener (deliberately skipped this phase) would live here too.
+
+2. **Re-tuning thresholds needs a reset.** `-2` rows are no longer pending, so changing
+   `max-distance` / `min-faces` on the admin page will *not* re-evaluate them — the old verdict
+   silently stands. `occ facewright:cluster --reset` clears it, but an automatic reset when the
+   parameters change is the cleaner answer if threshold experimentation resumes.
+
+3. **Clustering quality is unvalidated at current scale.** The 0.5 / 3 defaults were validated
+   against ~740 detections; the library is now ~65,000. Two clusters hold 11,633 and 9,992
+   detections (the next largest is 1,842), which looks like over-merging, and 1,347 of 1,360
+   clusters are untitled. Worth a real look before treating the numbers as settled — this is
+   still the open item flagged back in the clustering-prototype section, just with much more
+   data now.
+
+4. **Pin Docker's DNS** (`/etc/docker/daemon.json`) — see the gotcha above. Outstanding because
+   applying it cycles every container on the host, so it wants scheduling.
+
+### Instance versions
+
+Recorded because several notes above are version-sensitive and the instance has been upgraded
+since the early sections were written: **NC 34.0.2.1, Recognize 12.0.0, Memories 8.1.0**
+(the Recognize-install section still says NC 33.0.6 / Recognize 11.0.1 — that was true at the
+time and is left as-is for provenance).
 
 ## Licensing note
 
