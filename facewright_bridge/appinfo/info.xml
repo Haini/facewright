@@ -9,7 +9,7 @@ ExApps have no path to real database access. It calls the facewright ExApp for f
 and writes the results into Recognize's own oc_recognize_face_detections table via Nextcloud's
 QueryBuilder, since only first-party PHP code can do that.]]>
 	</description>
-	<version>0.2.7</version>
+	<version>0.3.0</version>
 	<licence>agpl</licence>
 	<author>Constantin Schieber-Knoebl</author>
 	<namespace>FacewrightBridge</namespace>
@@ -24,6 +24,7 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\FacewrightBridge\Command\ScanLibrary</command>
 		<command>OCA\FacewrightBridge\Command\ClusterScan</command>
 		<command>OCA\FacewrightBridge\Command\MergeClusters</command>
+		<command>OCA\FacewrightBridge\Command\BackfillAccess</command>
 	</commands>
 	<settings>
 		<admin>OCA\FacewrightBridge\Settings\AdminSettings</admin>

@@ -39,7 +39,12 @@ class AdminSettings implements ISettings {
 		$clusterMinFaces = $this->appConfig->getValueInt('facewright_bridge', 'cluster_min_faces', 3);
 		$clusterChunkSize = $this->appConfig->getValueInt('facewright_bridge', 'cluster_chunk_size', 300);
 
-		$processedCount = $this->processedFiles->countProcessed();
+		// Files, not rows. Under fan-out one file yields a marker per user with access, so the row
+		// count runs ahead of the candidate count and "candidates minus processed" would clamp to
+		// zero and stop being a progress indicator. The row count is still worth showing - it is
+		// what explains the tables' growth - but as its own line, not as half of a subtraction.
+		$processedFileCount = $this->processedFiles->countProcessedFiles();
+		$processedRecordCount = $this->processedFiles->countProcessed();
 		$candidateCount = $this->processedFiles->countCandidates();
 		$unclusteredCount = array_sum($this->clustering->countUnclusteredByUser());
 		Util::addScript('facewright_bridge', 'admin');
@@ -54,8 +59,9 @@ class AdminSettings implements ISettings {
 			'clusterMinFaces' => $clusterMinFaces,
 			'clusterChunkSize' => $clusterChunkSize,
 			'processedLastHour' => $this->processedFiles->countProcessedSince($this->timeFactory->getTime() - 3600),
-			'processedCount' => $processedCount,
-			'unprocessedCount' => max(0, $candidateCount - $processedCount),
+			'processedCount' => $processedFileCount,
+			'processedRecordCount' => $processedRecordCount,
+			'unprocessedCount' => max(0, $candidateCount - $processedFileCount),
 			'unclusteredCount' => $unclusteredCount,
 			'queuedDetections' => $this->countJobs(DetectQueuedJob::class),
 			'scanActive' => $this->countJobs(BatchScanJob::class) > 0,

@@ -24,8 +24,8 @@ use OCP\IAppConfig;
  * FileListener: different upload paths (direct upload vs. e.g. external storage scans) fire
  * different events, neither alone covers everything.
  *
- * Deliberately not handled this phase (unlike Recognize's own listener): renames, deletes,
- * mount add/remove - matches "Multi-user + robustness" being a separate, later phase.
+ * Renames, deletes and mount add/remove live in FileAccessListener, kept separate so a bug in the
+ * access-reconciliation path cannot regress this one.
  *
  * @template-implements IEventListener<Event>
  */
@@ -58,10 +58,9 @@ class FileCreatedListener implements IEventListener {
 		if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
 			return;
 		}
-		$owner = $node->getOwner();
-		if ($owner === null) {
-			return;
-		}
-		$this->jobList->add(DetectQueuedJob::class, ['userId' => $owner->getUID(), 'fileId' => $node->getId()]);
+		// No owner lookup any more. The job resolves every user with access itself, which is both
+		// more complete (a file's storage owner is not necessarily someone who can see it, and is
+		// never the only one who can) and cheaper here - this runs inside the upload request.
+		$this->jobList->add(DetectQueuedJob::class, ['fileId' => $node->getId()]);
 	}
 }

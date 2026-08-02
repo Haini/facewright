@@ -27,10 +27,18 @@ class BatchTriggerService {
 	) {
 	}
 
+	/**
+	 * @return int distinct files enqueued - not enqueue attempts. A file two users can both see is
+	 *             reached by both walks and enqueued twice, but the two calls carry the identical
+	 *             argument and IJobList::add() collapses them into one job, so counting attempts
+	 *             would overstate the work created and could stop a chunk early having queued less
+	 *             than asked for.
+	 */
 	public function run(int $batchSize): int {
 		$queued = 0;
+		$seen = [];
 
-		$this->userManager->callForSeenUsers(function (IUser $user) use (&$queued, $batchSize): ?bool {
+		$this->userManager->callForSeenUsers(function (IUser $user) use (&$queued, &$seen, $batchSize): ?bool {
 			$userFolder = $this->rootFolder->getUserFolder($user->getUID());
 			$searchRoots = $this->pathFilter->resolveSearchRoots($userFolder);
 
@@ -43,10 +51,21 @@ class BatchTriggerService {
 					if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
 						continue;
 					}
-					if ($this->processedFiles->isProcessed($user->getUID(), $node->getId())) {
+					$fileId = $node->getId();
+					// Still a per-user question, and deliberately so: it is the cheap, indexed test
+					// for "does this user still need rows for this file", and it needs no
+					// mount-cache lookup during enumeration. The job itself recomputes the full set
+					// of users who need rows.
+					if ($this->processedFiles->isProcessed($user->getUID(), $fileId)) {
 						continue;
 					}
-					$this->jobList->add(DetectQueuedJob::class, ['userId' => $user->getUID(), 'fileId' => $node->getId()]);
+					// Keyed on the file alone, so one inference ends up serving every user who can
+					// see it - see DetectQueuedJob's docblock.
+					$this->jobList->add(DetectQueuedJob::class, ['fileId' => $fileId]);
+					if (isset($seen[$fileId])) {
+						continue;
+					}
+					$seen[$fileId] = true;
 					$queued++;
 					if ($queued >= $batchSize) {
 						return false; // stop callForSeenUsers early

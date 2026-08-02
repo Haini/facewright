@@ -11,6 +11,7 @@ $clusterMinFaces = $_['clusterMinFaces'] ?? 3;
 $clusterChunkSize = $_['clusterChunkSize'] ?? 300;
 $processedLastHour = $_['processedLastHour'] ?? 0;
 $processedCount = $_['processedCount'] ?? 0;
+$processedRecordCount = $_['processedRecordCount'] ?? 0;
 $unprocessedCount = $_['unprocessedCount'] ?? 0;
 $unclusteredCount = $_['unclusteredCount'] ?? 0;
 $queuedDetections = $_['queuedDetections'] ?? 0;
@@ -126,7 +127,8 @@ $clusteringActive = !empty($_['clusteringActive']);
 		</strong>
 	</p>
 	<p><?php p($l->n('%n file queued for detection right now', '%n files queued for detection right now', $queuedDetections, [$queuedDetections])); ?><?php if ($processingPaused && $queuedDetections > 0): ?> <?php p($l->t('(held, not shrinking, while paused)')); ?><?php endif; ?></p>
-	<p><?php p($l->n('%n picture processed in the last hour', '%n pictures processed in the last hour', $processedLastHour, [$processedLastHour])); ?></p>
+	<p><?php p($l->n('%n detection record written in the last hour', '%n detection records written in the last hour', $processedLastHour, [$processedLastHour])); ?></p>
 	<p><?php p($l->t('%s processed, %s not yet processed', [(string)$processedCount, (string)$unprocessedCount])); ?></p>
+	<p><?php p($l->t('%s detection records across all users (a picture several people can see is recorded once per person)', [(string)$processedRecordCount])); ?></p>
 	<p><?php p($l->n('%n picture still needs to be clustered', '%n pictures still need to be clustered', $unclusteredCount, [$unclusteredCount])); ?></p>
 </div>

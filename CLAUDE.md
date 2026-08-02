@@ -854,13 +854,149 @@ containers (both `nextcloud-app-1` and `facewright` — the ExApp resolves `NEXT
 `{"dns": ["192.0.2.1", "192.0.2.2"]}` in `/etc/docker/daemon.json`. The failure mode is silent
 — detection just stops — so check this first after any unclean reboot.
 
+### Done: multi-user fan-out and access reconciliation (bridge 0.3.0)
+
+Detection used to write one row for the file's **owner** (`FileCreatedListener`'s `getOwner()`).
+Recognize writes one row per user *with access*, which is what Memories' People page expects — so a
+photo Consti owned and shared to Bob produced faces on his page and nothing on hers.
+
+A quieter second problem came with it: `BatchTriggerService` walks each user's tree independently
+and enqueued `{userId, fileId}`, so a shared photo was enqueued once per user and **inferred
+separately for each**. Fan-out removes that duplicate inference rather than adding to it.
+
+**The primitive is one call.** `IUserMountCache::getMountsForFileId($fileId)` *is* the access model
+— shares, group folders and external storage all register into `oc_mounts`, so none needs
+special-casing. Same call Recognize uses (`ClusteringFaceClassifier.php:56-63`), and the reason
+Recognize v12 has **no share hooks at all**.
+
+Where `AccessService` deliberately diverges from Recognize: **`ICachedMountFileInfo::getPath()`
+already returns `getMountPoint() . getInternalPath()`** (`lib/private/Files/Config/CachedMountFileInfo.php:38-40`),
+so one mount-cache call yields both the user set *and* every user's files-root-relative path.
+Recognize re-resolves a `Node` per user instead. At 65k files that difference is most of the cost.
+`pickFetchUser()` prefers the owner — their mount is their home storage, so no share permission can
+revoke the read, and since the fetch user's path is what `PathFilterService` is evaluated against, a
+flapping choice would make a file's inclusion flap.
+
+**Verified API facts that contradict the obvious guess:**
+- **`IDBConnection::insertOrUpdate()` does not exist** in NC 34's public API — only
+  `QBMapper::insertOrUpdate(Entity)`, which needs the Mapper layer this app deliberately lacks. The
+  right primitive is **`IDBConnection::setValues($table, $keys, $values)`** (`IDBConnection.php:188`):
+  insert, catch the unique violation, fall back to update. Returns **1 on insert, 0 on update**.
+- `IFunctionBuilder` has **no `distinct()`**, so `COUNT(DISTINCT file_id)` needs
+  `createFunction()`.
+- **A migration was mandatory, not an optimization.** `facewright_processed`'s only index was
+  UNIQUE `(user_id, file_id)` — leading column `user_id`. Every query fan-out adds filters on
+  `file_id` alone, including on the *synchronous path of every file deletion*. Hence
+  `facewright_proc_file` (`Version000003000Date20260801120000`).
+
+**"Is this row ours" is now a length test.** `char_length(face_vector) > 6000`
+(`DetectionService::VECTOR_LENGTH_FLOOR`), measured on the live table: legacy 128-dim rows span
+1,292–2,658 characters, ours 10,672–10,826 — a clean 8,000-wide gap. It keeps the test in the
+`SELECT` instead of faulting the off-page BLOB per row (the lesson from the 1023 MB → 340 MB
+clustering fix). `ClusteringService::EXPECTED_DIMENSIONS` is still the authority; this is a proxy
+valid only while those bands stay disjoint.
+
+**Three traps in Recognize's version, deliberately not inherited:**
+1. `removeDetectionsForFileFromUsersNotInList` deletes by `file_id` with **no dimension filter** —
+   copied verbatim it would delete this instance's legacy 128-dim rows.
+2. **`notIn('user_id', [])` renders as `NOT IN (NULL)`**, matching nothing — so Recognize's orphan
+   rows survive exactly when nobody has access and they most need removing. Ours omits the clause
+   entirely when the keep-list is empty, meaning "delete all our rows for this file".
+3. **Sub-share pruning.** `FsActionService::onAccessUpdate` computes one access set from the *mount
+   root* and applies it as the keep-list to every file in it. With `Bilder/` shared to one person
+   and `Bilder/2024/` separately to another, that deletes the second person's rows.
+   `reconcileMount()` uses the mount set for the *copy* direction only and pays for a per-file
+   `getUsersWithAccess()` before any delete — bounded to actual prune candidates, normally zero.
+
+**Copy, never re-detect.** `AccessSyncService::copyToUsers()` re-inserts the donor's rows with
+`cluster_id` **omitted** so the column default NULL applies (a donor's cluster id is meaningless in
+another user's namespace, and NULL is what `ClusteringService` treats as pending, so the existing
+per-user `ClusterScanJob` chain picks copies up unaided). **Columns are named explicitly on both
+sides**: the table's physical order is `x, y, height, width` while `DetectionService` writes
+`x, y, width, height`, so a positional copy silently transposes every bounding box.
+
+**The zero-face case is the one that's easy to miss.** `copyExisting()` handles two cases: someone
+holds rows → copy them; nobody holds rows but someone holds a *marker* → copy the marker, because
+the file has already been through detection and yielded nothing. On this instance **28,056 of
+Consti's 54,332 processed files are zero-face**, so treating "no rows" as "not yet detected" would
+re-run inference on more than half the library every time a folder is shared.
+
+**Job argument is now `{fileId}`, not `{userId, fileId}`.** `IJobList::add()` dedupes on class plus
+argument, so keying on the file collapses to one job however many users' walks reach the photo.
+Old-shape rows keep working untouched — `fileId` is present in both and `userId` degrades to a hint
+`pickFetchUser()` ignores if that user lost access. **Nothing in `oc_jobs` needs rewriting.** A
+bounded retry (`MAX_ATTEMPTS = 5`) was added at the same time and is not optional: fan-out makes the
+fetch user potentially a sharee whose access was revoked between enqueue and run, and the ExApp
+reports the resulting DAV 403 as a 502, which is classified retryable — i.e. the 5,595-identical-
+warnings loop wearing a different hat.
+
+**Deferral is job arguments, no queue table.** Recognize needs `oc_recognize_fs_actions` because its
+`FsMove` carries unbounded user arrays; our unit of work is `(storageId, rootId)` or `fileId`, far
+under `IJobList`'s 32,000-char argument cap, and `add()`'s dedup gives the "one pending action per
+mount" property for free. We recompute the access set at run time rather than snapshotting it, which
+also demotes the `UserMountRemovedEvent` suppression guard from a correctness requirement (as it is
+for Recognize) to a mere optimization.
+
+**Deletion is synchronous, on `BeforeNodeDeletedEvent`, and that's forced.** Deferring doesn't work
+— filecache is gone by the time a job runs, so there'd be no way to learn what was under a deleted
+folder. Enqueuing per-file before the delete is unbounded. `PruneService` instead does one indexed
+filecache page query per 1,000 files. Documented cost: deleting a large photo folder now takes
+latency proportional to how many of its files had been detected.
+
+**Two live-data shapes that broke the first implementation**, both found by running against the real
+instance rather than by inspection:
+- **Home mounts are `/Consti/`, not `/Consti/files/`**, and their `root_id` is the *storage* root,
+  whose subtree includes `files_trashbin/` and `files_versions/`. A naive filter skipped home mounts
+  entirely, and a naive walk would have reconciled trashed files. `BackfillAccess::resolveRootId()`
+  maps a home mount to the user's *files folder* id; `MountFileService` refuses a `''` root outright.
+- **Mounts nest.** Bob has `files/Bilder` shared *and* four folders inside it shared separately.
+  A real run writes each file once (the second mount finds her already marked), but a **dry run
+  writes nothing, so every nested mount re-counted the same files** — inflating the estimate by 18%
+  (77,446 vs the true 65,757). Fixed by returning per-`"fileId:userId"` keys the caller unions
+  instead of summing. This is exactly what the "cross-check the dry run against SQL before writing"
+  step exists to catch.
+
+**Stats had a guaranteed regression, now fixed.** `countCandidates()` is gated on `included_paths`
+*per user*; Bob has no `Bilder` folder of her own, so she contributed ~0 candidates. After fan-out
+she gains a marker for every Consti photo under `Bilder`, so the row count would have run past the
+candidate count and `unprocessedCount = max(0, candidates - processed)` would have **pinned to zero
+permanently**. Both sides are now counted in *files* (`countProcessedFiles()` =
+`COUNT(DISTINCT file_id)`; `countCandidates()` unions file ids, which also fixes a pre-existing
+double-count). The row count survives as its own line, since it's what explains the tables' growth.
+
+**Verified against the live instance, staged.** Deployed paused (`processing_paused=true`,
+automatic detection and clustering off), `occ upgrade`, index confirmed present *before* anything
+wrote. Dry run reconciled **exactly** with SQL: 65,757 rows, and the 36-row gap against a naive
+`COUNT(*)` is precisely the gif/bmp/dcraw rows that predate the mimetype gate (19+16+1). First live
+write was one mount (`--mount-root=295730`, 33 images): 35 rows copied, parity 35/35, every copy
+`cluster_id IS NULL`, 33 markers of which **11 were zero-face markers copied with no ExApp call**,
+and the geometry check found zero rows whose box differed from Consti's. Re-running copied 0.
+Both job shapes were then executed for real: the old `{userId, fileId}` argument ran without error
+and wrote nothing on an already-done file, and `{fileId}` on a Consti-only file copied 23 rows with
+correct markers — **while `docker logs facewright` showed zero requests**, proving the copy path and
+not inference. `AccessSyncJob` was verified in both branches: paused, it re-queued itself unchanged;
+unpaused, it reconciled and terminated the chain rather than looping.
+
+**One scare worth recording**: Consti's total row count dropped by 2 mid-verification. It was not
+this code — his 512-dim count was byte-for-byte unchanged at 65,793 throughout. The two rows were
+**legacy 128-dim** ones removed by *Recognize's own* `RemoveDuplicateFaceDetections` repair step,
+which `occ upgrade` runs for every app. Worth knowing before diagnosing the same shape again.
+
 ### Next
 
-1. **Multi-user + robustness.** Everything above targets a single-user prototype first
-   (detection is still keyed to a file's owner, not fanned out to every user with access, unlike
-   Recognize's own behavior); resilience to Recognize updates is a separate, larger step after
-   the prototype proves clustering quality at scale. Rename/delete/mount-change handling for the
-   file-event listener (deliberately skipped this phase) would live here too.
+1. **Finish the multi-user rollout.** The full backfill (`occ facewright:backfill-access`, 65,757
+   rows / ~671 MB) has **not** been run — only one small mount, as a staged check. Before running
+   it: `automatic_clustering_enabled` should stay off, because Bob's unclustered count will jump
+   from ~0 to tens of thousands at once and `ClusteringMaintenanceJob` would start a chain
+   immediately — recreating for her, in one go, the exact scale problem already solved once for
+   Consti. Also still untested at runtime: the share/unshare event path (no `occ` command creates
+   shares, so it needs a real share in the browser or a file moved in and out of a shared folder),
+   and `PruneService` actually deleting. `--prune` has never been run; the dry run reports 0 stale
+   rows, which is correct but means the delete path is unexercised. **Note names do not travel with
+   a share**: copies land `cluster_id = NULL`, so a recipient's clustering rediscovers the same
+   people under its own untitled cluster ids. Still deferred: empty-cluster cleanup after a prune
+   (Recognize doesn't do it either), a user-deleted listener, a resume cursor for
+   `BatchTriggerService`'s O(processed) re-walk, and resilience to Recognize updates.
 
 2. **Re-tuning thresholds needs a reset.** `-2` rows are no longer pending, so changing
    `max-distance` / `min-faces` on the admin page will *not* re-evaluate them — the old verdict
