@@ -34,33 +34,6 @@
 		bindToggle('facewright-automatic-clustering-enabled', 'facewright-automatic-clustering-status', 'automatic-clustering-enabled', 'enabled');
 		bindToggle('facewright-processing-paused', 'facewright-processing-paused-status', 'processing-paused', 'paused');
 
-		var pathsField = document.getElementById('facewright-included-paths');
-		var pathsSaveButton = document.getElementById('facewright-included-paths-save');
-		var pathsStatus = document.getElementById('facewright-included-paths-status');
-		if (pathsSaveButton) {
-			pathsSaveButton.addEventListener('click', function (event) {
-				event.preventDefault();
-				fetch(OC.generateUrl('/apps/facewright_bridge/included-paths'), {
-					method: 'PUT',
-					headers: {
-						'Content-Type': 'application/json',
-						requesttoken: OC.requestToken,
-					},
-					body: JSON.stringify({ paths: pathsField.value }),
-				}).then(function (response) {
-					if (!response.ok) {
-						throw new Error('Request failed');
-					}
-					return response.json();
-				}).then(function (data) {
-					pathsField.value = data.paths.join('\n');
-					pathsStatus.textContent = 'Saved.';
-				}).catch(function () {
-					pathsStatus.textContent = 'Failed to save - see the Nextcloud log.';
-				});
-			});
-		}
-
 		var clusterMaxDistanceField = document.getElementById('facewright-cluster-max-distance');
 		var clusterMinFacesField = document.getElementById('facewright-cluster-min-faces');
 		var clusterChunkSizeField = document.getElementById('facewright-cluster-chunk-size');
@@ -87,7 +60,7 @@
 					}
 					return response.json();
 				}).then(function (data) {
-					runClusteringStatus.textContent = 'Started for ' + data.started + ' user(s) - runs in the background across upcoming cron cycles.';
+					runClusteringStatus.textContent = 'Saved as the default. Started for ' + data.started + ' user(s) - runs in the background across upcoming cron cycles, each with their own settings.';
 				}).catch(function () {
 					runClusteringStatus.textContent = 'Failed to start - see the Nextcloud log.';
 				});

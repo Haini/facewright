@@ -7,6 +7,7 @@ namespace OCA\FacewrightBridge\Command;
 use OCA\FacewrightBridge\Service\AccessService;
 use OCA\FacewrightBridge\Service\DetectionService;
 use OCA\FacewrightBridge\Service\PathFilterService;
+use OCA\FacewrightBridge\Service\UserSettingsService;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
 use Symfony\Component\Console\Command\Command;
@@ -29,6 +30,7 @@ class DetectFaces extends Command {
 		private IRootFolder $rootFolder,
 		private DetectionService $detectionService,
 		private PathFilterService $pathFilter,
+		private UserSettingsService $userSettings,
 		private AccessService $accessService,
 	) {
 		parent::__construct();
@@ -46,8 +48,13 @@ class DetectFaces extends Command {
 		$userId = $input->getArgument('user');
 		$path = $input->getArgument('path');
 
-		if (!$this->pathFilter->isIncluded($path)) {
-			$output->writeln("<error>Path '{$path}' is not in the configured included paths - skipping.</error>");
+		if (!$this->userSettings->isEnabled($userId)) {
+			$output->writeln("<error>User {$userId} has not enabled face recognition - skipping.</error>");
+			return 1;
+		}
+
+		if (!$this->pathFilter->isIncluded($userId, $path)) {
+			$output->writeln("<error>Path '{$path}' is not in {$userId}'s included paths - skipping.</error>");
 			return 1;
 		}
 

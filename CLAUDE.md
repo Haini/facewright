@@ -982,6 +982,109 @@ this code — his 512-dim count was byte-for-byte unchanged at 65,793 throughout
 **legacy 128-dim** ones removed by *Recognize's own* `RemoveDuplicateFaceDetections` repair step,
 which `occ upgrade` runs for every app. Worth knowing before diagnosing the same shape again.
 
+### Done: per-user mode — face recognition is opt-in, per user (bridge 0.4.0)
+
+Every setting was instance-wide. `included_paths` was one `oc_appconfig` row (`["Bilder"]`), there
+were **zero** `oc_preferences` rows for the app, and the settings page was registered only as
+`<admin>` with no action carrying `#[NoAdminRequired]`. Bob could reach it only because she is in
+the admin group; a normal user had no way to add their own folders or opt out. The consequence was
+visible in the data: `BatchTriggerService` resolves the *global* list against *each* user's own root,
+so Bob — with no `Bilder` folder of her own — contributed ~0 candidates while holding 54k rows
+purely from fan-out.
+
+Now each user turns it on for themselves, picks their own folders, scans their own backlog and tunes
+their own clustering, at Settings → Personal → Facewright. The global list is gone.
+
+**A user with no stored preference is off.** That is the only safe default for accounts created from
+here on, and the wrong one for accounts already being scanned — hence `Version000004000`, a
+data-only migration (no schema change; the `<version>` bump is what makes `occ upgrade` run it) that
+copies the old global list into every seen user and enables them.
+`occ facewright:init-user-settings [--dry-run]` calls the same service method, so the move can be
+inspected before the upgrade and re-run after. The old appconfig row is **deliberately not deleted** —
+nothing reads it any more, and leaving it keeps a rollback lossless.
+
+**Storage is `OCP\Config\IUserConfig`** (`@since 32.0.0`), the per-user twin of `IAppConfig`,
+`getValueArray`/`setValueArray` included. `OCP\IConfig::setUserValue` and friends are deprecated as
+of NC 33. Two non-obvious constraints shaped the schema:
+- **`enabled` is a string, not a bool.** `setValueBool()` has no `$flags` parameter, and the flag
+  matters: without `FLAG_INDEXED`, `searchUsersByValueString` (how `enabledUsers()` finds who to
+  walk) falls back to scanning `configvalue` and logs a notice. Verified in the live table —
+  `flags=2` on every `enabled` row.
+- **Array-typed keys cannot be searched by value** (they are JSON blobs), so the admin overview uses
+  `getValuesByUsers(..., ValueType::ARRAY)` — one query for everyone, not an N+1 per page load.
+
+**The detection gate is the one genuinely subtle change.** `DetectQueuedJob` used to ask "is the
+*fetch* user's path included". With per-user lists the rule generalises to:
+
+> A file is worth inferring if **any enabled user with access** has it under **their own** included
+> paths. Rows still fan out to **every** user with access, unchanged.
+
+`getAccessPaths()` already returns `userId => path` for everyone, so this costs no extra query.
+`pickFetchUser()` gained a `$restrictTo` parameter and **it is load-bearing, not defensive**: the
+ExApp downloads the file *as* the fetch user, so owner-first would happily pick someone who excluded
+the file and ask for a path outside their own allowlist — defeating the gate it just passed.
+
+Proved on the live instance with real inference, counting `POST /detect` in `docker logs facewright`
+as ground truth (a marker alone cannot distinguish inference from a fan-out copy):
+
+| user enabled | path included | ExApp called |
+|---|---|---|
+| yes | no | **no** (154→154) |
+| yes | yes | **yes** (154→155) |
+| no | yes | **no** (155→155) |
+| yes | yes | **yes** (155→156) |
+
+Then the case that tests both halves at once: file 33956, visible to Consti *and* Bob, included by
+neither. Adding it to **Bob's** list only → inference ran (156→157), the fetch user was **Bob,
+not Consti the owner** (`$restrictTo` working), and **both** users got markers — fan-out reaching a
+user whose own list excludes the file. That is "paths gate scanning, not visibility", intact.
+
+Other decisions worth not relitigating:
+- **Nothing retroactive.** Shrinking a path list never deletes rows. `AccessSyncService`,
+  `PruneService`, `MountFileService`, `FileAccessListener` and `DetectionService` are untouched.
+- **Clustering is not gated on `enabled`.** Opting out stops new detections; refusing to cluster
+  what is already stored would strand those faces off Memories' People page.
+- **`FileCreatedListener` still enqueues unconditionally.** Checking "is anyone with access enabled"
+  there needs a mount-cache lookup inside the upload request, which that listener deliberately
+  avoids. The job's early return is the cheap place for it.
+- **`BatchScanJob` gained an optional `userId`** rather than a second job class. `IJobList::add()`
+  dedupes on class plus argument, so that yields one chain per user *and* one instance-wide chain for
+  free; old `{chunkSize}`-only rows keep working, since an absent userId is exactly "scan everyone".
+  Confirmed live: two identical per-user adds → one row; a global chain coexists as a separate row;
+  running Bob's chain enqueued exactly 3 of *her* candidates and none of Consti's.
+- **The admin page keeps only instance-wide controls** plus a read-only per-user table. Its numbers
+  were cross-checked against SQL (`COUNT(DISTINCT file_id)` 54,545, rows 108,758, per-user
+  54,332/54,426 — all exact). `countCandidates()` returns `{total, perUser}` from **one** walk;
+  `countCandidatesForUser()` exists because a personal page load must not pay for an instance-wide
+  filesystem enumeration (1.94s for Consti vs. 0.04s for a user with no matching folder).
+
+**Editable thresholds forced a fix to an already-flagged trap.** A face that survives a full pass
+unassigned is marked `-2` and never reconsidered — correct while the thresholds hold, silently wrong
+the moment a user changes them, which would make the *second* use of the control appear to do
+nothing. `ClusteringService::clearUnclusterableMarks()` returns those rows to NULL, called only when
+`setClusterParams()` reports the values actually moved. Verified inside a rolled-back transaction
+against the live table: of Consti's 13,237 `-2` rows it reopened **13,236** — the one it refused is a
+legacy 128-dim row, i.e. the dimensionality guard doing exactly its job. State after rollback was
+identical. Note the cost this implies: a threshold change reopens five figures of rows for a large
+account and will start a long clustering run.
+
+**Authorization was verified through the framework, not by reading the source.** Every user on this
+instance is in the `admin` group, so observing that the personal page works proves nothing. Asking
+Nextcloud's own `ControllerMethodReflector` — the object `SecurityMiddleware` consults — reported
+`adminRequired=no, csrfChecked=yes, public=no` for all four `PersonalSettingsController` actions and
+`adminRequired=YES` for `PeopleSettingsController`'s. Every personal action acts on the injected
+`$userId` and never on a user id from the request body; that is the whole authorization boundary.
+
+Two deployment notes, both previously documented and both hit again exactly as expected: the four new
+`routes.php` entries needed a `nextcloud-app-1` restart (confirmed by PUTing each route and getting
+401 = exists, while the removed `/included-paths` correctly 404s), and the `js/` changes needed the
+version bump to bust `?v=substr(md5($appVersion), 0, 8)`.
+
+Left behind by verification, deliberately: 8 zero-face markers on real, previously-unprocessed files
+(logos, scanned bills, kitchen-planning photos). Real results on real files, same call as the
+batch-trigger run kept earlier. **No detection rows were created or destroyed** — Consti 65,823 /
+Bob 65,970, byte-for-byte the pre-change baseline.
+
 ### Next
 
 1. **Finish the multi-user rollout.** The full backfill (`occ facewright:backfill-access`, 65,757
@@ -998,10 +1101,11 @@ which `occ upgrade` runs for every app. Worth knowing before diagnosing the same
    (Recognize doesn't do it either), a user-deleted listener, a resume cursor for
    `BatchTriggerService`'s O(processed) re-walk, and resilience to Recognize updates.
 
-2. **Re-tuning thresholds needs a reset.** `-2` rows are no longer pending, so changing
-   `max-distance` / `min-faces` on the admin page will *not* re-evaluate them — the old verdict
-   silently stands. `occ facewright:cluster --reset` clears it, but an automatic reset when the
-   parameters change is the cleaner answer if threshold experimentation resumes.
+2. **Threshold re-tuning is fixed on the personal page only.** `clearUnclusterableMarks()` runs when
+   a *user* changes their own numbers (see the per-user-mode section). The admin page's two inputs
+   are now instance **defaults** for users who never override, so changing them re-evaluates nothing
+   for anyone who already has their own values — which is correct, but means an admin cannot re-tune
+   the instance from one place any more. `occ facewright:cluster --reset` is still the blunt option.
 
 3. **Clustering quality is unvalidated at current scale.** The 0.5 / 3 defaults were validated
    against ~740 detections; the library is now ~65,000. Two clusters hold 11,633 and 9,992

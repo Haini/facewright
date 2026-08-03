@@ -6,46 +6,31 @@ namespace OCA\FacewrightBridge\Service;
 
 use OCP\Files\Folder;
 use OCP\Files\NotFoundException;
-use OCP\IAppConfig;
 
 /**
- * Admin-configured allowlist of file paths considered for face detection - checked by
- * DetectFaces, managed via the admin settings page (SettingsController). Recognize's own
- * approach here is a per-folder ".noimage"-style exclusion marker (see IgnoreService in its
- * source) - deliberately not what this is: the user asked for an explicit include list instead,
- * with everything else ignored, so this is a fresh allowlist, not a port of that mechanism.
+ * Matches a file path against one user's own allowlist of paths considered for face detection.
+ * Recognize's own approach here is a per-folder ".noimage"-style exclusion marker (see
+ * IgnoreService in its source) - deliberately not what this is: an explicit include list, with
+ * everything else ignored.
  *
- * Paths are relative to each user's own files root (same convention as DetectFaces' path
- * argument) and matched as exact matches or folder prefixes. An empty list means no
- * restriction - everything is included, matching the behavior before this setting existed.
+ * The list used to be a single instance-wide appconfig row an admin edited on everyone's behalf.
+ * It is now per user (see UserSettingsService), which is what lets a user add their own folders
+ * without an admin editing a shared textarea. Storage lives entirely in UserSettingsService; this
+ * class is only the matching logic and the resolution to Folder nodes.
+ *
+ * Paths are relative to the user's own files root and matched as exact matches or folder prefixes.
+ * An empty list means no restriction - everything that user can see is included.
+ *
+ * Note what this does *not* decide: a shared file has a different path for each user, and the
+ * allowlist governs which photos are worth running inference on, not who may see the resulting
+ * faces. Detection rows still fan out to every user with access. See AccessService.
  */
 class PathFilterService {
-	private const APP_ID = 'facewright_bridge';
-	private const CONFIG_KEY = 'included_paths';
-
-	public function __construct(private IAppConfig $appConfig) {
+	public function __construct(private UserSettingsService $userSettings) {
 	}
 
-	/** @return list<string> */
-	public function getIncludedPaths(): array {
-		return $this->appConfig->getValueArray(self::APP_ID, self::CONFIG_KEY, []);
-	}
-
-	/** @param string[] $paths */
-	public function setIncludedPaths(array $paths): void {
-		$normalized = [];
-		foreach ($paths as $path) {
-			$path = trim($path);
-			$path = trim($path, '/');
-			if ($path !== '') {
-				$normalized[] = $path;
-			}
-		}
-		$this->appConfig->setValueArray(self::APP_ID, self::CONFIG_KEY, array_values(array_unique($normalized)));
-	}
-
-	public function isIncluded(string $path): bool {
-		$included = $this->getIncludedPaths();
+	public function isIncluded(string $userId, string $path): bool {
+		$included = $this->userSettings->getIncludedPaths($userId);
 		if ($included === []) {
 			return true;
 		}
@@ -59,15 +44,15 @@ class PathFilterService {
 	}
 
 	/**
-	 * Resolves the configured included paths to actual Folder nodes for one user - shared by
-	 * BatchTriggerService (enqueueing the backlog) and StatsService (counting candidates), so
-	 * both enumerate exactly the same set of files. Falls back to the whole user folder when no
-	 * paths are configured (matching isIncluded()'s "empty list = no restriction" behavior).
+	 * Resolves one user's included paths to actual Folder nodes - shared by BatchTriggerService
+	 * (enqueueing the backlog) and ProcessedFileService::countCandidates() (the stats denominator),
+	 * so both enumerate exactly the same set of files. Falls back to the whole user folder when
+	 * that user has configured no paths, matching isIncluded()'s "empty list = no restriction".
 	 *
 	 * @return list<Folder>
 	 */
-	public function resolveSearchRoots(Folder $userFolder): array {
-		$paths = $this->getIncludedPaths();
+	public function resolveSearchRoots(string $userId, Folder $userFolder): array {
+		$paths = $this->userSettings->getIncludedPaths($userId);
 		if ($paths === []) {
 			return [$userFolder];
 		}

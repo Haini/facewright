@@ -8,7 +8,6 @@ use OCA\FacewrightBridge\BackgroundJob\BatchScanJob;
 use OCA\FacewrightBridge\Service\BatchTriggerService;
 use OCA\FacewrightBridge\Service\ClusterMergeService;
 use OCA\FacewrightBridge\Service\ClusterTriggerService;
-use OCA\FacewrightBridge\Service\PathFilterService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\BackgroundJob\IJobList;
@@ -17,9 +16,13 @@ use OCP\IRequest;
 
 /**
  * Backs the Facewright admin settings page (kept the name from when it only handled the
- * People-page toggle; now also handles included-paths, automatic-detection, and the batch
- * trigger - not worth the risk of renaming the class/route once routing was working, see
- * CLAUDE.md's "stale registration" gotcha).
+ * People-page toggle; now also handles automatic detection, the batch trigger and clustering -
+ * not worth the risk of renaming the class/route once routing was working, see CLAUDE.md's
+ * "stale registration" gotcha).
+ *
+ * Everything here is instance-wide. Per-user settings (whether face recognition runs for someone
+ * at all, which of their folders it looks at, their clustering thresholds) live on
+ * PersonalSettingsController, and are deliberately not editable from here.
  *
  * setEnabled: toggles Memories' People page visibility. Memories checks Recognize's own
  * `faces.enabled` appconfig key directly (Util::recognizeIsEnabled()), but Recognize's own
@@ -35,7 +38,6 @@ class PeopleSettingsController extends Controller {
 		string $appName,
 		IRequest $request,
 		private IAppConfig $appConfig,
-		private PathFilterService $pathFilter,
 		private BatchTriggerService $batchTrigger,
 		private ClusterMergeService $clusterMerge,
 		private ClusterTriggerService $clusterTrigger,
@@ -47,12 +49,6 @@ class PeopleSettingsController extends Controller {
 	public function setEnabled(bool $enabled): JSONResponse {
 		$this->appConfig->setValueString('recognize', 'faces.enabled', $enabled ? 'true' : 'false');
 		return new JSONResponse(['enabled' => $enabled]);
-	}
-
-	/** @param string $paths newline-separated list of paths */
-	public function setIncludedPaths(string $paths): JSONResponse {
-		$this->pathFilter->setIncludedPaths(preg_split('/\r\n|\r|\n/', $paths) ?: []);
-		return new JSONResponse(['paths' => $this->pathFilter->getIncludedPaths()]);
 	}
 
 	public function setAutomaticDetectionEnabled(bool $enabled): JSONResponse {
@@ -95,6 +91,10 @@ class PeopleSettingsController extends Controller {
 	 * chains for users who actually have unclustered Facewright detections (see
 	 * ClusteringService::countUnclusteredByUser()), skipping anyone who already has one in
 	 * flight.
+	 *
+	 * $maxDistance/$minFaces are saved as the instance *defaults* - what a user who never touches
+	 * their own settings page inherits. They are not applied to the chains started here: users who
+	 * did set their own would otherwise have them silently ignored by an admin clicking this button.
 	 */
 	public function runClustering(float $maxDistance, int $minFaces, int $chunkSize = 300): JSONResponse {
 		$maxDistance = max(0.0, $maxDistance);
@@ -104,7 +104,7 @@ class PeopleSettingsController extends Controller {
 		$this->appConfig->setValueInt('facewright_bridge', 'cluster_min_faces', $minFaces);
 		$this->appConfig->setValueInt('facewright_bridge', 'cluster_chunk_size', $chunkSize);
 
-		$started = $this->clusterTrigger->startForUsersWithUnclustered($maxDistance, $minFaces, $chunkSize);
+		$started = $this->clusterTrigger->startForUsersWithUnclustered($chunkSize);
 
 		return new JSONResponse(['started' => $started]);
 	}

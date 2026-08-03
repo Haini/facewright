@@ -23,12 +23,14 @@ use OCP\IUserManager;
  * call yields both the user set *and* every user's files-root-relative path. Recognize re-resolves
  * a Node per user instead. At 65k files that difference is the bulk of the fan-out's cost.
  *
- * Note on the included-paths interaction: PathFilterService's allowlist is matched against a
- * user-relative path, and a shared file has a different path for each user. By design the filter is
- * evaluated against the *fetch* user's path only (see pickFetchUser) - so with
- * included_paths = ["Bilder"], a photo Consti owns at Bilder/x.jpg and shares to Bob at
- * PhotosFromConsti/x.jpg is processed and fans out to both. The allowlist decides which photos are
- * worth inference, not who may see the faces.
+ * Note on the included-paths interaction: PathFilterService's allowlist is per user and is matched
+ * against a user-relative path, and a shared file has a different path for each user. A file is
+ * worth inferring if *any* enabled user with access has it under their own included paths;
+ * pickFetchUser() is then restricted to that set, because the ExApp downloads the file as the fetch
+ * user and $path must be theirs. Rows still fan out to everyone with access regardless - so with
+ * Consti including "Bilder", a photo he owns at Bilder/x.jpg and shares to Bob at
+ * PhotosFromConsti/x.jpg is processed and reaches both, whatever Bob's own list says. The
+ * allowlist decides which photos are worth inference, not who may see the faces.
  */
 class AccessService {
 	/**
@@ -136,17 +138,26 @@ class AccessService {
 	 *  - The owner's mount is their home storage, so no share permission can revoke their read. A
 	 *    sharee's access can vanish between a job being queued and it running, which surfaces as a
 	 *    DAV 403 the ExApp reports as a 502, i.e. as retryable forever.
-	 *  - The fetch user decides which path PathFilterService sees, so a choice that flapped between
+	 *  - The fetch user's path is the one the ExApp is asked for, so a choice that flapped between
 	 *    runs would make a file's inclusion flap with it. Owner-first plus the ksort in
 	 *    getAccessPaths() makes the fallback deterministic too.
 	 *
-	 * @param string|null $preferred a hint (e.g. the user named on an older queued job). Ignored
-	 *                               silently if that user no longer has access.
+	 * @param string|null      $preferred  a hint (e.g. the user named on an older queued job).
+	 *                                     Ignored silently if that user no longer has access.
+	 * @param list<string>|null $restrictTo consider only these users. Passed by DetectQueuedJob with
+	 *                                     the users who both opted in and include the file under
+	 *                                     their own paths: picking outside that set would download
+	 *                                     the file as someone who excluded it, defeating the gate.
+	 *                                     Null means no restriction (occ facewright:detect, which
+	 *                                     names its user explicitly).
 	 *
-	 * @return array{userId: string, path: string}|null null when nobody can see the file
+	 * @return array{userId: string, path: string}|null null when nobody eligible can see the file
 	 */
-	public function pickFetchUser(int $fileId, ?string $preferred = null): ?array {
+	public function pickFetchUser(int $fileId, ?string $preferred = null, ?array $restrictTo = null): ?array {
 		$paths = $this->getAccessPaths($fileId);
+		if ($restrictTo !== null) {
+			$paths = array_intersect_key($paths, array_flip($restrictTo));
+		}
 		if ($paths === []) {
 			return null;
 		}

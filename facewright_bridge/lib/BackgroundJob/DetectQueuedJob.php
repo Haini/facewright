@@ -9,6 +9,7 @@ use OCA\FacewrightBridge\Service\AccessSyncService;
 use OCA\FacewrightBridge\Service\DetectionService;
 use OCA\FacewrightBridge\Service\PathFilterService;
 use OCA\FacewrightBridge\Service\ProcessedFileService;
+use OCA\FacewrightBridge\Service\UserSettingsService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
 use OCP\BackgroundJob\QueuedJob;
@@ -48,6 +49,7 @@ class DetectQueuedJob extends QueuedJob {
 		ITimeFactory $time,
 		private IRootFolder $rootFolder,
 		private PathFilterService $pathFilter,
+		private UserSettingsService $userSettings,
 		private DetectionService $detectionService,
 		private ProcessedFileService $processedFiles,
 		private AccessService $accessService,
@@ -85,16 +87,25 @@ class DetectQueuedJob extends QueuedJob {
 			return;
 		}
 
-		$fetch = $this->accessService->pickFetchUser($fileId, $argument['userId'] ?? null);
-		if ($fetch === null) {
+		// Checked here (not in the listener/enumeration step) since the queue can sit for one or
+		// more cron cycles - this is the freshest possible read of every setting involved. The
+		// allowlist is per user now, so the question is no longer "is the fetch user's path
+		// included" but "does anyone who opted in want this file", evaluated against each user's
+		// own path. getAccessPaths() already returned all of them, so this costs no extra query.
+		$interested = array_filter(
+			$access,
+			fn (string $path, string $userId): bool => $this->userSettings->isEnabled($userId)
+				&& $this->pathFilter->isIncluded($userId, $path),
+			ARRAY_FILTER_USE_BOTH,
+		);
+		if ($interested === []) {
 			return;
 		}
 
-		// Checked here (not in the listener/enumeration step) since the queue can sit for one
-		// or more cron cycles - this is the freshest possible read of both settings. Evaluated
-		// against the fetch user's path only: see AccessService's docblock on why the allowlist
-		// decides which photos are worth inference rather than who may see the faces.
-		if (!$this->pathFilter->isIncluded($fetch['path'])) {
+		// Restricted to that set: the ExApp downloads the file as the fetch user, so picking one
+		// who excluded it would ask for a path outside their own allowlist and defeat the gate.
+		$fetch = $this->accessService->pickFetchUser($fileId, $argument['userId'] ?? null, array_keys($interested));
+		if ($fetch === null) {
 			return;
 		}
 

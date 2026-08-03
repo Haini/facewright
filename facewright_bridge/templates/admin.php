@@ -1,7 +1,6 @@
 <?php
 /** @var array $_ */
 $enabled = !empty($_['enabled']);
-$paths = $_['paths'] ?? '';
 $automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
 $automaticClusteringEnabled = !empty($_['automaticClusteringEnabled']);
 $processingPaused = !empty($_['processingPaused']);
@@ -17,6 +16,7 @@ $unclusteredCount = $_['unclusteredCount'] ?? 0;
 $queuedDetections = $_['queuedDetections'] ?? 0;
 $scanActive = !empty($_['scanActive']);
 $clusteringActive = !empty($_['clusteringActive']);
+$users = $_['users'] ?? [];
 ?>
 <div id="facewright-people-settings" class="section">
 	<h2><?php p($l->t('Facewright')); ?></h2>
@@ -26,17 +26,6 @@ $clusteringActive = !empty($_['clusteringActive']);
 		<label for="facewright-people-enabled"><?php p($l->t('Show the People page')); ?></label>
 	</p>
 	<p id="facewright-people-status"></p>
-</div>
-<div id="facewright-included-paths-settings" class="section">
-	<h2><?php p($l->t('Included paths')); ?></h2>
-	<p><?php p($l->t('Only files under these paths (relative to each user\'s files root, one per line) are considered for face recognition. Everything else is ignored. Leave empty to allow every path.')); ?></p>
-	<p>
-		<textarea id="facewright-included-paths" rows="6" cols="50" placeholder="Photos&#10;Camera/2024"><?php p($paths); ?></textarea>
-	</p>
-	<p>
-		<button type="button" id="facewright-included-paths-save"><?php p($l->t('Save')); ?></button>
-	</p>
-	<p id="facewright-included-paths-status"></p>
 </div>
 <div id="facewright-trigger-settings" class="section">
 	<h2><?php p($l->t('Detection triggers')); ?></h2>
@@ -51,7 +40,7 @@ $clusteringActive = !empty($_['clusteringActive']);
 	</p>
 	<p><?php p($l->t('Stops Facewright from running new detections (from automatic uploads, "Run now", or "Scan entire library" alike). Already-queued files stay queued and pick back up automatically once unpaused - nothing is lost or needs restarting. Only affects Facewright\'s own background jobs, not Nextcloud\'s cron or any other app.')); ?></p>
 	<p id="facewright-processing-paused-status"></p>
-	<p><?php p($l->t('Process existing files that haven\'t been checked yet (respects the included paths above). Runs in the background over the next few cron cycles, not immediately.')); ?></p>
+	<p><?php p($l->t('Process existing files that haven\'t been checked yet, for every user who has turned face recognition on, within the folders each of them chose. Runs in the background over the next few cron cycles, not immediately.')); ?></p>
 	<p>
 		<label for="facewright-batch-size"><?php p($l->t('Batch size')); ?></label>
 		<input type="number" id="facewright-batch-size" min="1" value="<?php p((string)$batchSize); ?>">
@@ -73,12 +62,13 @@ $clusteringActive = !empty($_['clusteringActive']);
 	</p>
 	<p><?php p($l->t('Detection runs continuously, but a clustering run stops itself once it runs out of progress to make - nothing restarts it as new faces get detected afterward. This periodically starts a new run (using the settings below) for any user with unclustered faces, so newly-detected people don\'t silently sit off Memories\' People page until someone clicks "Run now" again.')); ?></p>
 	<p id="facewright-automatic-clustering-status"></p>
+	<p><?php p($l->t('The two values below are the defaults for users who have not changed them on their own settings page. Users who have are left alone - saving here does not overwrite their choice, and neither does "Run now".')); ?></p>
 	<p>
-		<label for="facewright-cluster-max-distance"><?php p($l->t('Max cosine distance')); ?></label>
+		<label for="facewright-cluster-max-distance"><?php p($l->t('Default max cosine distance')); ?></label>
 		<input type="number" id="facewright-cluster-max-distance" min="0" max="2" step="0.01" value="<?php p((string)$clusterMaxDistance); ?>">
 	</p>
 	<p>
-		<label for="facewright-cluster-min-faces"><?php p($l->t('Min faces to form a cluster')); ?></label>
+		<label for="facewright-cluster-min-faces"><?php p($l->t('Default min faces to form a cluster')); ?></label>
 		<input type="number" id="facewright-cluster-min-faces" min="1" value="<?php p((string)$clusterMinFaces); ?>">
 	</p>
 	<p>
@@ -107,6 +97,47 @@ $clusteringActive = !empty($_['clusteringActive']);
 	</p>
 	<p><?php p($l->t('Either field accepts a person\'s existing name, or a numeric cluster ID for an unnamed one - Memories shows an unnamed cluster\'s tile labeled with its numeric ID.')); ?></p>
 	<p id="facewright-merge-clusters-status"></p>
+</div>
+<div id="facewright-users-settings" class="section">
+	<h2><?php p($l->t('Per-user status')); ?></h2>
+	<p><?php p($l->t('Face recognition is opt-in per user: each person turns it on for themselves and picks their own folders, under Settings → Personal → Facewright. This view is read-only - those settings belong to each user.')); ?></p>
+	<?php if ($users === []): ?>
+		<p><?php p($l->t('No users to show yet.')); ?></p>
+	<?php else: ?>
+	<table class="grid">
+		<thead>
+			<tr>
+				<th><?php p($l->t('User')); ?></th>
+				<th><?php p($l->t('Enabled')); ?></th>
+				<th><?php p($l->t('Folders')); ?></th>
+				<th><?php p($l->t('Checked')); ?></th>
+				<th><?php p($l->t('Still to check')); ?></th>
+				<th><?php p($l->t('To be grouped')); ?></th>
+			</tr>
+		</thead>
+		<tbody>
+		<?php foreach ($users as $user): ?>
+			<tr>
+				<td><?php p($user['displayName']); ?> <span class="secondary">(<?php p($user['userId']); ?>)</span></td>
+				<td><?php p($user['enabled'] ? $l->t('Yes') : $l->t('No')); ?></td>
+				<td>
+					<?php if (!$user['enabled']): ?>
+						&mdash;
+					<?php elseif ($user['paths'] === []): ?>
+						<?php p($l->t('All files')); ?>
+					<?php else: ?>
+						<?php p(implode(', ', $user['paths'])); ?>
+					<?php endif; ?>
+				</td>
+				<td><?php p((string)$user['processed']); ?></td>
+				<td><?php p((string)max(0, $user['candidates'] - $user['processed'])); ?></td>
+				<td><?php p((string)$user['unclustered']); ?></td>
+			</tr>
+		<?php endforeach; ?>
+		</tbody>
+	</table>
+	<p><?php p($l->t('"Checked" counts pictures, not faces, and includes ones shared with the user by someone else - a picture several people can see is checked once and the result shared, so it counts for each of them. "Still to check" only counts files inside that user\'s own chosen folders.')); ?></p>
+	<?php endif; ?>
 </div>
 <div id="facewright-stats-settings" class="section">
 	<h2><?php p($l->t('Statistics')); ?></h2>

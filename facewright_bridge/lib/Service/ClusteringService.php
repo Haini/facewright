@@ -271,6 +271,33 @@ class ClusteringService {
 		return $marked;
 	}
 
+	/**
+	 * Puts this user's UNCLUSTERABLE rows back to pending, so a later run reconsiders them.
+	 *
+	 * Needed because the -2 mark records a verdict reached under one set of thresholds and is never
+	 * revisited - which is correct while the thresholds hold, and silently wrong the moment they
+	 * change. Now that max-distance and min-faces are per-user and editable from the personal
+	 * settings page, the second use of those controls would otherwise appear to do nothing.
+	 * PersonalSettingsController calls this only when the stored values actually moved.
+	 *
+	 * Far narrower than resetUser(): no clusters are deleted, already-clustered rows are untouched,
+	 * and the dimensionality guard keeps it off legacy 128-dim rows Facewright never evaluated.
+	 *
+	 * @return int rows returned to pending
+	 */
+	public function clearUnclusterableMarks(string $userId): int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->update('recognize_face_detections')
+			->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->gt(
+				$qb->func()->charLength('face_vector'),
+				$qb->createNamedParameter(DetectionService::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
+			));
+		return $qb->executeStatement();
+	}
+
 	public function resetUser(string $userId): void {
 		$qb = $this->db->getQueryBuilder();
 		$qb->update('recognize_face_detections')

@@ -28,17 +28,16 @@ class ClusterScan extends Command {
 	protected function configure(): void {
 		$this->setName('facewright:cluster-scan')
 			->setDescription('Cluster every user\'s unclustered faces in the background, in chunks, without overloading the server')
-			->addOption('chunk-size', null, InputOption::VALUE_REQUIRED, 'Unclustered faces to attempt per cron cycle', '300')
-			->addOption('max-distance', null, InputOption::VALUE_REQUIRED, 'Max cosine distance to count as a match', '0.5')
-			->addOption('min-faces', null, InputOption::VALUE_REQUIRED, 'Min matches (incl. self) to form/join a cluster', '3');
+			->addOption('chunk-size', null, InputOption::VALUE_REQUIRED, 'Unclustered faces to attempt per cron cycle', '300');
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$chunkSize = max(1, (int)$input->getOption('chunk-size'));
-		$maxDistance = (float)$input->getOption('max-distance');
-		$minFaces = max(1, (int)$input->getOption('min-faces'));
 
-		$started = $this->clusterTrigger->startForUsersWithUnclustered($maxDistance, $minFaces, $chunkSize);
+		// --max-distance/--min-faces are gone on purpose: those are per-user settings now, edited on
+		// each user's own settings page, and ClusterTriggerService reads them per user. A flag here
+		// could only apply one pair to everyone, silently overriding what each user chose.
+		$started = $this->clusterTrigger->startForUsersWithUnclustered($chunkSize);
 
 		$output->writeln("Started clustering for {$started} user(s) (chunk size {$chunkSize}). Runs in the background across upcoming cron cycles - check the admin page for live status.");
 		return 0;

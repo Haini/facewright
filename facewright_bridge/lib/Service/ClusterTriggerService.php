@@ -22,17 +22,26 @@ use OCP\IUserManager;
  * a chain for a user with nothing unclustered just means ClusterScanJob immediately no-ops and
  * stops itself, which is harmless but wasteful, and would make the automatic maintenance job spam
  * the queue with no-op chains every cycle for every seen user on the instance.
+ *
+ * Thresholds are resolved per user (UserSettingsService), not passed in: they are now a personal
+ * setting, so one instance-wide pair applied to everyone would quietly overwrite each user's own
+ * choice on every automatic re-trigger.
+ *
+ * Note this deliberately does *not* skip users who have turned face recognition off. Opting out
+ * stops new detections; refusing to cluster the ones already stored would strand them off
+ * Memories' People page, which is not what "off" was asked to mean.
  */
 class ClusterTriggerService {
 	public function __construct(
 		private ClusteringService $clustering,
+		private UserSettingsService $userSettings,
 		private IJobList $jobList,
 		private IUserManager $userManager,
 	) {
 	}
 
 	/** @return int number of users a new chain was started for */
-	public function startForUsersWithUnclustered(float $maxDistance, int $minFaces, int $chunkSize): int {
+	public function startForUsersWithUnclustered(int $chunkSize): int {
 		$unclusteredByUser = $this->clustering->countUnclusteredByUser();
 		if ($unclusteredByUser === []) {
 			return 0;
@@ -41,25 +50,47 @@ class ClusterTriggerService {
 		$alreadyRunning = $this->usersWithPendingClusterScan();
 		$started = 0;
 		foreach (array_keys($unclusteredByUser) as $userId) {
-			if (isset($alreadyRunning[$userId]) || !$this->userManager->userExists($userId)) {
+			if (isset($alreadyRunning[$userId])) {
 				continue;
 			}
-			$this->jobList->add(ClusterScanJob::class, [
-				'userId' => $userId,
-				'maxDistance' => $maxDistance,
-				'minFaces' => $minFaces,
-				'chunkSize' => $chunkSize,
-				'afterId' => 0,
-				'passProgress' => false,
-			]);
-			$started++;
+			if ($this->enqueue($userId, $chunkSize)) {
+				$started++;
+			}
 		}
 
 		return $started;
 	}
 
+	/**
+	 * One user's chain, for the personal settings page's "Recluster my faces". Same in-flight guard
+	 * as the instance-wide path, so clicking twice does not create two chains.
+	 *
+	 * @return bool false if the user has no chain to start (already running, or unknown user)
+	 */
+	public function startForUser(string $userId, int $chunkSize): bool {
+		if (isset($this->usersWithPendingClusterScan()[$userId])) {
+			return false;
+		}
+		return $this->enqueue($userId, $chunkSize);
+	}
+
+	private function enqueue(string $userId, int $chunkSize): bool {
+		if (!$this->userManager->userExists($userId)) {
+			return false;
+		}
+		$this->jobList->add(ClusterScanJob::class, [
+			'userId' => $userId,
+			'maxDistance' => $this->userSettings->getClusterMaxDistance($userId),
+			'minFaces' => $this->userSettings->getClusterMinFaces($userId),
+			'chunkSize' => $chunkSize,
+			'afterId' => 0,
+			'passProgress' => false,
+		]);
+		return true;
+	}
+
 	/** @return array<string, true> user ids that already have a ClusterScanJob pending */
-	private function usersWithPendingClusterScan(): array {
+	public function usersWithPendingClusterScan(): array {
 		$userIds = [];
 		foreach ($this->jobList->getJobsIterator(ClusterScanJob::class, null, 0) as $job) {
 			$argument = $job->getArgument();

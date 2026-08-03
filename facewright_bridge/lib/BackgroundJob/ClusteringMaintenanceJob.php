@@ -50,11 +50,12 @@ class ClusteringMaintenanceJob extends TimedJob {
 			return;
 		}
 
-		$maxDistance = $this->appConfig->getValueFloat('facewright_bridge', 'cluster_max_distance', 0.5);
-		$minFaces = $this->appConfig->getValueInt('facewright_bridge', 'cluster_min_faces', 3);
+		// Only the chunk size is read here now. Distance and min-faces are per-user settings that
+		// ClusterTriggerService resolves itself - passing one instance-wide pair would overwrite
+		// every user's own choice on each automatic re-trigger.
 		$chunkSize = $this->appConfig->getValueInt('facewright_bridge', 'cluster_chunk_size', 300);
 
-		$started = $this->clusterTrigger->startForUsersWithUnclustered($maxDistance, $minFaces, $chunkSize);
+		$started = $this->clusterTrigger->startForUsersWithUnclustered($chunkSize);
 		if ($started > 0) {
 			$this->logger->info("facewright: automatically (re-)started clustering for {$started} user(s) with unclustered faces.");
 		}

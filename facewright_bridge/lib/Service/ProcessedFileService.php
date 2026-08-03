@@ -8,7 +8,6 @@ use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\Files\IRootFolder;
 use OCP\IDBConnection;
-use OCP\IUser;
 use OCP\IUserManager;
 
 /**
@@ -31,6 +30,7 @@ class ProcessedFileService {
 		private IUserManager $userManager,
 		private IRootFolder $rootFolder,
 		private PathFilterService $pathFilter,
+		private UserSettingsService $userSettings,
 	) {
 	}
 
@@ -162,6 +162,15 @@ class ProcessedFileService {
 		return (int)$qb->executeQuery()->fetchOne();
 	}
 
+	/** Distinct files attempted for one user - the per-user half of countProcessedFiles(). */
+	public function countProcessedFilesForUser(string $userId): int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select($qb->createFunction('COUNT(DISTINCT ' . $qb->getColumnName('file_id') . ')'))
+			->from('facewright_processed')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+		return (int)$qb->executeQuery()->fetchOne();
+	}
+
 	public function countProcessedSince(int $timestamp): int {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select($qb->func()->count('*', 'c'))
@@ -170,26 +179,68 @@ class ProcessedFileService {
 		return (int)$qb->executeQuery()->fetchOne();
 	}
 
+	public function countProcessedSinceForUser(string $userId, int $timestamp): int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select($qb->func()->count('*', 'c'))
+			->from('facewright_processed')
+			->where($qb->expr()->gte('processed_at', $qb->createNamedParameter($timestamp, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+		return (int)$qb->executeQuery()->fetchOne();
+	}
+
 	/**
-	 * Total candidate *files* across all seen users, under the configured included paths - the same
-	 * enumeration BatchTriggerService uses to decide what to enqueue, so this is exactly
-	 * "processed + not yet processed", not an independent estimate.
+	 * Candidate *files* under each opted-in user's own included paths - the same enumeration
+	 * BatchTriggerService uses to decide what to enqueue, so this is exactly "processed + not yet
+	 * processed", not an independent estimate. Users who have not opted in are not walked, exactly
+	 * as they are not walked when enqueueing.
 	 *
-	 * Counted as a set of file ids rather than summed per user. A file shared between two users is
-	 * reached by both users' walks and would otherwise be counted twice - which was already wrong
-	 * before fan-out, and becomes badly wrong after it, since countProcessedFiles() on the other
-	 * side of the subtraction counts each file once.
+	 * The total is a set of file ids rather than a sum of the per-user counts. A file shared between
+	 * two users is reached by both walks and would otherwise be counted twice - which was already
+	 * wrong before fan-out, and becomes badly wrong after it, since countProcessedFiles() on the
+	 * other side of the subtraction counts each file once. The per-user numbers are returned from
+	 * the same walk because the admin overview needs both, and walking a ~54k-file library twice per
+	 * page load is not acceptable.
+	 *
+	 * @return array{total: int, perUser: array<string, int>}
 	 */
-	public function countCandidates(): int {
+	public function countCandidates(): array {
 		$seen = [];
-		$this->userManager->callForSeenUsers(function (IUser $user) use (&$seen): void {
-			$userFolder = $this->rootFolder->getUserFolder($user->getUID());
-			foreach ($this->pathFilter->resolveSearchRoots($userFolder) as $folder) {
-				foreach ($folder->searchByMime('image') as $node) {
-					$seen[$node->getId()] = true;
-				}
+		$perUser = [];
+
+		foreach ($this->userSettings->enabledUsers() as $userId) {
+			$mine = $this->candidateFileIds($userId);
+			$seen += $mine;
+			$perUser[$userId] = count($mine);
+		}
+
+		return ['total' => count($seen), 'perUser' => $perUser];
+	}
+
+	/**
+	 * One user's candidate count. The personal settings page needs exactly this and must not pay for
+	 * countCandidates(), which walks every opted-in user's library - a page load per user would
+	 * otherwise cost a full-instance enumeration.
+	 */
+	public function countCandidatesForUser(string $userId): int {
+		if (!$this->userSettings->isEnabled($userId)) {
+			return 0;
+		}
+		return count($this->candidateFileIds($userId));
+	}
+
+	/** @return array<int, true> file ids under this user's included paths, as a set */
+	private function candidateFileIds(string $userId): array {
+		if ($this->userManager->get($userId) === null) {
+			return [];
+		}
+
+		$ids = [];
+		$userFolder = $this->rootFolder->getUserFolder($userId);
+		foreach ($this->pathFilter->resolveSearchRoots($userId, $userFolder) as $folder) {
+			foreach ($folder->searchByMime('image') as $node) {
+				$ids[$node->getId()] = true;
 			}
-		});
-		return count($seen);
+		}
+		return $ids;
 	}
 }

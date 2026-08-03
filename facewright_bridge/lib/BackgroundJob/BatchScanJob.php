@@ -27,6 +27,14 @@ use Psr\Log\LoggerInterface;
  * chunkSize argument is cheap and safe even if somehow already queued. Stops re-adding once a
  * pass enqueues nothing new - either the backlog is fully processed, or everything remaining is
  * already pending (queued by this same scan, the automatic listener, or a manual "Run now").
+ *
+ * An optional userId scopes a chain to one user, which is what the personal settings page's "Scan
+ * my files now" starts. Because IJobList::add() dedupes on class plus argument, that gives one
+ * chain per user *and* one instance-wide chain for free, with no second job class. Rows queued
+ * under the old argument shape ({chunkSize} alone) keep working untouched - an absent userId is
+ * exactly what "scan everyone" means.
+ *
+ * @template-extends QueuedJob<array{chunkSize: int, userId?: string}>
  */
 class BatchScanJob extends QueuedJob {
 	public function __construct(
@@ -39,24 +47,32 @@ class BatchScanJob extends QueuedJob {
 		parent::__construct($time);
 	}
 
-	/** @param array{chunkSize: int} $argument */
+	/** @param array{chunkSize: int, userId?: string} $argument */
 	protected function run($argument): void {
 		$chunkSize = max(1, (int)($argument['chunkSize'] ?? 200));
+		$userId = isset($argument['userId']) ? (string)$argument['userId'] : null;
+
+		// Re-added verbatim rather than rebuilt, so a per-user chain stays a per-user chain and the
+		// dedup key doesn't change across a pause.
+		$requeue = $userId === null ? ['chunkSize' => $chunkSize] : ['chunkSize' => $chunkSize, 'userId' => $userId];
 
 		// Paused: don't enqueue more work, but keep the scan alive by re-adding self, same
 		// pattern DetectQueuedJob uses - resuming later picks up exactly where this left off.
 		if ($this->appConfig->getValueString('facewright_bridge', 'processing_paused', 'false') === 'true') {
-			$this->jobList->add(self::class, ['chunkSize' => $chunkSize]);
+			$this->jobList->add(self::class, $requeue);
 			return;
 		}
 
-		$queued = $this->batchTrigger->run($chunkSize);
-		$this->logger->info("facewright: library scan enqueued {$queued} file(s) this cycle.");
+		$queued = $userId === null
+			? $this->batchTrigger->run($chunkSize)
+			: $this->batchTrigger->runForUser($userId, $chunkSize);
+		$scope = $userId === null ? 'library scan' : "library scan for {$userId}";
+		$this->logger->info("facewright: {$scope} enqueued {$queued} file(s) this cycle.");
 
 		if ($queued > 0) {
-			$this->jobList->add(self::class, ['chunkSize' => $chunkSize]);
+			$this->jobList->add(self::class, $requeue);
 		} else {
-			$this->logger->info('facewright: library scan found nothing new to enqueue - stopping.');
+			$this->logger->info("facewright: {$scope} found nothing new to enqueue - stopping.");
 		}
 	}
 }
