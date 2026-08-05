@@ -149,7 +149,7 @@ caller to upload bytes directly.
   header (`base64("<username>:<app_secret>")`) — `anc_app` extracts the username server-side
   from that header (see `nc_py_api.ex_app.integration_fastapi.__nc_app`), and `nc.files.download`
   then operates against *that* user's files, no password needed since the app secret is the
-  trust anchor. Verified by crafting this header manually for a real user (`alice`) via the
+  trust anchor. Verified by crafting this header manually for a real user (`Consti`) via the
   same curl-through-Nextcloud technique used for heartbeat testing earlier, and pulling a real
   photo from their library successfully.
 - **Gotcha**: `nc_py_api`'s `check_error()` (used internally by `files.download`) always raises
@@ -214,7 +214,7 @@ migrations from directly — `lib/Db/FaceDetection.php`, `lib/Classifiers/Images
   one): fan-out to every user with access to the file. This phase inserts exactly one row, for
   whichever user the command names.
 
-Verified end-to-end: `occ facewright:detect alice "Family/Photos/2024 Trip Photos/IMG20240102T165818.jpg"`
+Verified end-to-end: `occ facewright:detect Consti "Family/Photos/2024 Trip Photos/IMG20240102T165818.jpg"`
 inserted 2 rows; read them back directly (via a throwaway verification command, removed after
 confirming) and checked `user_id`/`file_id` matched, `x/y/width/height` all fell within `[0,1]`,
 `cluster_id` was `NULL`, and `face_vector` decoded to a 512-float array.
@@ -249,14 +249,14 @@ already has a cluster — close enough for threshold experimentation.
 **Gotcha discovered while testing**: `recognize_face_detections` predates this project on this
 instance. Nextcloud app uninstalls don't drop tables by default, so real rows from Recognize's
 own old face-api.js classifier (128-dim vectors, other users, and even ~1400 old rows mixed
-into `alice`'s own data) were silently sitting in the table before `occ app:install recognize`
+into Consti's own data) were silently sitting in the table before `occ app:install recognize`
 ever ran this session — invisible until reinstalling made them queryable again. Mixing those
 with our 512-dim InsightFace vectors in a distance computation would silently corrupt every
 match, so `ClusterFaces` filters strictly by embedding dimensionality (512) before doing
 anything else. Worth remembering for *any* future code that queries this table broadly rather
 than by a known `file_id` — the multi-user phase especially.
 
-**Validated on real data**: ran detection over 60 real photos (a `alice` photo album, chosen
+**Validated on real data**: ran detection over 60 real photos (one of Consti's photo albums, chosen
 for likely repeat appearances of the same people), then clustered with Immich's defaults. Of 95
 real detections, got 3 clusters (sizes 17/13/4) and 61 left unclustered (single/rare
 appearances — plausible for background people in group shots). Spot-checked by cropping actual
@@ -617,7 +617,7 @@ count while a real scan was running).
 ### Done: chunked, self-requeuing clustering (fixed a real memory-limit crash)
 
 Triggered by a real incident, same class as the detection-batch-size one but on the other side
-of the pipeline: once the library scan (previous section) had been running a while, alice's own
+of the pipeline: once the library scan (previous section) had been running a while, Consti's own
 InsightFace detection count grew from the ~740 the clustering prototype was validated against to
 **13,825**, with 4,286 unclustered. Clicking "Run now" under Clustering started reliably failing
 — no error surfaced anywhere findable (checked Nextcloud's log, Apache's error log — which turned
