@@ -389,14 +389,11 @@ class AccessSyncService {
 	}
 
 	/**
-	 * "This row is Facewright's, not Recognize's legacy classifier's" - by embedding length, which
-	 * keeps the test in the SELECT instead of faulting in the off-page face_vector BLOB per row.
-	 * See DetectionService::VECTOR_LENGTH_FLOOR for the measurement that licenses it.
+	 * One definition, shared by every query that has to tell our rows from Recognize's.
+	 *
+	 * @see DetectionService::ownRowsExpr()
 	 */
 	private function ownRowsExpr(IQueryBuilder $qb): string {
-		return (string)$qb->expr()->gt(
-			$qb->func()->charLength('face_vector'),
-			$qb->createNamedParameter(DetectionService::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
-		);
+		return DetectionService::ownRowsExpr($qb);
 	}
 }

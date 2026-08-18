@@ -789,6 +789,12 @@ dimensions regardless. The real protection is that `MaintenanceJob` is deleted f
 (done manually). **It comes back on any Recognize upgrade or re-enable** — check for it after
 updating Recognize. `FsActionService.php:194,354` can also enqueue it on share/mount changes.
 
+> **Superseded — deleting `MaintenanceJob` was never sufficient.** There is a fourth enqueue
+> path this paragraph missed: `ClusteringFaceClassifier.php:135` re-adds `ClusterFacesJob`
+> itself, immediately after the classifier writes detections. So as long as Recognize's
+> classifier runs at all, clustering re-arms regardless of `oc_jobs` hygiene. The durable fix is
+> the `.noimage` marker — see "Recognize's classifier races us on new photos" below.
+
 The instance's 239 orphaned legacy 128-dim rows (all unclustered, from the defunct classifier)
 were deleted to stop them holding the trigger open. The table is now homogeneous 512-dim.
 
@@ -1084,6 +1090,149 @@ Left behind by verification, deliberately: 8 zero-face markers on real, previous
 (logos, scanned bills, kitchen-planning photos). Real results on real files, same call as the
 batch-trigger run kept earlier. **No detection rows were created or destroyed** — Consti 65,823 /
 Bob 65,970, byte-for-byte the pre-change baseline.
+
+### Done: Recognize's classifier races us on new photos, and winning the race destroyed the file
+
+Reported as "clustering seems stuck — the People page shows nothing for a photo I just added, but
+the admin page says 0 candidates". Nothing was stuck. Detection had run, found 2 faces, and marked
+the file processed; the candidate count was honest. The rows just went to the wrong place.
+
+For the reported file, `recognize_face_detections` held **128-dim rows for Consti** (Recognize's
+legacy face-api.js classifier) and **512-dim rows for Julia** (ours). Memories inner-joins
+detections to `recognize_face_clusters` (`RecognizeBackend.php:108,112,147`), so a row with
+`cluster_id IS NULL` is invisible — and `ClusteringService`'s dimensionality filter means a
+128-dim row can never *acquire* a cluster id. Consti's copy of that photo was permanently dead.
+
+**The mechanism is a race plus a bad tie-break.** `DetectionService::usersWithRowsFor()` skipped
+the insert for any user already holding rows for the file — deliberately counting Recognize's rows
+too, on the reasoning that either way a reader would see duplicates. But it still wrote the
+processed marker for that user. So whenever Recognize wrote first:
+
+1. Recognize's classifier writes 128-dim rows for the user.
+2. We infer, see rows, skip our insert.
+3. We mark processed anyway → **nothing ever revisits the file.**
+
+Damage at discovery: 57 files for Consti (55 already marked processed) and 80 for Julia (12
+marked) holding *only* legacy rows, plus 28 files where we won and Recognize wrote strays anyway.
+Growing with every upload.
+
+**Fix, two halves.**
+
+*Suppression is now dimension-aware.* `usersWithRowsFor()` counts only rows passing
+`VECTOR_LENGTH_FLOOR`. The predicate moved to `DetectionService::ownRowsExpr()` (public static,
+next to the constant) and `AccessSyncService`'s private copy now delegates to it — every query
+that has to tell the two apps' rows apart uses one definition. Worst case is now a user holding
+both a legacy row and ours for one file: visible and self-correcting, versus silent and permanent.
+
+*Recognize's classifier is stopped with `.noimage`, not with job hygiene.* `faces.enabled` cannot
+be turned off — Memories' `Util::recognizeIsEnabled()` reads that exact key — and it is also the
+only gate `ClassifierJob::runClassifier()` checks. Meanwhile `FsActionService` inserts into the
+faces queue **unconditionally**, `QueueService::insertIntoQueue()` adds `ClassifyFacesJob` on the
+spot, and `ClassifierJob` re-adds itself. Clearing jobs and queues is pure whack-a-mole; the
+backlog refills on the next uploaded or moved photo.
+
+Recognize's own ignore-marker mechanism is the way out, and it is honored in **all three** enqueue
+paths — `FileListener::isFileIgnored` (event), `FsActionService::isFileIgnored` (deferred), and
+`StorageService::getFilesInMount` (the crawl). `ClusteringFaceClassifier::MODEL_NAME` is `'faces'`
+and is grouped with `IGNORE_MARKERS_IMAGE` in each. Matching is a path **prefix** test, so an
+empty `.noimage` at `files/` covers a user's whole tree. One per user, all five here. Facewright
+never reads these markers, so its *reads* are unaffected — but installing one is **not** the inert,
+freely reversible act it looks like. See the next subsection; read it before touching a marker.
+
+#### The marker is a loaded gun in both directions — this destroyed 6,055 rows
+
+`FileListener` does not treat an ignore marker as a passive flag. It reacts to the marker's own
+filecache entry appearing or disappearing, and the reaction is a **mass action over the entire
+parent tree**:
+
+```php
+// CacheEntryInsertedEvent / NodeCreatedEvent, node is an ignore marker:
+$this->resetIgnoreCache($node);
+$this->postDelete($node->getParent());   // FileListener.php:198-208, :188-193
+// NodeDeletedEvent, node is an ignore marker:
+$this->postInsert($event->getNode()->getParent());  // FileListener.php:181-186
+```
+
+So `occ files:scan` indexing the new `.noimage` enqueued **56,414 `FsDeletion` actions** — one per
+file under `files/` — and `FsActionService::onDeletion()` executes each by deleting face detection
+rows **by `file_id` with no dimension filter**. That is the same trap already documented as #1 in
+the multi-user section, met from a direction nobody was looking at. It ate **6,055 of Facewright's
+own 512-dim rows across 2,198 files** (Julia 5,818 / 2,181, Consti 237 / 17) before it was stopped
+by deleting `ProcessFsActionsJob` from `oc_jobs` and clearing `oc_recognize_fs_deletions`. Consti
+was largely spared only because the job was still working through Julia's storage (`storage_id: 3`).
+
+**Deleting a marker is not an undo** — it fires `postInsert($parent)`, queueing the whole tree *for
+classification* instead. Both directions trigger a ~56k-file mass action; only the sign differs.
+That asymmetry is why the markers were kept: the purge is a one-time cost already paid, whereas
+removing them would re-arm the classifier at full scale *and* leave no kill switch.
+
+**Operational rule that follows: never let anything re-index a `.noimage` cache entry.** A routine
+`occ files:scan` over a user's tree is enough to re-fire the purge. If one is unavoidable, watch
+`SELECT COUNT(*) FROM oc_recognize_fs_deletions` and clear it before `ProcessFsActionsJob` drains
+it.
+
+**How it was caught, and the lesson:** the rehearsal transaction printed `det_before` 191,208 and
+`det_after_rollback` 189,885. A rollback must restore its own transaction exactly, so a
+non-reconciling pair means *another session* committed in between — that discrepancy was the only
+signal, and the deletion was still in progress at the time. Print a before/after pair around
+rehearsals and actually reconcile them; a count that "looks about right" would have missed this.
+
+**Recovery.** No dump of the deleted rows existed — they were gone before any backup was taken. But
+the files still existed and still carried `facewright_processed` markers with `faces_found > 0`, so
+deleting exactly those 2,198 markers returned them to the candidate set and a normal
+`occ facewright:scan` regenerated the rows through the ordinary pipeline, fan-out included. Worth
+remembering: **the processed marker is the recovery handle** — as long as the file and the marker
+disagree, the state is repairable without a backup.
+
+Verified through Recognize's own `IgnoreService` via the real DI container, not by inspection: all
+five storages report `ignoredDirs=["files"]`, and the reported photo evaluates to
+`would ignore: YES`. Suppression verified by reflection on the live service — for the reported
+file it now returns `["Julia"]` (so Consti *would* be inserted), while a control file where both
+users hold our own rows still suppresses both, confirming idempotency did not regress. Across a
+cron tick afterwards, `max(id)` in `recognize_face_detections` did not move and `queue_faces`
+stayed empty.
+
+**Deployment notes.** Pure PHP service changes, so no version bump and no `occ upgrade` (opcache
+here is `validate_timestamps=On`, `revalidate_freq=60`). The container restart *was* required, and
+not for routes: `IgnoreService` caches its result in `createLocal(...)` = **APCu with no TTL**, so
+Apache workers would otherwise keep a pre-marker empty list indefinitely and web-triggered
+enqueues (upload, MOVE) would slip through. Cron is CLI and gets a cold cache each run, so only
+the web side needed it.
+
+**Four operational traps hit while installing the markers**, all costing real time:
+
+- **`files:scan --shallow --path=/<user>/files` does not finish** on a 54k-file home storage —
+  two of them ran 12+ minutes holding open transactions and blocked every `oc_filecache` INSERT
+  with `Lock wait timeout exceeded` (50s = `innodb_lock_wait_timeout`). Scan the marker file
+  directly (`--path=/<user>/files/.noimage`) instead; it is instant once nothing else is running.
+- **`pkill -f files:scan` silently failed** inside the container. It reported nothing and the
+  processes kept running; only `ps -eo pid,etimes,args` revealed them, and `kill -9 <pid>` worked.
+  Do not trust `pkill` here.
+- **Killed scans leave orphaned locks in Redis** and the next attempt dies with "Another process
+  is already scanning". They are `<instanceid>/lockfiles/<md5>` where the hash is
+  `md5("<storage>::scanner::<path>")` — computable, so the exact stale keys can be identified and
+  deleted rather than flushing Redis. TTL is ~1h, far too long to wait out.
+- **The `nextcloud` DB user lacks `PROCESS`**, so `information_schema.INNODB_TRX` returns an
+  *access-denied error*, which reads as "no transactions" if only the row output is checked. This
+  sent the lock investigation down the wrong path twice. `PROCESSLIST` works (all connections are
+  that same user) — use it.
+
+Also noticed, and it is **Recognize's bug, not ours**: 386 `Array to string conversion` warnings
+at `doctrine/dbal/.../PDO/Statement.php#48`, two per DAV MOVE, because
+`oc_recognize_fs_moves.added_users` / `target_users` are bound as PHP arrays. The stored values
+are literally the string `"Array"`. Harmless to us; the 413 accumulated rows were deleted.
+
+**Healed.** The 137 broken `(user_id, file_id)` pairs were repaired by deleting their 232 legacy
+rows (verified beforehand as exactly 232 rows, all `JSON_LENGTH = 128`, all `cluster_id IS NULL`,
+and dumped to SQL first) plus their 67 `facewright_processed` markers, then letting
+`occ facewright:scan` re-detect them. Afterwards `pairs_still_only_legacy` = 0 and the legacy row
+count fell 272 → 40. Deleting by an explicit dumped id list — not by re-running the defining query
+at delete time — is what guarantees the rollback file covers exactly what was removed.
+
+The remaining **40 legacy rows sit on the 28 files where Facewright won the race** and Recognize
+wrote strays anyway. Our rows for those files exist and cluster correctly, so nothing is broken;
+they are inert leftovers, still invisible to Memories (`cluster_id IS NULL`). Cleaning them would
+make the table homogeneous 512-dim again but buys nothing while the classifier stays off.
 
 ### Next
 

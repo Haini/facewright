@@ -161,8 +161,20 @@ class DetectionService {
 	}
 
 	/**
-	 * Which of $userIds already hold detection rows for this file - ours or Recognize's, since
-	 * either way re-inserting would duplicate what a reader sees.
+	 * Which of $userIds already hold *our* detection rows for this file.
+	 *
+	 * Counting Recognize's legacy rows here as well - which this did until it caused a real
+	 * incident - loses the file permanently. Recognize's classifier is enqueued unconditionally by
+	 * its own FsActionService (no faces.enabled check), so on a busy instance it routinely wins the
+	 * race to a newly uploaded photo and writes its 128-dim rows first. We would then skip our own
+	 * insert for that user but still mark them processed, leaving them with vectors that
+	 * ClusteringService's dimensionality filter can never cluster and that Memories - which inner
+	 * joins detections to recognize_face_clusters - can never display. Nothing revisits the file,
+	 * because the marker says it is done.
+	 *
+	 * Restricting the test to our own rows means the worst case is a user holding both a legacy row
+	 * and ours for one file. That is visible and self-correcting; the alternative is silent and
+	 * permanent.
 	 *
 	 * @param list<string> $userIds
 	 *
@@ -177,7 +189,23 @@ class DetectionService {
 			->from('recognize_face_detections')
 			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
 			->andWhere($qb->expr()->in('user_id', $qb->createNamedParameter($userIds, IQueryBuilder::PARAM_STR_ARRAY)))
+			->andWhere(self::ownRowsExpr($qb))
 			->groupBy('user_id');
 		return array_column($qb->executeQuery()->fetchAll(), 'user_id');
+	}
+
+	/**
+	 * "This row is Facewright's, not Recognize's legacy classifier's" - by embedding length, which
+	 * keeps the test in the SELECT instead of faulting in the off-page face_vector BLOB per row.
+	 * See VECTOR_LENGTH_FLOOR for the measurement that licenses it.
+	 *
+	 * Lives here, next to the constant, because every query that has to tell the two apps' rows
+	 * apart needs the identical predicate - a second copy is exactly how the two drift.
+	 */
+	public static function ownRowsExpr(IQueryBuilder $qb): string {
+		return (string)$qb->expr()->gt(
+			$qb->func()->charLength('face_vector'),
+			$qb->createNamedParameter(self::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
+		);
 	}
 }
