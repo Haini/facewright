@@ -1463,6 +1463,64 @@ or base64 encodings that are smaller but would break `json_decode`.
 4. **Pin Docker's DNS** (`/etc/docker/daemon.json`) — see the gotcha above. Outstanding because
    applying it cycles every container on the host, so it wants scheduling.
 
+5. **Option C: move vectors into their own table, keyed by physical face.** The remaining
+   structural redundancy, measured and unchanged by the precision work above: **129,711 distinct
+   physical faces behind 195,883 rows — 1.51x duplication**, because fan-out stores the same
+   embedding once per user with access. Deduplicating means keying storage on the face rather than
+   on the (user, face) pair.
+
+   Savings, re-estimated against the *post-compaction* baseline rather than the original one — the
+   headline number is much smaller than it looked before Option A landed, because A already took
+   the easy two-thirds:
+
+   | scenario | est. MB |
+   |---|---:|
+   | today (A applied, vectors inline) | 1,042 |
+   | C, keeping `json round(6)` | 709 |
+   | C + base64 float32 | 439 |
+   | C + raw binary BLOB | 323 |
+
+   **The encoding and the location are coupled, and that is the real argument for C.** Rounded JSON
+   was chosen in A precisely because `face_vector` is Recognize's column and must stay
+   `json_decode`-able. A table *we* own has no such constraint, so C is what unlocks raw binary —
+   2,048 bytes for 512 float32, mathematically lossless, versus 4,804 today. Dedup alone is worth
+   ~330 MB; dedup plus binary is worth ~720 MB.
+
+   `recognize_face_detections` would fall to **~34 MB**, which also makes every non-vector query
+   (Memories' People page, `selectWantedIds()`, the ownership tests) cheap in a way no amount of
+   encoding work can achieve while the vector is inline.
+
+   **Three things to settle before writing any of it:**
+
+   - **`FacePhoto::delete()` breaks.** Leaving a stub in `face_vector` means Recognize's
+     "remove this face from this person" computes a centroid distance against `[]`. It is the only
+     live Recognize path that reads the column (Memories never does — verified), and it serves
+     Recognize's own `threshold` mechanism, which our clustering ignores. So the loss is narrow and
+     arguably already meaningless, but it is a real UI action that would start throwing, and that is
+     a decision to take deliberately rather than discover.
+   - **The face-identity key is genuinely unsettled.** `(file_id, x, y, height, width)` is the
+     natural identity and is bit-identical across copies today, since `AccessSyncService::copyToUsers()`
+     copies the same doubles — but a unique index on four floats is a smell, and it is not obvious it
+     stays exact if anything ever recomputes geometry. The alternative is a surrogate `face_index`
+     assigned per file at insert time, which `DetectionService` could do trivially for new rows but
+     which has to be derived deterministically for the existing 129,711. Do not start the migration
+     until this is chosen.
+   - **`VECTOR_LENGTH_FLOOR` disappears entirely, and that is an improvement.** With the vector gone
+     from Recognize's table there is no length to test, so "is this row ours" becomes the presence of
+     a row in our own table — an exact join instead of the char_length proxy that has needed
+     retuning once already and that one all-zero embedding already escapes. All 14 call sites change,
+     which makes this the largest blast radius of any option considered.
+
+   **Stripping `face_vector` is the first irreversible step this project would take** — the embedding
+   cannot be recomputed without re-running inference over the whole library. It needs a real dump of
+   the column first, not a rehearsal transaction, and the new table verified complete against
+   `COUNT(DISTINCT file_id, x, y, height, width)` *before* anything is overwritten.
+
+6. **Drop `oc_facerecog_faces`** — 240.8 MB / 72,562 rows belonging to the `facerecognition` app,
+   which `occ app:list` reports as **disabled**. Nothing reads it and nothing in this project ever
+   has. Uninstalling the app reclaims the space outright; the only reason it is still here is that
+   nobody has confirmed the user is finished with it.
+
 ### Instance versions
 
 Recorded because several notes above are version-sensitive and the instance has been upgraded
