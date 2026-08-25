@@ -228,10 +228,7 @@ class ClusteringService {
 			// is. What it removes is the 674 MB of transfer and all of the JSON decoding, leaving
 			// a two-row result. Dropping the dimension filter entirely would be cheaper still, but
 			// would silently miscount the legacy 128-dim rows this project has never owned.
-			->andWhere($qb->expr()->gt(
-				$qb->func()->charLength('face_vector'),
-				$qb->createNamedParameter(DetectionService::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
-			))
+			->andWhere(DetectionService::ownRowsExpr($qb))
 			->groupBy('user_id');
 
 		$counts = [];
@@ -291,10 +288,7 @@ class ClusteringService {
 			->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->gt(
-				$qb->func()->charLength('face_vector'),
-				$qb->createNamedParameter(DetectionService::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
-			));
+			->andWhere(DetectionService::ownRowsExpr($qb));
 		return $qb->executeStatement();
 	}
 
