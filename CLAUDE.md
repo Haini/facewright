@@ -1334,6 +1334,99 @@ directly through the real DI container by reflection, so only its `SELECT` ran �
 The two agreeing is the check that matters, since a preview that disagrees with the delete is worse
 than one that crashes.
 
+### Done: face vectors were float32 stored as float64 text — database down 40%
+
+Asked to analyse what the face vectors cost and propose fixes. Measured first:
+`oc_recognize_face_detections` was **3,087.6 MB of a 5,074.4 MB database — 61.3%**, holding
+195,883 rows over 50,755 files for 2 users.
+
+Two independent causes, and the second one is the interesting one:
+
+1. **Every row burned a full 16 KB page.** At ~10,751 bytes the vector exceeded InnoDB DYNAMIC's
+   ~8,126-byte limit and went off-page, taking a dedicated 16 KB page whatever the payload:
+   `195,883 x 16 KB = 3,061 MB` against 3,087.6 MB measured, i.e. essentially the whole table,
+   of which **1,079 MB (35%) was page padding**.
+2. **The vectors were float32 data written as float64 text** — 21.0 characters per component,
+   because `serialize_precision=-1` asks `json_encode` for the shortest round-trip of a *double*
+   while InsightFace emits float32. Proved rather than assumed: re-packing a stored vector through
+   `pack('g')` (float32) and back changes its cosine distance by **exactly 0.0**, so the extra
+   ~12 characters per component carried no information at all.
+
+Fixed by rounding to 6 decimal places on write — `DetectionService::VECTOR_PRECISION`, applied
+through the new `DetectionService::encodeVector()`, which is now the single place an embedding
+becomes text. 6 was chosen because it is *free*: 4, 5 and 6 decimals all yield 3 rows per 16 KB
+page, so the extra fidelity costs nothing.
+
+| | before | after |
+|---|---:|---:|
+| vector payload | 2,008.4 MB | 897.6 MB |
+| mean bytes/row | 10,751 | 4,804 |
+| table data | 3,087.6 MB | **1,026.0 MB** |
+| `.ibd` on disk | 3,180 MB | **1,044 MB** |
+| whole database | 5,074.4 MB | **3,007.0 MB** |
+
+**The trap this springs, and it is the whole reason this needed care.** `VECTOR_LENGTH_FLOOR` was
+`char_length(face_vector) > 6000`, used at **14 call sites** across `DetectionService`,
+`AccessSyncService`, `ClusteringService` and `ResetService`. Compaction drops every vector to
+~4,800, so the first compacted row would have flipped that predicate to "this is Recognize's" —
+everywhere at once, silently, with no error. The floor is now **3500**, which works because the
+bands stay disjoint *including mid-migration*, when old and new encodings coexist:
+
+```
+legacy 128-dim          2,621 -  2,655   (39 rows)
+ours, VECTOR_PRECISION  4,748 -  4,863
+ours, pre-compaction   10,672 - 10,827
+```
+
+Retuning the floor beat the alternative of deleting the legacy rows to make the table homogeneous:
+nothing is destroyed, and the three-band property is what makes the migration incrementally safe.
+Verified as a strict no-op before any row was rewritten — floors 6000 and 3500 classified
+identically (195,843 each) and the new middle band was empty.
+
+**`occ facewright:compact-vectors [--dry-run] [--chunk-size] [--limit]`** does the backlog
+(`VectorCompactionService`). Deliberately a command, not a migration step: 2 GB of rewrites is far
+too much for `occ upgrade`'s maintenance window, and it is resumable twice over — an id cursor, plus
+a length predicate that can never re-select an already-compacted row even if the cursor resets. It
+refuses to write anything that grew, or that would land *below* `VECTOR_LENGTH_FLOOR`, since either
+would be invisible until something downstream misread it.
+
+**Accuracy was verified against clustering decisions, not just byte counts.** Snapshotting 200 real
+vectors and re-comparing after compaction: max per-component change **5.0e-7** (exactly the round(6)
+bound), max change in pairwise cosine distance **1.682e-6**, and across **19,900 pairs, zero
+changed side of the 0.5 clustering threshold**.
+
+Run: 195,643 rows in 190s, 0 skipped. Afterwards row counts were byte-identical to baseline
+(195,883 total / 195,843 ours), 0 rows left in the old band, 0 stranded in the gap, and 0 failing
+the 512-dim check. `OPTIMIZE TABLE` in maintenance mode took **3.4s** — surprisingly fast, but the
+`.ibd` really did drop 3,180 → 1,044 MB and `data_free` went 1,614 → 0 MB.
+
+**The I/O win is bigger than the disk win** and was the real motivation: rows now fit back in-page,
+so a vector fetch no longer costs a private page read that read-ahead cannot batch. Fetching all
+129,653 of one user's vectors — the clustering-shaped query that used to be 1,023 MB and 8.4 s, and
+340 MB / 3.2 s after the id/vector split — now ships 594 MB and reads **4.6 MB from disk** in 2.3 s,
+because the whole table finally fits in the 2 GB buffer pool sized in the MariaDB-tuning section.
+
+**Found while reconciling the final counts**: one row decodes to 512 dims but sits below the floor.
+Id 31948 is an embedding of **all zeros**, so it encodes to 1,292 characters however precise the
+format. It is a degenerate detection (cosine distance against a zero vector is undefined), already
+parked at `UNCLUSTERABLE`, and the misclassification costs nothing but `facewright:reset` never
+collecting it. It also corrects the record: the **1,292 lower bound previously documented for the
+legacy 128-dim band was always this row** — the real legacy floor is 2,621.
+
+Not done, and still available: `oc_facerecog_faces` is **240.8 MB / 72,562 rows** belonging to the
+`facerecognition` app, which `occ app:list` reports as **disabled**. Nothing reads it. Also still
+open is the deeper structural win — **129,711 distinct physical faces behind 195,883 rows, 1.51x
+duplication**, because fan-out stores the same embedding once per user with access. Moving vectors
+to their own table keyed by physical face would fix precision and duplication together and leave
+`recognize_face_detections` at ~18 MB, but it breaks `FacePhoto::delete()` (see below), so it was
+not bundled here.
+
+**Compatibility was checked, not assumed.** Memories never reads `face_vector` at all. The only
+live Recognize path that does is `Dav/Faces/FacePhoto::delete()` — "remove this face from this
+person" — and it uses it for Recognize's own `threshold` mechanism, which our clustering ignores.
+Rounded JSON keeps that working unchanged, which is exactly why this option was picked over binary
+or base64 encodings that are smaller but would break `json_decode`.
+
 ### Next
 
 1. **Multi-user rollout: the backfill is done.** This item used to say the full backfill had never

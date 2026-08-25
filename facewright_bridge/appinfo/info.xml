@@ -26,6 +26,7 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\FacewrightBridge\Command\MergeClusters</command>
 		<command>OCA\FacewrightBridge\Command\BackfillAccess</command>
 		<command>OCA\FacewrightBridge\Command\InitUserSettings</command>
+		<command>OCA\FacewrightBridge\Command\CompactVectors</command>
 	</commands>
 	<!-- app-info.xsd declares <settings> as an xs:sequence: admin, admin-section, personal,
 	     personal-section. Reordering these makes the app info fail to parse. -->

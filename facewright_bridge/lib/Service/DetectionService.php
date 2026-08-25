@@ -28,17 +28,69 @@ class DetectionService {
 	public const SUPPORTED_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 
 	/**
+	 * Decimal places kept when encoding an embedding.
+	 *
+	 * InsightFace emits float32, but PHP floats are doubles and serialize_precision=-1 asks
+	 * json_encode for the shortest round-trip of a *double* - so every component was being written
+	 * at 21 characters when ~9 carries the entire float32 value. Measured on the live table: 10,752
+	 * bytes per vector against 4,805 at 6 decimal places, and re-packing a stored vector through
+	 * float32 and back changes its cosine distance by exactly 0.0, i.e. the extra characters
+	 * carried no information at all.
+	 *
+	 * 6 was chosen over the alternatives because it is free: 4, 5 and 6 decimal places all yield 3
+	 * rows per 16 KB InnoDB page, so the extra fidelity costs nothing. The resulting cosine error
+	 * is 3.3e-7 against a clustering threshold of 0.5.
+	 *
+	 * The size effect is bigger than the byte count suggests. At ~10.7 KB a row exceeded InnoDB
+	 * DYNAMIC's ~8,126-byte limit and its vector went off-page, taking a dedicated 16 KB page
+	 * whatever the payload - which is why 195,883 rows occupied 3,087 MB for 2,008 MB of vectors,
+	 * and why every vector fetch cost a page read read-ahead could not batch.
+	 */
+	public const VECTOR_PRECISION = 6;
+
+	/**
 	 * char_length(face_vector) above which a row is one of ours (512-dim InsightFace) rather than
-	 * Recognize's legacy 128-dim face-api.js data. Measured on the live table: legacy rows span
-	 * 1,292-2,658 characters and ours 10,672-10,826, so 6000 sits in the middle of an 8,000-wide
-	 * gap. Used instead of decoding the JSON because it keeps the "is this ours" test set-based -
-	 * face_vector is an off-page BLOB, and touching it costs a dedicated page read per row (the
-	 * lesson from clustering's 1023 MB -> 340 MB fix).
+	 * Recognize's legacy 128-dim face-api.js data. Used instead of decoding the JSON because it
+	 * keeps the "is this ours" test set-based - touching face_vector costs a page read per row for
+	 * any row still in the pre-VECTOR_PRECISION encoding (the lesson from clustering's
+	 * 1023 MB -> 340 MB fix).
+	 *
+	 * Measured on the live table, there are three bands, not two, because re-encoding is
+	 * incremental and old and new rows coexist while it runs:
+	 *
+	 *   legacy 128-dim          2,621 -  2,655   (39 rows)
+	 *   ours, VECTOR_PRECISION  4,748 -  4,863
+	 *   ours, pre-compaction   10,672 - 10,827
+	 *
+	 * 3500 is the only floor that reads all three correctly, with 2,093 characters of room below
+	 * and 1,248 above. It replaced 6000, which was correct for two bands but would have silently
+	 * reclassified every compacted row as Recognize's the moment the first one was written - across
+	 * all 14 call sites at once, with no error anywhere.
+	 *
+	 * One row escapes the proxy and always has: id 31948 is a 512-dim embedding of all zeros, so it
+	 * encodes to 1,292 characters and reads as legacy. It is a degenerate detection - cosine
+	 * distance against an all-zero vector is undefined - and it is already parked at UNCLUSTERABLE,
+	 * so the misclassification costs nothing beyond reset never collecting it. Worth knowing
+	 * because the 1,292 lower bound previously recorded for the legacy band was in fact this row;
+	 * the real legacy floor is 2,621.
 	 *
 	 * The authoritative definition of "ours" is still ClusteringService::EXPECTED_DIMENSIONS; this
-	 * is a cheap proxy for it, valid only while those two length bands stay disjoint.
+	 * is a cheap proxy for it, valid only while those bands stay disjoint.
 	 */
-	public const VECTOR_LENGTH_FLOOR = 6000;
+	public const VECTOR_LENGTH_FLOOR = 3500;
+
+	/**
+	 * The one place an embedding becomes text. Anything writing face_vector goes through here, so
+	 * the encoding cannot drift between the detection path and the compaction command.
+	 *
+	 * @param list<float> $embedding
+	 */
+	public static function encodeVector(array $embedding): string {
+		return json_encode(array_map(
+			static fn (float $f): float => round($f, self::VECTOR_PRECISION),
+			$embedding,
+		));
+	}
 
 	public function __construct(
 		private IDBConnection $db,
@@ -111,9 +163,9 @@ class DetectionService {
 		$inserted = 0;
 		foreach ($faces as $face) {
 			[$x1, $y1, $x2, $y2] = $face['bbox'];
-			// Encoded once and reused: at ~10.7 KB per embedding, re-encoding per user would be
-			// the most expensive thing in this loop.
-			$vector = json_encode($face['embedding']);
+			// Encoded once and reused: re-encoding per user would be the most expensive thing in
+			// this loop.
+			$vector = self::encodeVector($face['embedding']);
 			$x = $x1 / $imageWidth;
 			$y = $y1 / $imageHeight;
 			$width = ($x2 - $x1) / $imageWidth;
