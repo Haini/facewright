@@ -22,6 +22,10 @@ use OCP\IDBConnection;
  * before matching. So "every cluster referenced by a 512-dim detection" and "every cluster we
  * ever created" are the same set - safe to delete outright rather than requiring it to end up
  * empty first.
+ *
+ * "Ours" is decided by DetectionService::ownRowsExpr(), in the SELECT, rather than by decoding
+ * every embedding in PHP - see findOwnRows() for why that mattered enough to change on a
+ * destructive command.
  */
 class ResetService {
 	private const CHUNK_SIZE = 500;
@@ -49,19 +53,37 @@ class ResetService {
 		];
 	}
 
-	/** @return array{0: list<int>, 1: list<int>} [detectionIds, clusterIds] */
+	/**
+	 * The ids to delete, decided entirely in the SELECT.
+	 *
+	 * This used to fetchAll() the whole table with face_vector selected and json_decode() each row
+	 * to test its dimensionality - the same anti-pattern already removed from loadDetections() and
+	 * countUnclusteredByUser(), missed here because the reset command is rarely run. At ~196k rows
+	 * averaging ~10.7 KB that is ~2.1 GB of off-page BLOB before decoding, and it died on PHP's
+	 * 4 GB memory_limit. It failed before any DELETE ran, so no reset was ever left half-applied,
+	 * but both the preview and the wipe were unusable.
+	 *
+	 * Projecting id + cluster_id never faults the face_vector pages at all, and the rows are
+	 * streamed rather than materialised, so peak memory is now the id list alone.
+	 *
+	 * Note this changes the dimensionality test on a *destructive* path from exact (decode, count
+	 * elements) to ownRowsExpr()'s char_length proxy. Both error directions are safe here, which is
+	 * what licenses it: over-deleting a legacy row would need one longer than 6,000 characters, and
+	 * 128 floats cannot reach that (measured 1,292-2,658; it would take ~280 dimensions), while
+	 * under-deleting one of ours merely leaves a row behind for the next run.
+	 *
+	 * @return array{0: list<int>, 1: list<int>} [detectionIds, clusterIds]
+	 */
 	private function findOwnRows(): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('id', 'face_vector', 'cluster_id')->from('recognize_face_detections');
-		$rows = $qb->executeQuery()->fetchAll();
+		$qb->select('id', 'cluster_id')
+			->from('recognize_face_detections')
+			->where(DetectionService::ownRowsExpr($qb));
+		$result = $qb->executeQuery();
 
 		$detectionIds = [];
 		$clusterIds = [];
-		foreach ($rows as $row) {
-			$vector = json_decode($row['face_vector'], true);
-			if (!is_array($vector) || count($vector) !== ClusteringService::EXPECTED_DIMENSIONS) {
-				continue;
-			}
+		while ($row = $result->fetch()) {
 			$detectionIds[] = (int)$row['id'];
 			// Negative cluster ids are sentinels (Facewright's UNCLUSTERABLE, Recognize's
 			// RECOGNIZE_REJECTED), not real recognize_face_clusters rows - collecting them would
@@ -71,6 +93,7 @@ class ResetService {
 				$clusterIds[(int)$row['cluster_id']] = true;
 			}
 		}
+		$result->closeCursor();
 
 		return [$detectionIds, array_keys($clusterIds)];
 	}

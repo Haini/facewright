@@ -1295,6 +1295,45 @@ Verified after the recreate: pool 129,792 pages (2,076 MB), `key_buffer_size` 0 
   `mem_limit: 4g` to `"4294967296"` and expands `command:` into a list, which is enough to catch a
   malformed flag without a maintenance window.
 
+### Done: `occ facewright:reset` could not run at all — both halves OOMed
+
+Found while cross-checking something else: `occ facewright:reset --dry-run` died with
+`Allowed memory size of 4294967296 bytes exhausted`. Both of the command's two paths held the
+same anti-pattern this project has already removed twice — `ClusteringService::loadDetections()`
+(1023 MB → 340 MB, the id/vector split) and `countUnclusteredByUser()` (674 MB → an aggregate).
+The reset command was simply never revisited, because it is rarely run.
+
+- `ResetFacewrightData::countOwnRows()` — the **preview** — selected `face_vector` for every row
+  in the table, `fetchAll()`ed it, and `json_decode()`d each one to count elements.
+- `ResetService::findOwnRows()` — the **actual delete path** — did the identical thing, plus `id`.
+
+At ~196k rows averaging ~10.7 KB that is ~2.1 GB of off-page BLOB before decoding. So the command
+was unusable in both directions, and the worse half is the preview: the safety rail on a
+destructive instance-wide wipe is exactly the part that has to keep working.
+
+**Nothing was ever left half-deleted.** `findOwnRows()` runs to completion before the first
+`DELETE` is issued, so the failure is always fatal-before-write, never partial.
+
+Fixed by deciding "ours" in the `SELECT` via `DetectionService::ownRowsExpr()`: the preview is now
+three aggregates, and the delete path projects `id` + `cluster_id` only and streams with `fetch()`.
+Neither faults the `face_vector` pages. The predicates mirror each other line for line,
+`cluster_id > 0` included, so the numbers the preview prints are the numbers the delete reports.
+
+**One deliberate semantic change, on a destructive path**: the dimensionality test moves from exact
+(decode, count elements) to `ownRowsExpr()`'s `char_length > 6000` proxy. Both error directions are
+safe here, which is what licenses it — over-deleting a legacy row would need one longer than 6,000
+characters, and 128 floats cannot reach that (measured 1,292–2,658; it would take ~280 dimensions),
+while under-deleting one of ours merely leaves a row for the next run. That reasoning is *specific
+to this table's two dimension bands*; do not carry the proxy onto a destructive path elsewhere
+without redoing it.
+
+Verified live, without deleting anything: the preview now completes in 42.7 s
+(195,843 detections / 4,911 clusters / 158,120 processed records), and `findOwnRows()` — invoked
+directly through the real DI container by reflection, so only its `SELECT` ran — returns the same
+195,843 and 4,911 in 23.4 s at **33.0 MB peak memory** against the 4096 MB limit it used to exhaust.
+The two agreeing is the check that matters, since a preview that disagrees with the delete is worse
+than one that crashes.
+
 ### Next
 
 1. **Multi-user rollout: the backfill is done.** This item used to say the full backfill had never
