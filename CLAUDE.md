@@ -1297,19 +1297,23 @@ Verified after the recreate: pool 129,792 pages (2,076 MB), `key_buffer_size` 0 
 
 ### Next
 
-1. **Finish the multi-user rollout.** The full backfill (`occ facewright:backfill-access`, 65,757
-   rows / ~671 MB) has **not** been run — only one small mount, as a staged check. Before running
-   it: `automatic_clustering_enabled` should stay off, because Bob's unclustered count will jump
-   from ~0 to tens of thousands at once and `ClusteringMaintenanceJob` would start a chain
-   immediately — recreating for her, in one go, the exact scale problem already solved once for
-   Consti. Also still untested at runtime: the share/unshare event path (no `occ` command creates
-   shares, so it needs a real share in the browser or a file moved in and out of a shared folder),
-   and `PruneService` actually deleting. `--prune` has never been run; the dry run reports 0 stale
-   rows, which is correct but means the delete path is unexercised. **Note names do not travel with
-   a share**: copies land `cluster_id = NULL`, so a recipient's clustering rediscovers the same
-   people under its own untitled cluster ids. Still deferred: empty-cluster cleanup after a prune
-   (Recognize doesn't do it either), a user-deleted listener, a resume cursor for
-   `BatchTriggerService`'s O(processed) re-walk, and resilience to Recognize updates.
+1. **Multi-user rollout: the backfill is done.** This item used to say the full backfill had never
+   been run. It has since completed — `occ facewright:backfill-access --dry-run` now reports
+   **19 mounts, 180,297 files examined, 0 rows to copy and 0 to prune**, where the same read-only
+   command on the same code path previously reported 65,757 rows to copy. The command is idempotent
+   by construction, so a no-op run is exactly what a finished backfill looks like; the 65,757 → 0
+   swing on unchanged code is what makes that a completion rather than a query that stopped finding
+   donors. `automatic_clustering_enabled` is now `true`, which the old wording warned against — moot,
+   since there is nothing left to fan out in one burst.
+
+   Still genuinely open: the share/unshare event path is untested at runtime (no `occ` command
+   creates shares, so it needs a real share in the browser or a file moved in and out of a shared
+   folder), and `PruneService` has never actually deleted — `--prune` reports 0 stale rows, which is
+   correct but leaves the delete path unexercised. **Note names do not travel with a share**: copies
+   land `cluster_id = NULL`, so a recipient's clustering rediscovers the same people under its own
+   untitled cluster ids. Still deferred: empty-cluster cleanup after a prune (Recognize doesn't do it
+   either), a user-deleted listener, a resume cursor for `BatchTriggerService`'s O(processed)
+   re-walk, and resilience to Recognize updates.
 
 2. **Threshold re-tuning is fixed on the personal page only.** `clearUnclusterableMarks()` runs when
    a *user* changes their own numbers (see the per-user-mode section). The admin page's two inputs
