@@ -698,6 +698,10 @@ pool + 128 MB `key_buffer` + 128 MB aria pagecache + 16 MB log buffer + ~62 MB m
 allocator residue from a past peak that only a restart releases. `key_buffer_size` is pure waste
 here — `Key_read_requests` is 0 and every table is InnoDB.
 
+> **Followed up.** The `key_buffer` waste and the allocator residue described here were both
+> acted on later, along with the buffer pool itself — and the residue turned out to have a
+> nameable cause (glibc arenas). See "MariaDB tuning — the RAM was glibc arenas" below.
+
 What clustering *was* doing is enormous I/O. `ClusteringService::loadDetections()` selected
 `face_vector` for every one of a user's detections on every chunk. That column is a `longtext`
 averaging ~10.7 KB, so in DYNAMIC row format it lives **off-page**: InnoDB spends a dedicated
@@ -1233,6 +1237,63 @@ The remaining **40 legacy rows sit on the 28 files where Facewright won the race
 wrote strays anyway. Our rows for those files exist and cluster correctly, so nothing is broken;
 they are inert leftovers, still invisible to Memories (`cluster_id IS NULL`). Cleaning them would
 make the table homogeneous 512-dim again but buys nothing while the classifier stays off.
+
+### Done: MariaDB tuning — the RAM was glibc arenas, not Facewright (host-level)
+
+Asked "the mariadb process is taking a lot of RAM again - is this due to facewright?". **No**, and
+the same trap as last time caught the obvious reading: **`nextcloud-db-1`'s RSS is not what MariaDB
+is using.** At 2,268 MB resident it reported `Memory_used` = 885 MB against `Memory_used_initial`
+= 846 MB — i.e. **39 MB above its fixed startup allocation**. Facewright was idle at the time:
+`Innodb_data_read` was byte-identical across three samples 40 s apart, no `DetectQueuedJob` /
+`BatchScanJob` / `ClusterScanJob` rows existed in `oc_jobs`, and only 39 of 195,827 detections
+were still pending clustering.
+
+**The residue has a specific cause, and it is worth knowing because it will recur.** glibc creates
+up to `8 × ncores` malloc arenas — 8 cores here, so **64 arenas × 64 MB heap = a 4 GB theoretical
+ceiling** on memory that is freed inside the process but never returned to the OS. The observed
+1,383 MB gap sits comfortably inside that. It is not a leak and no query causes it; only a restart
+releases it.
+
+Four changes, all in the `db` service of `/mnt/data/nextcloud/docker-compose.yml` (reached via the
+symlink `/home/constantin/homecloud/nextcloud`, which is **not** under version control — the
+`homecloud` repo shows its tracked copy as deleted, so a timestamped `cp` is the only rollback):
+
+- **`MALLOC_ARENA_MAX: 4`** — the actual fix for the reported symptom, capping arena residue at
+  ~256 MB instead of 4 GB. Everything else below is tuning that happened to share the window.
+- **`--innodb-buffer-pool-size=2G`** (was 512M) — the DB is 5,071 MB across 292 tables, of which
+  `oc_recognize_face_detections` alone is **3,109 MB, 61% of the instance's entire database**.
+  A 512 MB pool against that meant every clustering pass evicted the whole cache and every other
+  app re-read from disk. This is the one genuinely Facewright-shaped constraint here: our table
+  dominates this instance's working set, so pool sizing is a Facewright decision whether or not
+  it looks like one.
+- **`--key-buffer-size=0`** (was MariaDB's compile-time default 128M) — provably dead: all 292
+  tables are InnoDB, and `Key_blocks_used` / `Key_reads` / `Key_write_requests` were all 0.
+  **Do not do the same to `aria_pagecache_buffer_size`**, which looks identical but is actively
+  used for internal temp tables (`Aria_pagecache_read_requests` = 29.8 M) and is `READ_ONLY = YES`.
+- **`mem_limit: 4g`** — a runaway ceiling, not a budget, sized above the ~2.7 GB expected steady
+  state. Swap deliberately left unrestricted (no `memswap_limit`), so the cap cannot turn a swap
+  event into an OOM kill; `restart: always` covers the genuine-runaway case.
+
+Verified after the recreate: pool 129,792 pages (2,076 MB), `key_buffer_size` 0 with
+`Key_blocks_unused` 0 (was 107,163), `Memory_used_initial` 846 MB → 2,215 MB, cgroup `memory.max`
+= 4294967296, `MALLOC_ARENA_MAX` = 4, container swap 287 MB → 0 (host swap free recovered
+101 → 387 MB), `status.php` 200 in 51 ms. The only two log entries in the window were
+`ServerMaintenanceMode` from a DAV client hitting the deliberate `occ maintenance:mode --on`.
+
+**Three gotchas worth not rediscovering:**
+
+- **The `nextcloud` DB user cannot `SET GLOBAL`** — `ERROR 1227 ... need SUPER`; it holds only
+  `USAGE ON *.*` plus `ALL` on its own schema. This kills the obvious no-downtime plan, since both
+  `innodb_buffer_pool_size` and `key_buffer_size` are otherwise `READ_ONLY = NO` and would have
+  been rehearsable live. Same shape as the already-documented missing `PROCESS` privilege. The
+  root password is sitting **in plaintext in a commented-out line** of that compose file if a
+  privileged session is ever genuinely needed.
+- **RSS climbs for hours after the change and that is correct.** InnoDB allocates the buffer pool
+  lazily — immediately after restart it was 256 MB resident with 121,157 of 129,792 pages free.
+  The number that matters is the *gap* between RSS and `Memory_used`, not RSS itself.
+- **`docker compose config` validates the edit before anything restarts** — it resolves
+  `mem_limit: 4g` to `"4294967296"` and expands `command:` into a list, which is enough to catch a
+  malformed flag without a maintenance window.
 
 ### Next
 
