@@ -1520,59 +1520,79 @@ instance from **5,074.4 MB to 2,737.3 MB — a 46.1% reduction.**
 4. **Pin Docker's DNS** (`/etc/docker/daemon.json`) — see the gotcha above. Outstanding because
    applying it cycles every container on the host, so it wants scheduling.
 
-5. **Option C: move vectors into their own table, keyed by physical face.** The remaining
-   structural redundancy, measured and unchanged by the precision work above: **129,711 distinct
-   physical faces behind 195,883 rows — 1.51x duplication**, because fan-out stores the same
-   embedding once per user with access. Deduplicating means keying storage on the face rather than
-   on the (user, face) pair.
+5. **Option C — deliberately deferred, not outstanding.** Moving vectors into a table we own,
+   keyed by physical face. Investigated properly and **decided against for now**; this entry exists
+   so the reasoning does not have to be rebuilt, and so the trigger that reverses it is written down.
 
-   Savings, re-estimated against the *post-compaction* baseline rather than the original one — the
-   headline number is much smaller than it looked before Option A landed, because A already took
-   the easy two-thirds:
+   **The framing that decides it is growth rate, not current size.** The one-off reclaim is the
+   uninteresting half. Julia already holds a copy of essentially every face in the library
+   (129,671 of 129,711), so what Option C really changes is what the *next* full-access user costs:
+
+   ```
+   today:      129,711 x 4,804 B  ~=  594 MB per additional user
+   Option C:   129,711 x    90 B  ~=   11 MB per additional user
+   ```
+
+   **The duplication, measured, so nobody re-derives it:**
+
+   ```
+   129,711 distinct physical faces
+     63,539 held by 1 user   ->  63,539 rows
+     66,172 held by 2 users  -> 132,344 rows
+                                -------
+                                195,883 rows
+   ```
+
+   i.e. **66,172 rows are byte-identical duplicate embeddings, ~303 MB**, written by
+   `AccessSyncService::copyToUsers()` copying the donor's `face_vector` string verbatim.
+
+   One-off sizes if it were done:
 
    | scenario | est. MB |
    |---|---:|
-   | today (A applied, vectors inline) | 1,042 |
+   | today (Option A applied) | 1,042 |
    | C, keeping `json round(6)` | 709 |
-   | C + base64 float32 | 439 |
    | C + raw binary BLOB | 323 |
 
-   **The encoding and the location are coupled, and that is the real argument for C.** Rounded JSON
-   was chosen in A precisely because `face_vector` is Recognize's column and must stay
-   `json_decode`-able. A table *we* own has no such constraint, so C is what unlocks raw binary —
-   2,048 bytes for 512 float32, mathematically lossless, versus 4,804 today. Dedup alone is worth
-   ~330 MB; dedup plus binary is worth ~720 MB.
+   **Encoding and location are coupled, and that is the non-obvious part.** Rounded JSON was forced
+   on Option A because `face_vector` is Recognize's column and must stay `json_decode`-able. A table
+   *we* own has no such constraint, so moving the vector is precisely what unlocks raw binary —
+   2,048 bytes for 512 float32, mathematically lossless, against 4,804 today. Also worth knowing:
+   `recognize_face_detections` would fall to **~34 MB**, making every non-vector query (Memories'
+   People page, `selectWantedIds()`, the ownership tests) cheap in a way no encoding work can while
+   the vector is inline.
 
-   `recognize_face_detections` would fall to **~34 MB**, which also makes every non-vector query
-   (Memories' People page, `selectWantedIds()`, the ownership tests) cheap in a way no amount of
-   encoding work can achieve while the vector is inline.
+   **Why deferred anyway:** ~719 MB against 1.4 TB free is not worth it. The change rewrites all 14
+   `VECTOR_LENGTH_FLOOR` call sites across `DetectionService`, `AccessSyncService`,
+   `ClusteringService` and `ResetService` — the largest blast radius of anything considered here —
+   and **stripping `face_vector` would be this project's first genuinely irreversible step**.
+   Everything destructive so far has had a recovery handle (the processed-marker trick, rehearsal
+   transactions, dumped id lists); this one has none, since embeddings only come back by re-running
+   inference over 50,755 files. Option A already took the easy two-thirds, which is exactly why C
+   reads so much weaker now than when it was first written up.
 
-   **Three things to settle before writing any of it:**
+   **The trigger that reverses this decision: a third user**, or existing users' shared content
+   moving toward full overlap. At that point the per-user growth term dominates and the one-off cost
+   stops mattering. Nothing else should reopen it.
 
-   - **`FacePhoto::delete()` breaks.** Leaving a stub in `face_vector` means Recognize's
-     "remove this face from this person" computes a centroid distance against `[]`. It is the only
-     live Recognize path that reads the column (Memories never does — verified), and it serves
-     Recognize's own `threshold` mechanism, which our clustering ignores. So the loss is narrow and
-     arguably already meaningless, but it is a real UI action that would start throwing, and that is
-     a decision to take deliberately rather than discover.
-   - **The face-identity key is genuinely unsettled.** `(file_id, x, y, height, width)` is the
-     natural identity and is bit-identical across copies today, since `AccessSyncService::copyToUsers()`
-     copies the same doubles — but a unique index on four floats is a smell, and it is not obvious it
-     stays exact if anything ever recomputes geometry. The alternative is a surrogate `face_index`
-     assigned per file at insert time, which `DetectionService` could do trivially for new rows but
-     which has to be derived deterministically for the existing 129,711. Do not start the migration
-     until this is chosen.
-   - **`VECTOR_LENGTH_FLOOR` disappears entirely, and that is an improvement.** With the vector gone
-     from Recognize's table there is no length to test, so "is this row ours" becomes the presence of
-     a row in our own table — an exact join instead of the char_length proxy that has needed
-     retuning once already and that one all-zero embedding already escapes. All 14 call sites change,
-     which makes this the largest blast radius of any option considered.
+   **Two things settled now, while the context is fresh:**
 
-   **Stripping `face_vector` is the first irreversible step this project would take** — the embedding
-   cannot be recomputed without re-running inference over the whole library. It needs a real dump of
-   the column first, not a rehearsal transaction, and the new table verified complete against
-   `COUNT(DISTINCT file_id, x, y, height, width)` *before* anything is overwritten.
+   - **The face-identity key is the hard part and is still unchosen.**
+     `(file_id, x, y, height, width)` is the natural identity and is bit-identical across copies
+     today, since `copyToUsers()` copies the same doubles — but a unique index on four floats is a
+     smell and stops being exact if anything ever recomputes geometry. The alternative is a
+     surrogate `face_index` per file. Whichever is picked, **do not start the migration until it is
+     chosen** — it is not a detail that can be settled while writing the code.
+   - **Assigning a `face_index` at insert time was considered and deliberately not done.** It would
+     be purely additive, break nothing, and shrink any future Option C to deriving only the
+     pre-existing 129,711 faces instead of the whole table. Left out so the project does not carry
+     scaffolding for work that may never happen — its absence is a decision, not an oversight.
 
+   **The one Recognize casualty, if it is ever done:** `Dav/Faces/FacePhoto::delete()` — Memories'
+   "remove this face from this person" — would compute a centroid distance against a stubbed column.
+   It is the *only* live Recognize path that reads `face_vector` (Memories itself never does,
+   verified), and it serves Recognize's own `threshold` mechanism, which our clustering ignores. So
+   the loss is narrow and arguably already meaningless, but it is a real button that would throw.
 
 ### Instance versions
 
