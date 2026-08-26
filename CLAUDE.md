@@ -1427,6 +1427,58 @@ person" — and it uses it for Recognize's own `threshold` mechanism, which our 
 Rounded JSON keeps that working unchanged, which is exactly why this option was picked over binary
 or base64 encodings that are smaller but would break `json_decode`.
 
+### Done: removed the `facerecognition` app — but its 46 named people were worth keeping
+
+Item 6 was "drop a 240.8 MB dead table". Looking at the target first turned it into something else:
+the group was **four tables, 270.7 MB** (`faces` 245.2, `images` 21.9, `persons` 3.5, `models` 0.0),
+and `oc_facerecog_persons` held **106 person records carrying hand-typed names** — real family and
+friends, entered by Consti and Julia in the old app's UI. Face descriptors are regenerable by
+re-running inference; names are not. Nothing else in this project would have replaced them.
+
+They also turned out to be directly useful rather than merely sentimental:
+
+```
+106 named person records  ->  46 distinct people
+                          ->  12,602 faces
+                          ->  10,287 distinct files
+                          ->   9,355 of those files Facewright already has detections for
+```
+
+That is a **hand-labelled ground-truth set overlapping 9,355 of our own files**, which is exactly
+what the two open clustering items lack — 1,347 untitled clusters needing titles, and thresholds
+still validated only against the original ~740-detection prototype.
+
+**Exported before anything was dropped**, as
+`/mnt/data/nextcloud/facerecognition-labels-2026-08-26.csv` — 12,602 rows, 0.88 MB, columns
+`user, person_id, person_name, file_id, x_px, y_px, width_px, height_px, confidence, linked_user`.
+Reconciled against the database before the source was destroyed (106 person ids and 12,602 rows,
+both exact), parsed back with a CSV reader, and checked for blank names and non-numeric file ids.
+
+Two things about that file. **Its coordinates are pixels**, not Facewright's normalised 0–1
+fractions, so any matching against `recognize_face_detections` has to divide by the image
+dimensions first. And it lives **outside the repo on purpose**, `0600`: it is a list of real
+people's names mapped to file ids, and this repo is headed for a public alpha.
+
+**Removal, and the gotchas.** `occ app:remove facerecognition` disabled it, ran its uninstall steps
+and deleted the app directory — and left **all four tables**, confirming the note already in this
+file that Nextcloud uninstalls do not drop tables. Dropped explicitly after checking
+`information_schema.KEY_COLUMN_USAGE` for inbound foreign keys (none).
+
+**New gotcha worth recording**: `app:remove` also leaves **13 `oc_appconfig` rows and 9
+`oc_migrations` rows** behind, `installed_version` among them. Harmless while the app is gone, but a
+future reinstall would see a version it never installed and a migration list it never ran, and skip
+straight past its own schema setup. Both were deleted.
+
+Verified after: 0 `oc_facerecog*` tables, 0 files matching `facerecog` in MariaDB's data directory
+(space returns immediately on DROP with `innodb_file_per_table`, no OPTIMIZE needed), 0 appconfig
+and 0 migration rows, no background jobs referencing it, `status.php` 200 in 13 ms. Memories is
+unaffected — its `FaceRecognitionBackend` guards on
+`facerecognitionIsInstalled() && facerecognitionIsEnabled()`, both now false, and `recognize` and
+`memories` are both still enabled.
+
+**Database: 3,007.0 MB → 2,737.3 MB.** Together with the precision work above, this session took the
+instance from **5,074.4 MB to 2,737.3 MB — a 46.1% reduction.**
+
 ### Next
 
 1. **Multi-user rollout: the backfill is done.** This item used to say the full backfill had never
@@ -1459,6 +1511,11 @@ or base64 encodings that are smaller but would break `json_decode`.
    clusters are untitled. Worth a real look before treating the numbers as settled — this is
    still the open item flagged back in the clustering-prototype section, just with much more
    data now.
+
+   **There is now ground truth for this.** The `facerecognition` export (see the section above)
+   labels 12,602 faces with 46 real names across 10,287 files, 9,355 of which Facewright has its own
+   detections for. That is enough to measure the 0.5 / 3 defaults against human labels rather than
+   by eye, and enough to title clusters from it. Remember its boxes are in pixels, not fractions.
 
 4. **Pin Docker's DNS** (`/etc/docker/daemon.json`) — see the gotcha above. Outstanding because
    applying it cycles every container on the host, so it wants scheduling.
@@ -1516,10 +1573,6 @@ or base64 encodings that are smaller but would break `json_decode`.
    the column first, not a rehearsal transaction, and the new table verified complete against
    `COUNT(DISTINCT file_id, x, y, height, width)` *before* anything is overwritten.
 
-6. **Drop `oc_facerecog_faces`** — 240.8 MB / 72,562 rows belonging to the `facerecognition` app,
-   which `occ app:list` reports as **disabled**. Nothing reads it and nothing in this project ever
-   has. Uninstalling the app reclaims the space outright; the only reason it is still here is that
-   nobody has confirmed the user is finished with it.
 
 ### Instance versions
 
