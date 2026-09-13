@@ -99,6 +99,12 @@ class DetectQueuedJob extends QueuedJob {
 			ARRAY_FILTER_USE_BOTH,
 		);
 		if ($interested === []) {
+			// Distinct from the access===[] case above: someone can see this file, but nobody who
+			// can is both opted in and has it under their own included paths. Logged at debug,
+			// same level as that case, since it is an equally routine "not our job" outcome - not
+			// a bug on its own, but a silent one of these was indistinguishable from a dropped job
+			// during the 17-day gap that motivated adding this.
+			$this->logger->debug("facewright: file {$fileId} has no enabled, path-included user among " . count($access) . ' with access, skipping.');
 			return;
 		}
 
@@ -106,16 +112,27 @@ class DetectQueuedJob extends QueuedJob {
 		// who excluded it would ask for a path outside their own allowlist and defeat the gate.
 		$fetch = $this->accessService->pickFetchUser($fileId, $argument['userId'] ?? null, array_keys($interested));
 		if ($fetch === null) {
+			// Shouldn't happen - pickFetchUser() is documented to return null only for an empty
+			// candidate list, and $interested is non-empty here. Logged at warning rather than
+			// debug precisely because it would mean that documented contract broke.
+			$this->logger->warning("facewright: pickFetchUser() returned null for file {$fileId} despite " . count($interested) . ' interested user(s) - this should be unreachable.');
 			return;
 		}
 
 		$node = $this->rootFolder->getFirstNodeById($fileId);
 		if ($node === null) {
+			// The file id existed in the mount cache moments ago (getAccessPaths() above found it),
+			// but resolving it back to a Node failed - a delete/move racing this job, or a mount
+			// cache entry the fetch user's own folder view can't currently reach.
+			$this->logger->warning("facewright: file {$fileId} has access paths but could not be resolved to a node for fetch user {$fetch['userId']}, skipping.");
 			return;
 		}
 		if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
 			// Re-checked here as well as at both enqueue sites: the queue can outlive a change to
-			// the supported list, and a file's mimetype can be corrected by a later rescan.
+			// the supported list, and a file's mimetype can be corrected by a later rescan. Debug,
+			// not warning - both enqueue sites already filter this, so reaching it is expected to
+			// be rare rather than a sign anything broke.
+			$this->logger->debug("facewright: file {$fileId} has unsupported mimetype {$node->getMimetype()} at run time, skipping.");
 			return;
 		}
 		if ($node->getSize() === 0) {

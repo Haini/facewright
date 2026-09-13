@@ -1479,6 +1479,73 @@ unaffected — its `FaceRecognitionBackend` guards on
 **Database: 3,007.0 MB → 2,737.3 MB.** Together with the precision work above, this session took the
 instance from **5,074.4 MB to 2,737.3 MB — a 46.1% reduction.**
 
+### Done: a 17-day silent detection stall, and a watchdog so the next one leaves a trace
+
+Reported as "the auto-trigger seems broken — a photo from Sept 9 still has no faces, and the
+admin page says 191 pending" on 2026-09-13. It was broken, instance-wide, for far longer than
+that one photo suggested: `facewright_processed`'s own `MAX(processed_at)` was **2026-08-27
+21:05:07** — nothing, success or failure, had been written since, and the ExApp's own request log
+confirmed it independently (last real `POST /detect` before this investigation: the same
+timestamp). 141 real photos in Consti's `Bilder` alone postdate that gap.
+
+Ruled out first, each with live evidence rather than by inspection: the ExApp (healthy, 5-day
+uptime, answered correctly the moment it was sent a real request), `automatic_detection_enabled`
+(true throughout — no toggle requests logged against any admin-page endpoint since at least
+Sep 2), cron itself (`lastcron` fresh, and driving `cron.php` by hand executed jobs correctly),
+and a code regression (deployed code byte-identical to the repo; no commits since Aug 26).
+
+**Root cause not fully pinned down, and that gap is itself the finding.** Every layer worked
+flawlessly when driven directly: `FileCreatedListener` enqueued correctly for a freshly-scanned
+file, `DetectQueuedJob` processed it correctly, `cron.php` picked it up (sometimes on the very
+next tick, once needing a second one 5 minutes later — ordinary scheduling jitter, not a bug).
+What made the original miss unrecoverable as a diagnosis is that `DetectQueuedJob::run()` had
+three early-return branches - no interested user, `pickFetchUser()` returning null, and the node
+failing to resolve - that returned silently. A `QueuedJob` is removed from the queue whether it
+succeeds or hits one of these, so a job dropped there during the real incident is now
+indistinguishable from a job that was never enqueued at all. The nextcloud.log retention (a few
+days) didn't reach back to Aug 27 either. So the specific trigger stays unknown; what's fixed is
+that this class of gap can't recur invisibly.
+
+**Immediate fix**: re-drove the reported photo through the real pipeline by hand (now has 3 real
+detections for both Consti and Julia), then ran `occ facewright:scan` and drove it to completion
+via cron — enqueued and processed exactly **191** files, matching the admin page's count exactly.
+Auto-clustering picked the new faces up on its own via the existing `ClusteringMaintenanceJob`.
+
+**Two durability fixes, so the next occurrence isn't another 17-day forensic reconstruction:**
+
+- The three silent branches above now log (`interested === []` and the mimetype re-check miss at
+  debug — both routine outcomes; `pickFetchUser()` returning null and the node failing to
+  resolve at warning, since both are documented to be otherwise unreachable). Verified live: a
+  throwaway test file placed outside the included path produced exactly
+  `facewright: file 2095538 has no enabled, path-included user among 1 with access, skipping.`
+  in `nextcloud.log`.
+- `lib/BackgroundJob/DetectionMaintenanceJob.php` — detection's counterpart to the existing
+  `ClusteringMaintenanceJob`/`ClusterTriggerService` pattern, one stage earlier in the pipeline.
+  `BatchScanJob` is a self-terminating chain that correctly stops re-adding itself once a pass
+  enqueues nothing new — but nothing then restarts it when new work appears afterward, exactly
+  the gap `ClusteringMaintenanceJob` already closes for the clustering stage. This is the same
+  fix at the detection stage: an hourly `TimedJob`, gated by `automatic_detection_enabled` and
+  `processing_paused` like every other job here, that unconditionally restarts the instance-wide
+  `BatchScanJob` chain. Deliberately does *not* pre-check for real backlog before restarting,
+  unlike `ClusterTriggerService` — there the check earns its cost because a chain exists per user
+  and skipping uninterested ones avoids queue spam; here there is exactly one instance-wide
+  chain, `BatchScanJob` already pays for the same enumeration to answer that question itself, and
+  `IJobList::add()`'s own dedup on class+argument makes restarting an already-running chain a
+  no-op. Since `BatchScanJob` re-enumerates the filesystem directly rather than depending on the
+  listener, this closes the gap regardless of whether a future miss happens in the listener, in
+  one of `DetectQueuedJob`'s branches, or somewhere not yet seen — the backlog gets swept up
+  within an hour instead of sitting silently for weeks.
+
+Registered via the same mechanism as `ClusteringMaintenanceJob` (`<background-jobs>` in
+`info.xml`), which needed the same version-bump-plus-`occ upgrade` deploy this project always
+uses for schema/registration changes (0.4.0 → 0.4.1) — confirmed the usual way, `occ
+background-job:list` showing the new job registered in `oc_jobs` afterward. No `routes.php`
+entries were touched, so no container restart was needed this time.
+
+Verified live, not just `php -l`: ran the new job directly with no scan chain in flight → it
+started one; let that scan run → it correctly found the (already-cleared) backlog empty and
+stopped itself, exactly as designed for the steady-state case.
+
 ### Next
 
 1. **Multi-user rollout: the backfill is done.** This item used to say the full backfill had never
