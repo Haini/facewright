@@ -822,6 +822,52 @@ Only *reads* are decoupled: `RecognizeBackend.php` imports **zero** `OCA\Recogni
 queries the tables directly. That is exactly the part "bootstrap the tables" would have covered,
 and the only part that works that way.
 
+### Done: scoped what dropping Recognize entirely would actually take
+
+Re-verified the three blockers above against the live instance's real source (NC 34, Recognize
+12.0.0, Memories 8.1.0 — all three checked current, not assumed from earlier notes) rather than
+re-deriving them, then scoped what replacing Recognize outright would require. All three still
+hold, plus one addition: `recognizeIsEnabled()` (as opposed to `recognizeIsInstalled()`) also
+checks Recognize's own `faces.enabled` appconfig value, not just install+version — already true
+in this project's own setup, but worth being explicit that it's a second, separate check.
+
+**The DAV surface is fully replicable and doesn't depend on Recognize's code.**
+`RootCollection`/`FaceRoot`/`FacePhoto` are plain `Sabre\DAV` interfaces (`ICollection`,
+`IMoveTarget`, `IFile`) — `sabre/dav` is a core Nextcloud dependency, not something private to
+Recognize. `RootCollection::getName()` returning the literal string `'recognize'` is what fixes
+the DAV mount at `/remote.php/dav/recognize/{user}/faces/...` — the mount path comes from that
+return value, not from the app's id. That's the one fact that opens a cheap path (below).
+
+**The frontend blocker is worse than "hardcoded list."** `ClustersBackend\Manager::register()`
+is a genuine public extension point, but Memories' compiled frontend bundle contains the literal
+strings `"recognize"`/`"facerecognition"` baked in — consistent with per-backend branches, not a
+generic backend-name loop. So even a server-side third `Manager::register()` call would register
+a backend with no tab, no route, nothing in the UI a user could reach. A real third backend needs
+a Memories frontend patch and rebuild, not just a PHP-side registration.
+
+**The cheap path: a shim, not a third backend.** Because the DAV mount name comes from
+`getName()`, not the registering app's id, and because `recognizeIsInstalled()`/
+`recognizeIsEnabled()` only check the app id string `'recognize'` plus its version/appconfig — a
+minimal shim app with `<id>recognize</id>`, a version ≥ 3.8.0, and `faces.enabled=true` in its own
+appconfig satisfies Memories' gate outright. `facewright_bridge` (already owning the tables) would
+add its own `<sabre><collections>` entry whose `RootCollection::getName()` also returns
+`'recognize'`, claiming the mount point the real app used to own. Memories' frontend then works
+completely unpatched — it believes Recognize is installed and finds Facewright's DAV tree at the
+URL it already expects.
+
+Effort/risk ranking: (1) keep Recognize installed-but-inert, current state, zero further work;
+(2) the shim + DAV collection, ~300–400 mechanical lines of Sabre/DAV PHP porting the read-through
+above, zero Memories patches, but rests on two of Memories' internals that aren't a documented
+public contract (DAV-name-decides-mount-path, nullable-DI on `PageController`'s optional
+`ApiKeyManager` degrading safely) and could break on a future Memories release; (3) a real third
+`ClustersBackend`, same DAV cost as (2) plus a Memories frontend patch and an ongoing rebase
+burden against its own build — no advantage over (2) for a single self-hosted instance, only
+relevant if the goal became upstreaming a real backend into Memories itself.
+
+**Not investigated**: whether uninstalling Recognize for real (rather than the shim leaving it
+absent from the start) drops anything else Memories reads incidentally (stray appconfig rows,
+l10n registration) — check before actually attempting option 2.
+
 ### Done: mimetype gate + permanent-vs-transient failure classification
 
 Five files were failing detection on every backlog pass forever — 5,595 identical warnings from
@@ -1660,6 +1706,60 @@ stopped itself, exactly as designed for the steady-state case.
    It is the *only* live Recognize path that reads `face_vector` (Memories itself never does,
    verified), and it serves Recognize's own `threshold` mechanism, which our clustering ignores. So
    the loss is narrow and arguably already meaningless, but it is a real button that would throw.
+
+6. **CLAUDE.md itself had drifted from the code — partly fixed, partly still open.** A review pass
+   found real, finished, wired-in features with no "### Done" section anywhere in this file:
+   cluster merging (`ClusterMergeService`, `occ facewright:merge-clusters`, commit `151d2f9`),
+   `ClusteringMaintenanceJob`/`ClusterTriggerService` (auto-restart of a stalled clustering chain,
+   commit `d66e08e`), and the full share/unshare/rename access-reconciliation system
+   (`FileAccessListener`, `AccessSyncJob`, `FileAccessSyncJob`, registered for
+   `UserMountAddedEvent`/`UserMountRemovedEvent`/`BeforeNodeDeletedEvent`/`NodeRemovedFromCache`/
+   `BeforeNodeRenamedEvent`/`NodeRenamedEvent`). Item 1 above ("the share/unshare event path is
+   untested at runtime") undersells this: the mechanism is fully built; only the live-share-in-a-
+   browser exercise is actually missing. Each of these three still needs its own real "Done"
+   writeup — not done here, since it needs the same live verification standard as every other
+   entry in this file, not a summary reconstructed from git history alone.
+
+7. **Three real bugs found in the same review pass, none yet fixed:**
+   - `ex_app/lib/main.py`'s `FACE_ANALYSIS.get(img)` call (the actual inference) has no exception
+     handling and runs synchronously on the asyncio event loop, unlike `cv2.imdecode` a few lines
+     above it (caught since commit `2950858`) — an inference-time crash surfaces as an uncaught
+     500, which `DetectQueuedJob` classifies retryable rather than permanent, burning through
+     `MAX_ATTEMPTS` on a file that might crash reliably; and while inference runs, `/heartbeat`
+     doesn't answer either.
+   - `DetectQueuedJob.php`'s zero-byte-file branch marks *every* user with access as
+     `FACES_FAILED`, not just `$pending` ones — the permanent-failure and give-up branches a few
+     lines below it both correctly restrict to `$pending`. A file that already has real detections
+     for some users and later reads as zero bytes overwrites their good `faces_found` marker with
+     `-1` while leaving their actual detection rows untouched, silently disagreeing.
+   - `ProcessedFileService::candidateFileIds()` has no `SUPPORTED_MIMETYPES` filter, unlike
+     `BatchTriggerService::collectForUser()`, which does — so the admin page's "not yet processed"
+     count structurally overcounts by every gif/bmp/raw file in the library and can never reach
+     zero. This is very likely the actual, still-open cause of the "36-row gap" noted in the
+     float32-precision section as a one-time historical artifact — the code shows it recurs on
+     every page load, not just once.
+
+8. **No automated tests, no static analysis, no CI**, in either app — confirmed, there is no
+   `tests/` directory, no PHPUnit/pytest config, no `phpstan.neon`/`ruff`/`mypy` config, no
+   `.github/workflows`. Given how much of this project's correctness lives in comments explaining
+   a non-obvious invariant (dimension-band floors, the -1/-2 sentinel distinction, dedup-by-job-
+   argument semantics), the pure-logic pieces — `ClusteringService`'s distance/assignment math,
+   `AccessService::pickFetchUser`, `DetectionService::ownRowsExpr`, `PathFilterService::isIncluded`
+   — are unit-testable today without a live instance and currently have zero coverage. Static
+   analysis is the cheaper first step and would likely have caught #7's zero-byte-branch mixup.
+
+9. **`occ facewright:merge-clusters` has no `--dry-run`**, unlike every other destructive command
+   in this project (`reset`, `backfill-access`, `compact-vectors`). It takes free-text names for
+   both sides and permanently deletes one cluster plus its title in a single call — a fat-fingered
+   keep/merge swap is unrecoverable, and there's no personal-settings equivalent either, so merging
+   is admin-only even though "these two clusters are the same person" is exactly the kind of call
+   the per-user-mode redesign otherwise pushed to the account owner.
+
+10. **Row-at-a-time SQL in three places that haven't hit scale yet**: `DetectionService::detect()`'s
+    insert loop, `AccessSyncService::copyToUsers()`, `ClusteringService::persistAssignments()` — the
+    same "N round trips instead of one batched statement" shape this project has repeatedly found
+    and fixed once it actually hurt (the 1023→340MB clustering fetch, the reset-command OOM). Not
+    yet the cause of an incident; worth a look before the next scale jump rather than after one.
 
 ### Instance versions
 
