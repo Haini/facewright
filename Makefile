@@ -15,7 +15,7 @@ APP_VERSION := 0.1.0
 APP_PORT ?= 23001
 
 # Sensible defaults for a typical AppAPI + HaRP manual-install setup (see CLAUDE.md's
-# "registered live and verified end-to-end" section for how these were discovered) - override
+# "Deployment and operations" section) - override
 # in deploy.env if yours differ.
 NC_CONTAINER ?= nextcloud-app-1
 DAEMON_NAME ?= manual_install_harp

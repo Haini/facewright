@@ -166,7 +166,7 @@ class ClusteringService {
 	 * synchronous, single- or all-user runs. The admin page's "Run now" trigger and
 	 * occ facewright:cluster-scan use ClusterScanJob (chunked) instead, since this blocks for
 	 * the whole user's detection set in one request - fine for a prototype-scale library, not
-	 * for the ~14k-detection scale this instance reached (see CLAUDE.md).
+	 * for a real library (see CLAUDE.md's invariants on I/O).
 	 *
 	 * @return array{newClusters: int, joined: int, skipped: int, perUser: array<string, array{newClusters: int, joined: int, skipped: int}>}
 	 */
@@ -380,8 +380,8 @@ class ClusteringService {
 	 * InnoDB spends a dedicated 16 KB page read on each row whether or not we keep it, and
 	 * read-ahead can't batch those. So pass 1 selects no vector column at all (clustered-index
 	 * leaf pages only, never faulting in a BLOB page) purely to decide *which* ids are wanted,
-	 * and pass 2 fetches vectors for just those. On this instance that is 22,233 rows fetched
-	 * rather than 65,556 - see CLAUDE.md for the measurements behind this.
+	 * and pass 2 fetches vectors for just those. That cut one real clustering fetch from ~1 GB to
+	 * ~340 MB of disk reads - see CLAUDE.md's "Capping rows in PHP saves no I/O".
 	 *
 	 * Note $skippedForeign now counts foreign-dimension rows only among the rows actually
 	 * fetched, not across the user's whole table, since over-cap cluster members are never

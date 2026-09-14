@@ -17,8 +17,8 @@ use OCP\IRequest;
 /**
  * Backs the Facewright admin settings page (kept the name from when it only handled the
  * People-page toggle; now also handles automatic detection, the batch trigger and clustering -
- * not worth the risk of renaming the class/route once routing was working, see CLAUDE.md's
- * "stale registration" gotcha).
+ * not worth the risk of renaming the class/route once routing was working, see CLAUDE.md on
+ * routes.php changes needing a container restart).
  *
  * Everything here is instance-wide. Per-user settings (whether face recognition runs for someone
  * at all, which of their folders it looks at, their clustering thresholds) live on

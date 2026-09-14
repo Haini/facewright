@@ -116,6 +116,7 @@ project sits in, not because it's strictly required by depending on Recognize's 
 
 ## More detail
 
-`CLAUDE.md` is this project's running development log - every design decision, incident, and
-gotcha hit while building it, in the order it happened. Worth reading if you're extending this
-project or hit something that looks like a problem someone here already solved.
+`CLAUDE.md` is the developer reference: the architecture, the invariants that are easy to break
+silently (dimension bands, cluster-id sentinels, job dedup semantics, column order), the rules for
+coexisting with Recognize, and the deployment mechanics. Read it before changing anything that
+touches the tables or the job queue.

@@ -11,8 +11,8 @@ use OCP\IAppConfig;
 use Psr\Log\LoggerInterface;
 
 /**
- * Facewright's own counterpart to Recognize's own MaintenanceJob (see CLAUDE.md's "clustering
- * trigger" and "missing pictures" investigations) - but scoped correctly: Recognize's version
+ * Facewright's own counterpart to Recognize's own MaintenanceJob (see CLAUDE.md's "Coexisting with
+ * Recognize") - but scoped correctly: Recognize's version
  * treats every user with any cluster_id IS NULL detection as its concern, including our 512-dim
  * rows it can't actually cluster (it crashes on them), whereas this only ever looks at
  * Facewright's own data via ClusteringService::countUnclusteredByUser().
