@@ -30,6 +30,7 @@ class Application extends App implements IBootstrap {
 		// Both events matter - see FileCreatedListener's docblock for why.
 		$context->registerEventListener(NodeCreatedEvent::class, FileCreatedListener::class);
 		$context->registerEventListener(CacheEntryInsertedEvent::class, FileCreatedListener::class);
+		$context->registerEventListener(NodeRenamedEvent::class, FileCreatedListener::class);
 
 		// Access changes after detection has already run - see FileAccessListener. Mount events
 		// rather than share hooks, because every kind of access (share, group folder, external
