@@ -24,14 +24,6 @@ use OCP\IUserManager;
  * face beyond the initial match set. Close enough for threshold experimentation.
  */
 class ClusteringService {
-	// recognize_face_detections predates this project on this instance (Nextcloud app
-	// uninstalls don't drop tables) and still holds real rows from Recognize's own old
-	// face-api.js classifier - 128-dim vectors, not our 512-dim InsightFace ones. Mixing the
-	// two in a distance computation would silently corrupt every match, so filter strictly.
-	// Public: ResetService reuses this as the same "is this row ours" test, so the two never
-	// drift apart into different definitions of "our data".
-	public const EXPECTED_DIMENSIONS = 512;
-
 	// Sentinel written to cluster_id for a detection Facewright has evaluated against the full
 	// candidate pool and found unclusterable at the current thresholds. It does NOT mean
 	// "excluded forever": such rows stay in the matching pool and are still assignable as a
@@ -200,14 +192,15 @@ class ClusteringService {
 	}
 
 	/**
-	 * Counts unclustered Facewright (512-dim) detections per user - the denominator behind the
-	 * admin page's "still need to be clustered" indicator, and how ClusterTriggerService decides
-	 * which users actually need a fresh ClusterScanJob rather than starting one for every seen
-	 * user regardless of whether they have anything unclustered.
+	 * Counts unclustered Facewright detections per user - the denominator behind the admin page's
+	 * "still need to be clustered" indicator, and how ClusterTriggerService decides which users
+	 * actually need a fresh ClusterScanJob rather than starting one for every seen user
+	 * regardless of whether they have anything unclustered.
 	 *
-	 * Same dimension-filter-in-PHP approach as loadDetections() (see its docblock) rather than a
-	 * SQL JSON_LENGTH() filter, for the same portability reason - this project runs across
-	 * whatever DB backend the Nextcloud instance uses, not just MySQL/MariaDB.
+	 * "Ours" is the same INNER JOIN loadDetections() uses (Stage 1 of
+	 * docs/independence-implementation.md) rather than the char_length proxy - a detection with no
+	 * facewright_detection_faces link is either Recognize's legacy data or not yet backfilled by
+	 * occ facewright:migrate-faces, neither of which this should count.
 	 *
 	 * Counts exactly what loadDetections() treats as pending - a NULL cluster_id - and
 	 * deliberately excludes both UNASSIGNED and UNCLUSTERABLE. This answers "is there new work?",
@@ -221,24 +214,12 @@ class ClusteringService {
 	 */
 	public function countUnclusteredByUser(): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('user_id')
+		$qb->select('d.user_id')
 			->selectAlias($qb->func()->count('*'), 'c')
-			->from('recognize_face_detections')
-			->where($qb->expr()->isNull('cluster_id'))
-			// Aggregated in the database, not by decoding every embedding in PHP. This runs on
-			// every admin page load and from ClusterTriggerService, and it used to SELECT
-			// face_vector for each unclustered row purely to check its length: before fan-out that
-			// was ~58 rows, after it is ~65,800 - measured at 674 MB shipped to PHP and 65,821
-			// json_decode() calls per page load.
-			//
-			// Honest about what this does and doesn't buy: char_length() still faults the off-page
-			// BLOB (measured at 264k logical page reads versus 198k for a query that never touches
-			// the column), so it is not free the way selectWantedIds()' id/cluster_id projection
-			// is. What it removes is the 674 MB of transfer and all of the JSON decoding, leaving
-			// a two-row result. Dropping the dimension filter entirely would be cheaper still, but
-			// would silently miscount the legacy 128-dim rows this project has never owned.
-			->andWhere(DetectionService::ownRowsExpr($qb))
-			->groupBy('user_id');
+			->from('recognize_face_detections', 'd')
+			->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
+			->where($qb->expr()->isNull('d.cluster_id'))
+			->groupBy('d.user_id');
 
 		$counts = [];
 		$result = $qb->executeQuery();
@@ -257,9 +238,10 @@ class ClusteringService {
 	 *
 	 * Takes an explicit id list rather than a "WHERE cluster_id IS NULL" sweep on purpose. Such
 	 * a sweep also catches this user's legacy 128-dim rows, which Facewright never evaluated and
-	 * has no business relabelling - the dimensionality filter is this project's whole definition
-	 * of "our data" (see EXPECTED_DIMENSIONS), and a bulk UPDATE would quietly cross it. The
-	 * caller passes exactly the ids it loaded, dimension-filtered, and found no cluster for.
+	 * has no business relabelling - the facewright_detection_faces join is this project's whole
+	 * definition of "our data" (see DetectionService::ownRowsExpr()), and a bulk UPDATE would
+	 * quietly cross it. The caller passes exactly the ids it loaded, dimension-filtered, and found
+	 * no cluster for.
 	 *
 	 * @param list<int> $ids
 	 * @return int rows marked
@@ -389,16 +371,14 @@ class ClusteringService {
 	 * depends on it.
 	 *
 	 * Split into two passes on purpose, and that split is what makes the cap cost anything at
-	 * all. A single "SELECT ... face_vector ... WHERE user_id = ?" pass transfers every row's
-	 * vector and only then discards the over-cap ones in PHP - which saves memory but zero I/O,
-	 * because face_vector is a longtext: at ~10.7 KB it lives off-page in DYNAMIC row format, so
-	 * InnoDB spends a dedicated 16 KB page read on each row whether or not we keep it, and
-	 * read-ahead can't batch those. So pass 1 selects no vector column at all (clustered-index
-	 * leaf pages only, never faulting in a BLOB page) purely to decide *which* ids are wanted,
-	 * and pass 2 fetches vectors for just those. That cut one real clustering fetch from ~1 GB to
-	 * ~340 MB of disk reads - see CLAUDE.md's "Capping rows in PHP saves no I/O".
+	 * all. Pass 1 selects no embedding at all (clustered-index leaf pages only, never faulting in
+	 * a BLOB page) purely to decide *which* ids are wanted, and pass 2 fetches embeddings for just
+	 * those - via facewright_faces (Stage 1 of docs/independence-implementation.md), a
+	 * 2 KB-per-row blob rather than recognize_face_detections.face_vector's ~4.8 KB JSON, so this
+	 * pass is cheaper again than the ~340 MB it was measured at against that column (see CLAUDE.md's
+	 * "Capping rows in PHP saves no I/O").
 	 *
-	 * Note $skippedForeign now counts foreign-dimension rows only among the rows actually
+	 * Note $skippedForeign now counts embedding-decode failures only among the faces actually
 	 * fetched, not across the user's whole table, since over-cap cluster members are never
 	 * examined. It's a diagnostic counter rather than a control input, so undercounting it is
 	 * harmless - but don't start treating it as a total.
@@ -415,71 +395,82 @@ class ClusteringService {
 	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, pendingIds: list<int>, skippedForeign: int}
 	 */
 	private function loadDetections(string $userId): array {
-		$wantedIds = $this->selectWantedIds($userId);
+		$wanted = $this->selectWantedIds($userId); // detectionId => [faceId, clusterId]
 
-		// Rows are streamed and decoded one at a time rather than fetchAll()'d: at real-library
-		// scale fetchAll() would hold a batch's entire raw result set (JSON text) in memory on
-		// top of the decoded vectors being accumulated alongside it. Holding both forms at once
-		// is what originally pushed this past PHP's memory_limit.
+		// Within one user a face is never shared across two detection rows (fan-out only shares a
+		// face *across* users), so this is normally 1:1 - grouped defensively rather than assumed.
+		$detectionIdsByFaceId = [];
+		foreach ($wanted as $detectionId => $info) {
+			$detectionIdsByFaceId[$info['faceId']][] = $detectionId;
+		}
+
 		$detections = [];
 		$pendingIds = [];
 		$skippedForeign = 0;
-		foreach (array_chunk($wantedIds, self::VECTOR_FETCH_BATCH) as $batch) {
+		foreach (array_chunk(array_keys($detectionIdsByFaceId), self::VECTOR_FETCH_BATCH) as $batch) {
 			$qb = $this->db->getQueryBuilder();
-			$qb->select('id', 'file_id', 'face_vector', 'cluster_id')
-				->from('recognize_face_detections')
-				->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
-				->orderBy('id', 'ASC');
+			$qb->select('id', 'file_id', 'embedding')
+				->from('facewright_faces')
+				->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
 			$result = $qb->executeQuery();
 
 			while ($row = $result->fetch()) {
-				$vector = json_decode($row['face_vector'], true);
-				if (!is_array($vector) || count($vector) !== self::EXPECTED_DIMENSIONS) {
-					$skippedForeign++;
+				$faceId = (int)$row['id'];
+				$detectionIds = $detectionIdsByFaceId[$faceId] ?? [];
+				try {
+					$vector = FaceVectorCodec::decode($row['embedding']);
+				} catch (\UnexpectedValueException) {
+					$skippedForeign += count($detectionIds);
 					continue;
 				}
-				$id = (int)$row['id'];
-				$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
-				if ($clusterId === null) {
-					$pendingIds[] = $id;
-				} elseif ($clusterId === self::UNCLUSTERABLE) {
-					// Evaluated already: matchable, but not attempted again - see the docblock.
-					$clusterId = null;
+				foreach ($detectionIds as $id) {
+					$clusterId = $wanted[$id]['clusterId'];
+					if ($clusterId === null) {
+						$pendingIds[] = $id;
+					} elseif ($clusterId === self::UNCLUSTERABLE) {
+						// Evaluated already: matchable, but not attempted again - see the docblock.
+						$clusterId = null;
+					}
+					$detections[$id] = [
+						'file_id' => (int)$row['file_id'],
+						'vector' => $vector,
+						'cluster_id' => $clusterId,
+					];
 				}
-				$detections[$id] = [
-					'file_id' => (int)$row['file_id'],
-					'vector' => $vector,
-					'cluster_id' => $clusterId,
-				];
 			}
 			$result->closeCursor();
 		}
+
+		// selectWantedIds() returns ids ascending, but batching by face id (not detection id) and
+		// an unordered IN() query don't preserve that - re-sort explicitly. pendingIds' ascending
+		// order is what clusterUserChunk()'s $afterId cursor relies on to walk the backlog
+		// monotonically.
+		sort($pendingIds);
 
 		return ['detections' => $detections, 'pendingIds' => $pendingIds, 'skippedForeign' => $skippedForeign];
 	}
 
 	/**
-	 * Pass 1 of loadDetections(): works out which detection ids are worth fetching vectors for -
+	 * Pass 1 of loadDetections(): works out which detections are worth fetching embeddings for -
 	 * every unclustered row of $userId's, plus the first CLUSTER_REPRESENTATIVE_CAP rows of each
-	 * cluster they already have. Selects no face_vector precisely so it never faults in an
-	 * off-page BLOB page; see loadDetections()'s docblock for why that distinction is the whole
-	 * point.
+	 * cluster they already have - and which physical face (facewright_faces.id) each one points
+	 * to. The INNER JOIN is this project's ownership test for Stage 1 (see
+	 * DetectionService::ownRowsExpr()'s docblock): a detection row with no link is either
+	 * Recognize's legacy data or not yet backfilled by occ facewright:migrate-faces, and either
+	 * way has no embedding here to match against.
 	 *
-	 * Returns ids ascending, and loadDetections() preserves that order (batches are consecutive
-	 * slices, each re-sorted by id) because clusterUserChunk()'s $afterId cursor walks
-	 * $detections in id order.
-	 *
-	 * @return list<int> ascending
+	 * @return array<int, array{faceId: int, clusterId: ?int}> keyed by detection id, ascending
 	 */
 	private function selectWantedIds(string $userId): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('id', 'cluster_id')
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->orderBy('id', 'ASC');
+		$qb->select('d.id', 'd.cluster_id', 'l.face_id')
+			->from('recognize_face_detections', 'd')
+			->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
+			->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
+			->orderBy('d.id', 'ASC');
 		$result = $qb->executeQuery();
 
-		$wantedIds = [];
+		$wanted = [];
 		$representativeCounts = []; // cluster_id => representatives already taken this call
 		while ($row = $result->fetch()) {
 			$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
@@ -501,11 +492,11 @@ class ClusteringService {
 				}
 				$representativeCounts[$clusterId] = $kept + 1;
 			}
-			$wantedIds[] = (int)$row['id'];
+			$wanted[(int)$row['id']] = ['faceId' => (int)$row['face_id'], 'clusterId' => $clusterId];
 		}
 		$result->closeCursor();
 
-		return $wantedIds;
+		return $wanted;
 	}
 
 	/** @return list<array{id: int, distance: float}> sorted closest-first */

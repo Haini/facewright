@@ -71,7 +71,7 @@ class VectorCompactionService {
 			// Anything that is not one of our own 512-dim vectors is left exactly as it is. The
 			// length predicate should already have excluded legacy rows, but this is the
 			// authoritative test and it is cheap here, where the JSON is decoded anyway.
-			if (!is_array($vector) || count($vector) !== ClusteringService::EXPECTED_DIMENSIONS) {
+			if (!is_array($vector) || count($vector) !== FaceVectorCodec::DIMENSIONS) {
 				$skipped++;
 				continue;
 			}

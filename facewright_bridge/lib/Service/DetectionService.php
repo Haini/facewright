@@ -78,8 +78,9 @@ class DetectionService {
 	 * because the 1,292 lower bound previously recorded for the legacy band was in fact this row;
 	 * the real legacy floor is 2,621.
 	 *
-	 * The authoritative definition of "ours" is still ClusteringService::EXPECTED_DIMENSIONS; this
-	 * is a cheap proxy for it, valid only while those bands stay disjoint.
+	 * The authoritative definition of "ours" is now the facewright_detection_faces join (see
+	 * ownRowsExpr()); this is the cheap proxy the join is OR'd with until Stage 2's backfill is
+	 * complete, valid only while those bands stay disjoint.
 	 */
 	public const VECTOR_LENGTH_FLOOR = 3500;
 

@@ -11,8 +11,8 @@ namespace OCA\FacewrightBridge\Service;
  * still does - loses nothing: `1 - dot(decode(encode(v)), v)` for an L2-normalized `v` is <= 1e-7,
  * against a clustering threshold of 0.5.
  *
- * DIMENSIONS/BYTES replace ClusteringService::EXPECTED_DIMENSIONS as the authoritative "is this a
- * real embedding" test for anything read from facewright_faces.
+ * DIMENSIONS/BYTES are the authoritative "is this a real embedding" test for anything read from
+ * facewright_faces.
  */
 class FaceVectorCodec {
 	public const DIMENSIONS = 512;
