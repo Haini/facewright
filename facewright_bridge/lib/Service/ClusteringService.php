@@ -55,12 +55,23 @@ class ClusteringService {
 	// sentinel with no cluster row is invisible there too.
 	public const UNCLUSTERABLE = -2;
 
-	// Recognize's own noise label. Rows sitting at -1 are ones *Recognize* ran through its
-	// 128-dim HDBSCAN and rejected - including ours, which it had no business judging, since
-	// analyzing 512-dim vectors in a 128-dim space is meaningless. Facewright therefore treats
-	// -1 as "not yet evaluated by us" (i.e. pending), re-evaluates it properly, and settles it
-	// at UNCLUSTERABLE - which also drains Recognize's rejected-sample pool over time.
-	public const RECOGNIZE_REJECTED = -1;
+	// -1 means "unassigned: excluded from clustering until a human assigns it" - not "pending,
+	// re-evaluate me". Every consumer other than our own clustering already agreed on this
+	// reading before this constant existed: it is what Memories' "unassigned faces" view
+	// selects, what Memories' "move to person" action operates on, and what a Memories person
+	// delete writes to its members via Recognize's own FaceClusterMapper::delete() - deleting a
+	// person in Memories un-clusters its faces, it does not erase them. Recognize's now-disabled
+	// HDBSCAN also wrote -1 as its own "noise" verdict, including on rows it had no business
+	// judging (analyzing our 512-dim vectors in its 128-dim space is meaningless) - those legacy
+	// rows were reopened once by `occ facewright:reopen-unassigned` before this meaning shipped,
+	// so this constant never needs to treat -1 as "not yet evaluated".
+	//
+	// Clustering therefore never seeds a match from a -1 row, never matches a candidate against
+	// one, and never assigns -1 as a side effect of matching some other face - the same as any
+	// row a human has deliberately taken out of a cluster. resetUser() is the one thing that
+	// reopens -1 rows back to NULL, and it does so as part of what "reset" means generally, not
+	// as special-cased -1 handling.
+	public const UNASSIGNED = -1;
 
 	// Once a pre-existing cluster has this many representatives loaded in loadDetections(),
 	// further members are skipped entirely (never fetched, decoded, or held in memory) instead
@@ -198,11 +209,12 @@ class ClusteringService {
 	 * SQL JSON_LENGTH() filter, for the same portability reason - this project runs across
 	 * whatever DB backend the Nextcloud instance uses, not just MySQL/MariaDB.
 	 *
-	 * Counts exactly what loadDetections() treats as pending - NULL plus RECOGNIZE_REJECTED -
-	 * and deliberately excludes UNCLUSTERABLE. This answers "is there new work?", which decides
-	 * whether to start a chain at all. Counting UNCLUSTERABLE here would make the answer
-	 * permanently yes, since those rows persist by design, so every trigger check would start a
-	 * fresh chain over the whole backlog. The chain still reconsiders them once started - they
+	 * Counts exactly what loadDetections() treats as pending - a NULL cluster_id - and
+	 * deliberately excludes both UNASSIGNED and UNCLUSTERABLE. This answers "is there new work?",
+	 * which decides whether to start a chain at all. Counting UNCLUSTERABLE here would make the
+	 * answer permanently yes, since those rows persist by design, so every trigger check would
+	 * start a fresh chain over the whole backlog; counting UNASSIGNED would re-open work a human
+	 * deliberately closed. The chain still reconsiders UNCLUSTERABLE rows once started - they
 	 * stay in the matching pool - they just don't get a vote on starting one.
 	 *
 	 * @return array<string, int> userId => count
@@ -212,10 +224,7 @@ class ClusteringService {
 		$qb->select('user_id')
 			->selectAlias($qb->func()->count('*'), 'c')
 			->from('recognize_face_detections')
-			->where($qb->expr()->orX(
-				$qb->expr()->isNull('cluster_id'),
-				$qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::RECOGNIZE_REJECTED, IQueryBuilder::PARAM_INT)),
-			))
+			->where($qb->expr()->isNull('cluster_id'))
 			// Aggregated in the database, not by decoding every embedding in PHP. This runs on
 			// every admin page load and from ClusterTriggerService, and it used to SELECT
 			// face_vector for each unclustered row purely to check its length: before fan-out that
@@ -292,6 +301,12 @@ class ClusteringService {
 		return $qb->executeStatement();
 	}
 
+	/**
+	 * Clears every cluster_id for $userId and deletes their clusters outright. This also reopens
+	 * UNASSIGNED (-1) rows back to pending, which is the intended meaning of a full reset: a
+	 * person a human previously unassigned goes back into the matching pool along with
+	 * everything else.
+	 */
 	public function resetUser(string $userId): void {
 		$qb = $this->db->getQueryBuilder();
 		$qb->update('recognize_face_detections')
@@ -425,11 +440,8 @@ class ClusteringService {
 				}
 				$id = (int)$row['id'];
 				$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
-				if ($clusterId === null || $clusterId === self::RECOGNIZE_REJECTED) {
-					// Never evaluated by us - Recognize's -1 verdict does not count, see its
-					// constant docblock.
+				if ($clusterId === null) {
 					$pendingIds[] = $id;
-					$clusterId = null;
 				} elseif ($clusterId === self::UNCLUSTERABLE) {
 					// Evaluated already: matchable, but not attempted again - see the docblock.
 					$clusterId = null;
@@ -471,9 +483,14 @@ class ClusteringService {
 		$representativeCounts = []; // cluster_id => representatives already taken this call
 		while ($row = $result->fetch()) {
 			$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
-			// Only real clusters (positive ids) get capped. The sentinels are not clusters, and
-			// capping them would strand all but 20 of those rows outside the pool, so they could
-			// never be matched into a cluster later. They belong with the unclustered side:
+			if ($clusterId === self::UNASSIGNED) {
+				// Excluded from clustering entirely - never a seed, never a match candidate, never
+				// fetched. See the constant's docblock.
+				continue;
+			}
+			// Only real clusters (positive ids) get capped. UNCLUSTERABLE is not a cluster, and
+			// capping it would strand all but 20 of those rows outside the pool, so they could
+			// never be matched into a cluster later. It belongs with the unclustered side:
 			// loaded in full, every time.
 			if ($clusterId !== null && $clusterId > 0) {
 				$kept = $representativeCounts[$clusterId] ?? 0;

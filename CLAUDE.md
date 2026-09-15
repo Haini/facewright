@@ -122,15 +122,22 @@ backlog scan). Plain PHP templates + vanilla JS, no build step.
   `VECTOR_PRECISION` (6) decimals — float32 data needs no more, and it keeps rows in-page
   (≈4.8 KB) instead of off-page (≈10.7 KB, one dedicated 16 KB InnoDB page per row). Must stay
   `json_decode`-able: Recognize's `FacePhoto::delete()` (Memories' "remove this face") reads it.
-- `cluster_id`: `NULL` = pending; `-1` = Recognize's own noise label, **treated as pending** by us
-  (Recognize judged our vectors in the wrong space) — and also what deleting a person in Memories
-  writes to its members (`FaceClusterMapper::delete()`, see Open item 4); `-2` = `UNCLUSTERABLE`,
-  our sentinel meaning "evaluated in a full pass, nothing matched". Rows at `-2` stay in the
-  matching pool and can still be pulled into a cluster by a later face; they are just not
-  re-attempted as seeds.
-  **Do not use `-1` for this**: Recognize's `sampleRejectedDetectionsByUserId()` selects
-  `cluster_id = -1` and feeds those rows into its own clustering. Recognize has no predicate
-  matching `-2`, and Memories inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
+- `cluster_id`: `NULL` = pending; `-1` = `ClusteringService::UNASSIGNED`, meaning "excluded from
+  clustering until a human assigns it" — what a Memories person delete writes to its members
+  (`FaceClusterMapper::delete()`), what Memories' "unassigned faces" view lists, and what "move to
+  person" operates on. Clustering never seeds from it, never matches against it, and never assigns
+  it as a side effect; `occ facewright:cluster --reset` is the one thing that reopens it, as part
+  of a full reset. Recognize's own (now-disabled) HDBSCAN also wrote `-1` as its noise verdict,
+  including on rows it had no business judging — those legacy rows were reopened once by
+  `occ facewright:reopen-unassigned` before this meaning shipped, and that command remains safe to
+  re-run (it can only ever touch rows a human has since unassigned). `-2` = `UNCLUSTERABLE`, our
+  sentinel meaning "evaluated in a full pass, nothing matched". Rows at `-2` stay in the matching
+  pool and can still be pulled into a cluster by a later face; they are just not re-attempted as
+  seeds.
+  **Do not use `-1` for `UNCLUSTERABLE`**: Recognize's `sampleRejectedDetectionsByUserId()` selects
+  `cluster_id = -1` and feeds those rows into its own clustering (moot now that Recognize's
+  classifier is disabled, but still true). Recognize has no predicate matching `-2`, and Memories
+  inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
 - `threshold` is left at its DB default, matching Recognize's own insert.
 
 ### Telling our rows from Recognize's

@@ -85,10 +85,10 @@ class ResetService {
 		$clusterIds = [];
 		while ($row = $result->fetch()) {
 			$detectionIds[] = (int)$row['id'];
-			// Negative cluster ids are sentinels (Facewright's UNCLUSTERABLE, Recognize's
-			// RECOGNIZE_REJECTED), not real recognize_face_clusters rows - collecting them would
-			// issue DELETEs for cluster ids that never exist. Harmless today, but it would
-			// quietly become wrong if anything ever allocated a cluster with a negative id.
+			// Negative cluster ids are sentinels (ClusteringService::UNCLUSTERABLE, ::UNASSIGNED),
+			// not real recognize_face_clusters rows - collecting them would issue DELETEs for
+			// cluster ids that never exist. Harmless today, but it would quietly become wrong if
+			// anything ever allocated a cluster with a negative id.
 			if ($row['cluster_id'] !== null && (int)$row['cluster_id'] > 0) {
 				$clusterIds[(int)$row['cluster_id']] = true;
 			}
