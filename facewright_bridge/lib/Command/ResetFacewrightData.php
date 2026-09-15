@@ -62,9 +62,10 @@ class ResetFacewrightData extends Command {
 
 		$result = $this->reset->resetFacewrightData();
 		$output->writeln(sprintf(
-			'Deleted %d detection(s), %d cluster(s), cleared %d processed-file record(s).',
+			'Deleted %d detection(s), %d cluster(s), %d physical face(s), cleared %d processed-file record(s).',
 			$result['deletedDetections'],
 			$result['deletedClusters'],
+			$result['deletedFaces'],
 			$result['clearedProcessed'],
 		));
 
