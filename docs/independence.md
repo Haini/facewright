@@ -98,6 +98,9 @@ compose stack before fixing (see "Verification").
    (`ClusteringService.php:428-432`) reads `-1` as "never evaluated by us", so the next
    `ClusterScanJob` pass re-forms the same cluster under a new id with an empty title. Until that
    pass, the faces appear in Memories' "unassigned" view (M6).
+   **Fixed by Stage 0 (`-1` = unassigned)**: `ClusteringService::UNASSIGNED` now excludes `-1`
+   rows from clustering entirely instead of reading them as pending, with no schema change - see
+   `docs/independence-implementation.md` Stage 0, step 0.2.
 2. **Removing a face from a person does not stick.** `FacePhoto::delete()`
    (`recognize/lib/Dav/Faces/FacePhoto.php:48-59`) sets `cluster_id = NULL` — pending, for us — and
    writes `threshold`, which nothing of ours reads. The face still sits within 0.5 of its former

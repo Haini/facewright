@@ -628,3 +628,16 @@ Stage 0 API as the write surface to offer.
    which a share fan-out could copy markers without rows.
 5. **No `set cover` operation.** Covers live in `memories_covers`, which is Memories' own table
    and UI; the DAV contract has no cover operation to reproduce.
+
+## Deviations found during implementation
+
+1. **Step 0.4 as written creates a circular constructor dependency.** `PeopleService::
+   mergeClusters()` delegating to `ClusterMergeService`, while `ClusterMergeService::merge()`
+   resolves ids via `PeopleService::resolveCluster()`, means each service's constructor needs an
+   instance of the other - Nextcloud's DI container cannot build either one. Resolved by moving
+   the merge logic (resolve both sides, move detections, delete the losing cluster) directly into
+   `PeopleService::mergeClusters()`, the same place `resolveCluster()` already lives, and deleting
+   `ClusterMergeService` outright rather than keeping it as a pass-through wrapper with no
+   distinct responsibility. `Command/MergeClusters.php` and `PeopleSettingsController::
+   mergeClusters` both call `PeopleService` directly now; the latter was already moving there per
+   step 0.6's own instruction.

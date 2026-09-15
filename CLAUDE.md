@@ -80,7 +80,11 @@ Services (`lib/Service/`):
 - `UserSettingsService` — per-user config via `OCP\Config\IUserConfig`.
 - `AccessService` / `AccessSyncService` / `PruneService` / `MountFileService` — who can see a file
   and keeping rows in step with that (see "Multi-user fan-out").
-- `ClusteringService`, `ClusterTriggerService`, `ClusterMergeService` — clustering.
+- `ClusteringService`, `ClusterTriggerService` — clustering.
+- `PeopleService` — the one seam every people-level operation (list, create, rename, merge,
+  delete, detach, move, delete-empty) goes through, scoped to one user per call. What
+  `PeopleApiController`'s OCS API and `occ facewright:people` call, and what a future DAV shim
+  (`docs/independence-implementation.md` Stage 2) would call too.
 - `BatchTriggerService` — enumerates unprocessed candidates for enabled users and enqueues jobs.
 - `ResetService`, `VectorCompactionService` — maintenance.
 
@@ -106,9 +110,12 @@ per-user overview) and a personal section (enable, own included paths, own thres
 backlog scan). Plain PHP templates + vanilla JS, no build step.
 
 `occ` commands: `facewright:detect <user> <path>` (forces re-detection), `facewright:scan`,
-`facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:merge-clusters`,
+`facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:merge-clusters [--dry-run]`,
 `facewright:backfill-access [--dry-run] [--prune]`, `facewright:compact-vectors [--dry-run]`,
-`facewright:init-user-settings [--dry-run]`, `facewright:reset [--dry-run] [--yes]`.
+`facewright:init-user-settings [--dry-run]`, `facewright:reset [--dry-run] [--yes]`,
+`facewright:people <user> [--faces=<idOrTitle>] [--unassigned] [--delete-empty] [--dry-run]`
+(inspection and light maintenance over `PeopleService`), `facewright:reopen-unassigned
+[--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below).
 
 ## Invariants — read before touching the tables
 
@@ -338,23 +345,22 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 3. **Admin-side threshold changes re-evaluate nothing for users who set their own**; only the
    personal page triggers `clearUnclusterableMarks()`. `occ facewright:cluster --reset` remains
    the blunt option.
-4. **Five known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
+4. **Four known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
    synchronously on the event loop (a crash reads as retryable, and `/heartbeat` stalls during
    inference); `DetectQueuedJob`'s zero-byte branch marks *every* user with access, not just
    `$pending`; `ProcessedFileService::candidateFileIds()` lacks the `SUPPORTED_MIMETYPES` filter,
-   so the "not yet processed" count can never reach zero; deleting a person in Memories sets its
-   faces to `-1`, which we read as pending, so the next clustering pass rebuilds the person
-   untitled; removing a face from a person sets it `NULL`, so it rejoins (and Recognize's handler
-   first loads the whole cluster's vectors into one web request). The last two are unfixable
-   while Memories' writes land in Recognize's code — see `docs/independence.md`, Findings 1–2.
+   so the "not yet processed" count can never reach zero; removing a face from a person sets it
+   `NULL`, so it rejoins (and Recognize's handler first loads the whole cluster's vectors into one
+   web request) — unfixable while Memories' writes land in Recognize's code, see
+   `docs/independence.md` Finding 2. (A fifth bug — deleting a person in Memories set its faces to
+   `-1`, read by us as pending, so the next clustering pass rebuilt the person untitled — is fixed
+   by Stage 0 of `docs/independence-implementation.md`: `-1` now means unassigned, not pending.)
 5. **No tests, static analysis, or CI.** The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
    unit-testable without an instance and have zero coverage.
-6. **`occ facewright:merge-clusters` has no `--dry-run`** and is admin-only, unlike every other
-   destructive command here.
-7. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop,
+6. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop,
    `AccessSyncService::copyToUsers()` and `ClusteringService::persistAssignments()`.
-8. **Option C — vectors in a table we own, keyed by physical face** — investigated and
+7. **Option C — vectors in a table we own, keyed by physical face** — investigated and
    deliberately deferred. Fan-out duplicates each embedding once per user with access (1.5× on a
    two-user instance), and owning the column would also allow raw binary storage (2 KB vs 4.8 KB).
    Deferred because the reclaim is modest, it rewrites every `VECTOR_LENGTH_FLOOR` call site, and
