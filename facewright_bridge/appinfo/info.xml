@@ -9,7 +9,7 @@ ExApps have no path to real database access. It calls the facewright ExApp for f
 and writes the results into Recognize's own oc_recognize_face_detections table via Nextcloud's
 QueryBuilder, since only first-party PHP code can do that.]]>
 	</description>
-	<version>0.4.2</version>
+	<version>0.5.0</version>
 	<licence>agpl</licence>
 	<author>Constantin Schieber-Knoebl</author>
 	<namespace>FacewrightBridge</namespace>
@@ -28,6 +28,7 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\FacewrightBridge\Command\InitUserSettings</command>
 		<command>OCA\FacewrightBridge\Command\CompactVectors</command>
 		<command>OCA\FacewrightBridge\Command\ReopenUnassigned</command>
+		<command>OCA\FacewrightBridge\Command\People</command>
 	</commands>
 	<!-- app-info.xsd declares <settings> as an xs:sequence: admin, admin-section, personal,
 	     personal-section. Reordering these makes the app info fail to parse. -->

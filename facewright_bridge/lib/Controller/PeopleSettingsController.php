@@ -6,8 +6,8 @@ namespace OCA\FacewrightBridge\Controller;
 
 use OCA\FacewrightBridge\BackgroundJob\BatchScanJob;
 use OCA\FacewrightBridge\Service\BatchTriggerService;
-use OCA\FacewrightBridge\Service\ClusterMergeService;
 use OCA\FacewrightBridge\Service\ClusterTriggerService;
+use OCA\FacewrightBridge\Service\PeopleService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\BackgroundJob\IJobList;
@@ -39,7 +39,7 @@ class PeopleSettingsController extends Controller {
 		IRequest $request,
 		private IAppConfig $appConfig,
 		private BatchTriggerService $batchTrigger,
-		private ClusterMergeService $clusterMerge,
+		private PeopleService $people,
 		private ClusterTriggerService $clusterTrigger,
 		private IJobList $jobList,
 	) {
@@ -119,16 +119,18 @@ class PeopleSettingsController extends Controller {
 	}
 
 	/**
-	 * See ClusterMergeService - does what Recognize's own rename-based DAV UI has no path to at
-	 * all (renaming a cluster to an existing name is treated as an error there, not a merge).
-	 * $keep/$merge each accept either a numeric cluster ID or a person's name.
+	 * See PeopleService::mergeClusters() - does what Recognize's own rename-based DAV UI has no
+	 * path to at all (renaming a cluster to an existing name is treated as an error there, not a
+	 * merge). $keep/$merge each accept either a numeric cluster ID or a person's name. Admin-only
+	 * and cross-user ($userId is a request parameter, unlike every personal-settings action) -
+	 * the one place in this app an admin can act on another user's clusters.
 	 */
 	public function mergeClusters(string $userId, string $keep, string $merge): JSONResponse {
 		try {
-			$moved = $this->clusterMerge->merge($userId, $keep, $merge);
+			$result = $this->people->mergeClusters($userId, $keep, $merge);
 		} catch (\InvalidArgumentException $e) {
 			return new JSONResponse(['error' => $e->getMessage()], 400);
 		}
-		return new JSONResponse(['moved' => $moved]);
+		return new JSONResponse(['moved' => $result['moved']]);
 	}
 }
