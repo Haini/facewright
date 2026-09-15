@@ -4,6 +4,9 @@ A review of how far `facewright_bridge` is coupled to Recognize and Memories tod
 roadmap for reducing it. Companion to `CLAUDE.md`, which documents the current design; this file
 documents what would have to change and in which order.
 
+The step-by-step implementation plan for the roadmap is `docs/independence-implementation.md`;
+where the two differ, that plan wins (its "Deviations" section lists the differences and why).
+
 Verified against the app versions installed on the reference instance: Memories 8.1.0,
 Recognize 12.0.2 (both at `/mnt/data/nextcloud/nc_apps/`), and the Photos app shipped with
 Nextcloud 33. Line numbers refer to those versions.

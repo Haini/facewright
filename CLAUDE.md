@@ -47,7 +47,8 @@ Three hard dependencies on the app being **enabled**, not just on its tables exi
 Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
 Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
 causes, and the staged path out (own tables first, then a `recognize`-contract shim that replaces
-Recognize, then optionally Memories) are in `docs/independence.md`.
+Recognize, then optionally Memories) are in `docs/independence.md`; the executable plan for it is
+`docs/independence-implementation.md`.
 
 ## Components
 
