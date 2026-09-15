@@ -115,7 +115,9 @@ backlog scan). Plain PHP templates + vanilla JS, no build step.
 `facewright:init-user-settings [--dry-run]`, `facewright:reset [--dry-run] [--yes]`,
 `facewright:people <user> [--faces=<idOrTitle>] [--unassigned] [--delete-empty] [--dry-run]`
 (inspection and light maintenance over `PeopleService`), `facewright:reopen-unassigned
-[--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below).
+[--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below),
+`facewright:migrate-faces [--dry-run] [--chunk=<files>] [--reset-cursor]` (Stage 1 backfill,
+see "Schema mapping").
 
 ## Invariants — read before touching the tables
 
@@ -129,6 +131,15 @@ backlog scan). Plain PHP templates + vanilla JS, no build step.
   `VECTOR_PRECISION` (6) decimals — float32 data needs no more, and it keeps rows in-page
   (≈4.8 KB) instead of off-page (≈10.7 KB, one dedicated 16 KB InnoDB page per row). Must stay
   `json_decode`-able: Recognize's `FacePhoto::delete()` (Memories' "remove this face") reads it.
+  **The embedding of record is `facewright_faces.embedding`** (Stage 1 of
+  `docs/independence-implementation.md`); `face_vector` is written only because Recognize's DAV
+  code still decodes it, and disappears in Stage 2. `facewright_faces` holds one row per physical
+  face in a file (`file_id` + `face_index`, geometry, `det_score`, a packed 512×float32-LE
+  embedding via `FaceVectorCodec`) independent of how many users' `recognize_face_detections` rows
+  point at it through fan-out; `facewright_detection_faces` links a detection row (`detection_id`
+  = its `id`) to its physical face (`face_id`), with `user_id` denormalized for per-user cleanup
+  queries. `ClusteringService` and `PeopleService` read embeddings only from `facewright_faces` —
+  never `face_vector`.
 - `cluster_id`: `NULL` = pending; `-1` = `ClusteringService::UNASSIGNED`, meaning "excluded from
   clustering until a human assigns it" — what a Memories person delete writes to its members
   (`FaceClusterMapper::delete()`), what Memories' "unassigned faces" view lists, and what "move to
@@ -153,18 +164,23 @@ The table may hold Recognize's legacy 128-dim rows alongside ours. **Never compu
 across dimensions**, never delete by `file_id` without a dimension filter, and never sweep
 `WHERE cluster_id IS NULL` without one.
 
-`DetectionService::ownRowsExpr()` is the single definition of "ours":
-`char_length(face_vector) > VECTOR_LENGTH_FLOOR` (3500). It is a proxy that works because the
-encodings form disjoint bands — legacy 128-dim ≈ 2,600 chars, ours at precision 6 ≈ 4,800,
-ours pre-compaction ≈ 10,700 — and it is used because it decides in the `SELECT` without
-faulting in the vector. `ClusteringService::EXPECTED_DIMENSIONS` (512) remains the exact test
-for anything that has already decoded a vector. If the encoding ever changes, re-measure the
-bands *before* changing the floor; every ownership query flips at once otherwise. One known
-degenerate case: an all-zero embedding encodes short and falls below the floor.
+`DetectionService::ownRowsExpr()` is the single definition of "ours". As of Stage 1 it is
+transitional: `id IN (SELECT detection_id FROM facewright_detection_faces) OR
+char_length(face_vector) > VECTOR_LENGTH_FLOOR` (3500). The join is the real, permanent test; the
+length half is a proxy kept only so a row written before `occ facewright:migrate-faces` finishes
+backfilling it isn't briefly mistaken for Recognize's — it works because the encodings form
+disjoint bands (legacy 128-dim ≈ 2,600 chars, ours at precision 6 ≈ 4,800, ours pre-compaction ≈
+10,700). Stage 2 drops the length term once the backfill is complete everywhere and `face_vector`
+is dropped, leaving the join alone. If the encoding ever changes before then, re-measure the bands
+*before* changing the floor; every ownership query flips at once otherwise. One known degenerate
+case: an all-zero embedding encodes short and falls below the floor (and fails
+`FaceVectorCodec::decode()`'s length check the same way).
 
 **Capping rows in PHP saves no I/O** — the rows have already been read. Restrict in the `SELECT`.
-`ClusteringService::loadDetections()` therefore selects `id` + `cluster_id` first and fetches
-vectors only for the ids it wants, and streams with `fetch()` rather than `fetchAll()`.
+`ClusteringService::selectWantedIds()` therefore projects `id`/`cluster_id`/`face_id` first (via
+the `facewright_detection_faces` join) and `loadDetections()` fetches embeddings from
+`facewright_faces` only for the face ids it wants, streaming with `fetch()` rather than
+`fetchAll()`.
 
 ### Job semantics
 
@@ -358,17 +374,16 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 5. **No tests, static analysis, or CI.** The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
    unit-testable without an instance and have zero coverage.
-6. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop,
-   `AccessSyncService::copyToUsers()` and `ClusteringService::persistAssignments()`.
-7. **Option C — vectors in a table we own, keyed by physical face** — investigated and
-   deliberately deferred. Fan-out duplicates each embedding once per user with access (1.5× on a
-   two-user instance), and owning the column would also allow raw binary storage (2 KB vs 4.8 KB).
-   Deferred because the reclaim is modest, it rewrites every `VECTOR_LENGTH_FLOOR` call site, and
-   stripping `face_vector` would be this project's first irreversible step. Reopen when a third
-   full-access user appears — or when `docs/independence.md`'s Stage 1 starts, which is this
-   option extended with per-user assignment state. The face-identity key (geometry tuple vs.
-   surrogate `face_index`) is unchosen and must be decided before any migration starts; the doc
-   recommends `(file_id, face_index)`. The one Recognize casualty would be `FacePhoto::delete()`.
+6. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop (now two inserts per user
+   per face, plus a per-face read-back query for `facewright_faces.id` — `IDBConnection::
+   setValues()` has no id-returning mode), `AccessSyncService::copyToUsers()` and
+   `ClusteringService::persistAssignments()`.
+
+Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
+`facewright_detection_faces` in "Schema mapping" and Stage 1 of
+`docs/independence-implementation.md`. The face-identity key is `(file_id, face_index)`, as
+recommended. `FacePhoto::delete()` is still Recognize's DAV code today (Stage 2 replaces it); it
+keeps working unmodified since `face_vector` is still written.
 
 ## Licensing note
 
