@@ -285,12 +285,27 @@ class AccessSyncService {
 		// order is (x, y, height, width) while DetectionService writes (x, y, width, height), so a
 		// positional copy would silently transpose every bounding box.
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('x', 'y', 'width', 'height', 'face_vector')
+		$qb->select('id', 'x', 'y', 'width', 'height', 'face_vector')
 			->from('recognize_face_detections')
 			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
 			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($fromUser)))
 			->andWhere($this->ownRowsExpr($qb));
 		$rows = $qb->executeQuery()->fetchAll();
+
+		// donor detection_id => face_id, so each copy can link to the same physical face - a
+		// donor row not yet backfilled (no link) is copied without one; migrate-faces links both
+		// sides later.
+		$faceIdsByDonorRow = [];
+		if ($rows !== []) {
+			$donorIds = array_map(static fn (array $row): int => (int)$row['id'], $rows);
+			$linkQb = $this->db->getQueryBuilder();
+			$linkQb->select('detection_id', 'face_id')
+				->from('facewright_detection_faces')
+				->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($donorIds, IQueryBuilder::PARAM_INT_ARRAY)));
+			foreach ($linkQb->executeQuery()->fetchAll() as $link) {
+				$faceIdsByDonorRow[(int)$link['detection_id']] = (int)$link['face_id'];
+			}
+		}
 
 		$written = 0;
 		foreach ($toUsers as $toUser) {
@@ -318,6 +333,18 @@ class AccessSyncService {
 					]);
 				$insert->executeStatement();
 				$written++;
+
+				$faceId = $faceIdsByDonorRow[(int)$row['id']] ?? null;
+				if ($faceId !== null) {
+					$link = $this->db->getQueryBuilder();
+					$link->insert('facewright_detection_faces')
+						->values([
+							'detection_id' => $link->createNamedParameter($insert->getLastInsertId(), IQueryBuilder::PARAM_INT),
+							'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
+							'user_id' => $link->createNamedParameter($toUser),
+						]);
+					$link->executeStatement();
+				}
 			}
 			// Rows before marker, same invariant as DetectionService::detect().
 			$this->processedFiles->copyMarker($fileId, $fromUser, $toUser, count($rows));
@@ -337,17 +364,45 @@ class AccessSyncService {
 	public function pruneExceptUsers(int $fileId, array $keepUserIds): int {
 		$keep = array_values(array_unique($keepUserIds));
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+		// Dumped first, then deleted by that exact id list - not "NOT IN (SELECT ... WHERE
+		// file_id = ?)" against the rows already being deleted, which is exactly the kind of
+		// re-run-the-selecting-query trap this project's own working practices warn against.
+		$idQb = $this->db->getQueryBuilder();
+		$idQb->select('id')
+			->from('recognize_face_detections')
+			->where($idQb->expr()->eq('file_id', $idQb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
 			// Ours only. Recognize's own removeDetectionsForFileFromUsersNotInList() has no
 			// equivalent guard, and copying its shape here would delete this instance's legacy
 			// 128-dim rows - data this project has never claimed ownership of.
-			->andWhere($this->ownRowsExpr($qb));
+			->andWhere($this->ownRowsExpr($idQb));
 		if ($keep !== []) {
-			$qb->andWhere($qb->expr()->notIn('user_id', $qb->createNamedParameter($keep, IQueryBuilder::PARAM_STR_ARRAY)));
+			$idQb->andWhere($idQb->expr()->notIn('user_id', $idQb->createNamedParameter($keep, IQueryBuilder::PARAM_STR_ARRAY)));
 		}
-		$deleted = $qb->executeStatement();
+		$idsToDelete = array_map('intval', array_column($idQb->executeQuery()->fetchAll(), 'id'));
+
+		$deleted = 0;
+		if ($idsToDelete !== []) {
+			foreach (array_chunk($idsToDelete, 1000) as $chunk) {
+				$linkQb = $this->db->getQueryBuilder();
+				$linkQb->delete('facewright_detection_faces')
+					->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
+				$linkQb->executeStatement();
+
+				$delQb = $this->db->getQueryBuilder();
+				$delQb->delete('recognize_face_detections')
+					->where($delQb->expr()->in('id', $delQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
+				$deleted += $delQb->executeStatement();
+			}
+		}
+
+		// Nobody has any path to the file left (the forgetFile() case) - the physical faces
+		// themselves are orphaned too, not just this user's detection rows.
+		if ($keep === []) {
+			$facesQb = $this->db->getQueryBuilder();
+			$facesQb->delete('facewright_faces')
+				->where($facesQb->expr()->eq('file_id', $facesQb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)));
+			$facesQb->executeStatement();
+		}
 
 		// facewright_processed is entirely ours, so no dimension question arises there.
 		$deleted += $this->processedFiles->deleteForFileExceptUsers($fileId, $keep);
