@@ -44,11 +44,10 @@ Three hard dependencies on the app being **enabled**, not just on its tables exi
    against Recognize's `OCA\Recognize\Dav\RootCollection` at `/remote.php/dav/recognize/...`.
 3. Memories' frontend hardcodes `recognize` and `facerecognition` as the only people backends.
 
-Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). The cheapest way
-out, if ever wanted: a shim app with `<id>recognize</id>`, version ≥ 3.8.0, `faces.enabled=true`,
-plus a Sabre DAV collection in `facewright_bridge` whose `getName()` returns `'recognize'` — the
-mount path comes from that return value, not the app id. ~300–400 lines, no Memories patch, but
-it rests on undocumented Memories internals. Not done; kept here so it needn't be re-derived.
+Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
+Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
+causes, and the staged path out (own tables first, then a `recognize`-contract shim that replaces
+Recognize, then optionally Memories) are in `docs/independence.md`.
 
 ## Components
 
@@ -123,9 +122,11 @@ backlog scan). Plain PHP templates + vanilla JS, no build step.
   (≈4.8 KB) instead of off-page (≈10.7 KB, one dedicated 16 KB InnoDB page per row). Must stay
   `json_decode`-able: Recognize's `FacePhoto::delete()` (Memories' "remove this face") reads it.
 - `cluster_id`: `NULL` = pending; `-1` = Recognize's own noise label, **treated as pending** by us
-  (Recognize judged our vectors in the wrong space); `-2` = `UNCLUSTERABLE`, our sentinel meaning
-  "evaluated in a full pass, nothing matched". Rows at `-2` stay in the matching pool and can
-  still be pulled into a cluster by a later face; they are just not re-attempted as seeds.
+  (Recognize judged our vectors in the wrong space) — and also what deleting a person in Memories
+  writes to its members (`FaceClusterMapper::delete()`, see Open item 4); `-2` = `UNCLUSTERABLE`,
+  our sentinel meaning "evaluated in a full pass, nothing matched". Rows at `-2` stay in the
+  matching pool and can still be pulled into a cluster by a later face; they are just not
+  re-attempted as seeds.
   **Do not use `-1` for this**: Recognize's `sampleRejectedDetectionsByUserId()` selects
   `cluster_id = -1` and feeds those rows into its own clustering. Recognize has no predicate
   matching `-2`, and Memories inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
@@ -329,11 +330,15 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 3. **Admin-side threshold changes re-evaluate nothing for users who set their own**; only the
    personal page triggers `clearUnclusterableMarks()`. `occ facewright:cluster --reset` remains
    the blunt option.
-4. **Three known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
+4. **Five known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
    synchronously on the event loop (a crash reads as retryable, and `/heartbeat` stalls during
    inference); `DetectQueuedJob`'s zero-byte branch marks *every* user with access, not just
    `$pending`; `ProcessedFileService::candidateFileIds()` lacks the `SUPPORTED_MIMETYPES` filter,
-   so the "not yet processed" count can never reach zero.
+   so the "not yet processed" count can never reach zero; deleting a person in Memories sets its
+   faces to `-1`, which we read as pending, so the next clustering pass rebuilds the person
+   untitled; removing a face from a person sets it `NULL`, so it rejoins (and Recognize's handler
+   first loads the whole cluster's vectors into one web request). The last two are unfixable
+   while Memories' writes land in Recognize's code — see `docs/independence.md`, Findings 1–2.
 5. **No tests, static analysis, or CI.** The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
    unit-testable without an instance and have zero coverage.
@@ -346,9 +351,10 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    two-user instance), and owning the column would also allow raw binary storage (2 KB vs 4.8 KB).
    Deferred because the reclaim is modest, it rewrites every `VECTOR_LENGTH_FLOOR` call site, and
    stripping `face_vector` would be this project's first irreversible step. Reopen when a third
-   full-access user appears. The face-identity key (geometry tuple vs. surrogate `face_index`) is
-   unchosen and must be decided before any migration starts. The one Recognize casualty would be
-   `FacePhoto::delete()`.
+   full-access user appears — or when `docs/independence.md`'s Stage 1 starts, which is this
+   option extended with per-user assignment state. The face-identity key (geometry tuple vs.
+   surrogate `face_index`) is unchosen and must be decided before any migration starts; the doc
+   recommends `(file_id, face_index)`. The one Recognize casualty would be `FacePhoto::delete()`.
 
 ## Licensing note
 

@@ -49,16 +49,19 @@ full design history and every incident/gotcha hit building this, if you want the
 
 ## Current limitations
 
-- **Single-user prototype.** Detection is keyed to a file's owner, not fanned out to every user
-  with access to a file (unlike Recognize's own behavior).
+- **Tested on one instance with two users.** Per-user fan-out (every user with access to a file
+  gets rows, as Recognize does) exists, but share/unshare at runtime has only been exercised by
+  `occ` command, never by a share created in the browser.
 - **Clustering thresholds are borrowed, not yet broadly validated.** They come from
   [Immich](https://github.com/immich-app/immich)'s InsightFace defaults (cosine distance 0.5,
   min 3 faces), since Immich uses the same `buffalo_l` model. Spot-checked against real photos
   from one library and looked correct, but not yet validated against a large, diverse dataset.
 - **No resilience to Recognize's own schema changing.** This project depends directly on
   Recognize's internal tables, which are undocumented and could change in a future Recognize
-  release.
-- Rename/delete/mount-change handling for the automatic file-event listener is not implemented.
+  release (Recognize 10 already renamed the vector column once). `docs/independence.md` reviews
+  the full coupling to Recognize and Memories and lays out a staged way out of it.
+- Rename, delete and mount-change handling exists (`FileCreatedListener`, `FileAccessListener`)
+  but `PruneService` has never deleted anything on a real instance.
 
 ## Quickstart: try it locally
 
