@@ -143,7 +143,7 @@ class PeopleService {
 			->leftJoin('d', 'recognize_face_clusters', 'c', $qb->expr()->eq('d.cluster_id', 'c.id'))
 			->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('d.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere(DetectionService::ownRowsExpr($qb))
+			->andWhere(DetectionService::ownRowsExpr($qb, 'd'))
 			->orderBy('d.id', 'ASC');
 
 		$faces = [];

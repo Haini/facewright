@@ -49,11 +49,15 @@ class DetectionService {
 	public const VECTOR_PRECISION = 6;
 
 	/**
-	 * char_length(face_vector) above which a row is one of ours (512-dim InsightFace) rather than
-	 * Recognize's legacy 128-dim face-api.js data. Used instead of decoding the JSON because it
-	 * keeps the "is this ours" test set-based - touching face_vector costs a page read per row for
-	 * any row still in the pre-VECTOR_PRECISION encoding (the lesson from clustering's
-	 * 1023 MB -> 340 MB fix).
+	 * Transitional half of ownRowsExpr() during Stage 1 of
+	 * docs/independence-implementation.md - char_length(face_vector) above which a row is one of
+	 * ours (512-dim InsightFace) rather than Recognize's legacy 128-dim face-api.js data. Used
+	 * instead of decoding the JSON because it keeps the "is this ours" test set-based - touching
+	 * face_vector costs a page read per row for any row still in the pre-VECTOR_PRECISION encoding
+	 * (the lesson from clustering's 1023 MB -> 340 MB fix).
+	 *
+	 * Deleted once Stage 2 drops face_vector and ownRowsExpr() becomes the join alone - see that
+	 * method's docblock.
 	 *
 	 * Measured on the live table, there are three bands, not two, because re-encoding is
 	 * incremental and old and new rows coexist while it runs:
@@ -247,17 +251,40 @@ class DetectionService {
 	}
 
 	/**
-	 * "This row is Facewright's, not Recognize's legacy classifier's" - by embedding length, which
-	 * keeps the test in the SELECT instead of faulting in the off-page face_vector BLOB per row.
-	 * See VECTOR_LENGTH_FLOOR for the measurement that licenses it.
+	 * "This row is Facewright's, not Recognize's legacy classifier's."
 	 *
-	 * Lives here, next to the constant, because every query that has to tell the two apps' rows
-	 * apart needs the identical predicate - a second copy is exactly how the two drift.
+	 * During Stage 1 of docs/independence-implementation.md this is `join OR length`: a row
+	 * counts as ours either because it has a facewright_detection_faces link, or because its
+	 * face_vector is long enough (VECTOR_LENGTH_FLOOR's proxy). The OR closes the window between
+	 * deploying this code and finishing `occ facewright:migrate-faces` - during that window a
+	 * join-only predicate would call every pre-existing row "not ours", and
+	 * AccessSyncService::copyExisting() would then copy processed markers without any detection
+	 * rows on a share, silently and permanently. Stage 2 removes the length term once the backfill
+	 * is complete everywhere and face_vector is dropped, leaving the join alone.
+	 *
+	 * Lives here, next to VECTOR_LENGTH_FLOOR, because every query that has to tell the two apps'
+	 * rows apart needs the identical predicate - a second copy is exactly how the two drift.
+	 *
+	 * Static with no $db of its own (existing call sites depend on that signature), so the link
+	 * subquery is built from the query builder's own connection.
+	 *
+	 * $alias: every existing call site queries recognize_face_detections unaliased, so bare `id`
+	 * and `face_vector` resolve on their own. PeopleService::facesForFile() joins it against
+	 * recognize_face_clusters (which also has an `id` column) under alias `d`, so it passes
+	 * $alias = 'd' to keep both column references unambiguous.
 	 */
-	public static function ownRowsExpr(IQueryBuilder $qb): string {
-		return (string)$qb->expr()->gt(
-			$qb->func()->charLength('face_vector'),
+	public static function ownRowsExpr(IQueryBuilder $qb, string $alias = ''): string {
+		$prefix = $alias === '' ? '' : $alias . '.';
+
+		$linked = $qb->getConnection()->getQueryBuilder();
+		$linked->select('detection_id')->from('facewright_detection_faces');
+
+		$byLength = $qb->expr()->gt(
+			$qb->func()->charLength($prefix . 'face_vector'),
 			$qb->createNamedParameter(self::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
 		);
+		$byLink = $qb->expr()->in($prefix . 'id', $qb->createFunction($linked->getSQL()));
+
+		return (string)$qb->expr()->orX($byLink, $byLength);
 	}
 }
