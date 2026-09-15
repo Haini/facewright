@@ -165,7 +165,7 @@ class DetectionService {
 		$insertTargets = array_values(array_diff($targets, $this->usersWithRowsFor($fileId, $targets)));
 
 		$inserted = 0;
-		foreach ($faces as $face) {
+		foreach ($faces as $faceIndex => $face) {
 			[$x1, $y1, $x2, $y2] = $face['bbox'];
 			// Encoded once and reused: re-encoding per user would be the most expensive thing in
 			// this loop.
@@ -174,6 +174,12 @@ class DetectionService {
 			$y = $y1 / $imageHeight;
 			$width = ($x2 - $x1) / $imageWidth;
 			$height = ($y2 - $y1) / $imageHeight;
+
+			// Rows (physical face, then per-user detection) before links, same "crash leaves
+			// something ownRowsExpr() still recognizes" ordering as the marker below - a crash
+			// between the detection insert and the link insert leaves a row the transitional OR
+			// predicate still finds by length, and `occ facewright:migrate-faces` links it later.
+			$faceId = $this->upsertFace($fileId, $faceIndex, $x, $y, $width, $height, $face['det_score'] ?? null, $face['embedding']);
 
 			foreach ($insertTargets as $userId) {
 				$qb = $this->db->getQueryBuilder();
@@ -188,6 +194,17 @@ class DetectionService {
 						'face_vector' => $qb->createNamedParameter($vector),
 					]);
 				$qb->executeStatement();
+				$detectionId = $qb->getLastInsertId();
+
+				$link = $this->db->getQueryBuilder();
+				$link->insert('facewright_detection_faces')
+					->values([
+						'detection_id' => $link->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT),
+						'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
+						'user_id' => $link->createNamedParameter($userId),
+					]);
+				$link->executeStatement();
+
 				$inserted++;
 			}
 		}
@@ -248,6 +265,37 @@ class DetectionService {
 			->andWhere(self::ownRowsExpr($qb))
 			->groupBy('user_id');
 		return array_column($qb->executeQuery()->fetchAll(), 'user_id');
+	}
+
+	/**
+	 * Upserts the physical face (facewright_faces) for one detected face in a file, and returns
+	 * its id. IDBConnection::setValues() has no "return the id" mode - it returns 1 on insert, 0
+	 * on update (there is no public insertOrUpdate() to read back from either) - so the id is
+	 * fetched with a second query. One extra query per face is accepted here; the row-at-a-time
+	 * insert loop this lives in is already CLAUDE.md Open item 6.
+	 *
+	 * @param list<float> $embedding
+	 */
+	private function upsertFace(int $fileId, int $faceIndex, float $x, float $y, float $width, float $height, ?float $detScore, array $embedding): int {
+		$this->db->setValues('facewright_faces', [
+			'file_id' => $fileId,
+			'face_index' => $faceIndex,
+		], [
+			'x' => $x,
+			'y' => $y,
+			'width' => $width,
+			'height' => $height,
+			'det_score' => $detScore,
+			'embedding' => FaceVectorCodec::encode($embedding),
+			'model' => 'buffalo_l',
+		]);
+
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('id')
+			->from('facewright_faces')
+			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('face_index', $qb->createNamedParameter($faceIndex, IQueryBuilder::PARAM_INT)));
+		return (int)$qb->executeQuery()->fetchOne();
 	}
 
 	/**
