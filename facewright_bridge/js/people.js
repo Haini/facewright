@@ -577,6 +577,57 @@
 		return { stop: scroller.stop, reload: reload };
 	}
 
+	// ---- face actions shared by the grids ------------------------------------------------
+
+	/** "Move to...": pick a person (or type a new name), then move the selected faces there. */
+	function moveAction(excludeId) {
+		return { label: 'Move to…', run: function (ids) {
+			return pickPerson({ title: 'Move ' + plural(ids.length, 'face', 'faces') + ' to', exclude: excludeId, allowNew: true }).then(function (choice) {
+				if (choice === null) {
+					return null;
+				}
+				var body = choice.newTitle !== undefined ? { ids: ids, newTitle: choice.newTitle } : { ids: ids, clusterId: choice.clusterId };
+				return ocs('POST', '/faces/move', body).then(function (result) {
+					return { count: result.moved, message: 'Moved ' + plural(result.moved, 'face', 'faces') + (choice.newTitle !== undefined ? ' to ' + choice.newTitle : '') + '.' };
+				});
+			});
+		} };
+	}
+
+	function ignoreAction() {
+		return { label: 'Not a face', run: function (ids) {
+			return ocs('POST', '/faces/ignore', { ids: ids }).then(function (result) {
+				return { count: result.count, message: 'Marked ' + plural(result.count, 'face', 'faces') + ' as not a face.' };
+			});
+		} };
+	}
+
+	function restoreAction() {
+		return { label: 'Restore', run: function (ids) {
+			return ocs('POST', '/faces/unignore', { ids: ids }).then(function (result) {
+				return { count: result.count, message: 'Restored ' + plural(result.count, 'face', 'faces') + '. They will be considered the next time faces are grouped.' };
+			});
+		} };
+	}
+
+	/** A page that is only a titled, explained, selectable grid of faces: Unassigned, Ignored. */
+	function facesListView(page) {
+		var totalNode = h('span', { class: 'fw-total' });
+		main.appendChild(h('div', { class: 'fw-toolbar' }, [h('h2', { text: page.title }), totalNode]));
+		main.appendChild(h('p', { class: 'fw-intro', text: page.intro }));
+		var grid = faceGrid({
+			list: function (limit, offset) {
+				return ocs('GET', page.path + query({ limit: limit, offset: offset }));
+			},
+			onTotal: function (total) {
+				totalNode.textContent = plural(total, 'face', 'faces');
+			},
+			emptyText: page.emptyText,
+			actions: page.actions,
+		});
+		return grid.stop;
+	}
+
 	// ---- person page ---------------------------------------------------------------------
 
 	function personView(idText) {
@@ -665,27 +716,13 @@
 				onTotal: onTotal,
 				emptyText: 'There are no faces in this person.',
 				actions: [
-					{ label: 'Move to…', run: function (ids) {
-						return pickPerson({ title: 'Move ' + plural(ids.length, 'face', 'faces') + ' to', exclude: id, allowNew: true }).then(function (choice) {
-							if (choice === null) {
-								return null;
-							}
-							var body = choice.newTitle !== undefined ? { ids: ids, newTitle: choice.newTitle } : { ids: ids, clusterId: choice.clusterId };
-							return ocs('POST', '/faces/move', body).then(function (result) {
-								return { count: result.moved, message: 'Moved ' + plural(result.moved, 'face', 'faces') + (choice.newTitle !== undefined ? ' to ' + choice.newTitle : '') + '.' };
-							});
-						});
-					} },
+					moveAction(id),
 					{ label: 'Remove from person', run: function (ids) {
 						return ocs('POST', '/faces/detach', { ids: ids }).then(function (result) {
 							return { count: result.count, message: 'Removed ' + plural(result.count, 'face', 'faces') + ' from ' + name() + '. They are now under Unassigned.' };
 						});
 					} },
-					{ label: 'Not a face', run: function (ids) {
-						return ocs('POST', '/faces/ignore', { ids: ids }).then(function (result) {
-							return { count: result.count, message: 'Marked ' + plural(result.count, 'face', 'faces') + ' as not a face.' };
-						});
-					} },
+					ignoreAction(),
 				],
 			});
 		}).catch(function (error) {
@@ -713,10 +750,22 @@
 		people: peopleView,
 		person: personView,
 		unassigned: function () {
-			main.appendChild(h('h2', { text: 'Unassigned' }));
+			return facesListView({
+				title: 'Unassigned',
+				intro: 'Faces removed from a person, or left over when a person was deleted. They are not grouped automatically; move them to a person yourself.',
+				path: '/people/unassigned',
+				emptyText: 'No unassigned faces.',
+				actions: [moveAction(null), ignoreAction()],
+			});
 		},
 		ignored: function () {
-			main.appendChild(h('h2', { text: 'Ignored' }));
+			return facesListView({
+				title: 'Ignored',
+				intro: 'Faces marked as not a face. Restoring one lets automatic grouping consider it again; or move it straight to a person.',
+				path: '/people/ignored',
+				emptyText: 'No ignored faces.',
+				actions: [moveAction(null), restoreAction()],
+			});
 		},
 	};
 
