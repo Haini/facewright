@@ -101,7 +101,7 @@ class PeopleService {
 	 * @param list<int> $clusterIds
 	 * @return array<int, int> cluster id => detection id
 	 */
-	private function coversFor(string $userId, array $clusterIds): array {
+	public function coversFor(string $userId, array $clusterIds): array {
 		$covers = [];
 		foreach ($clusterIds as $clusterId) {
 			$qb = $this->db->getQueryBuilder();
@@ -371,6 +371,8 @@ class PeopleService {
 				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
 			$qb->executeStatement();
+			$this->forgetClusters($userId, $mergeIds);
+			$this->forgetCentroids($userId, [$keepId]); // its size changed
 			$this->db->commit();
 		} catch (\Throwable $e) {
 			$this->db->rollBack();
@@ -422,6 +424,7 @@ class PeopleService {
 				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
 			$qb->executeStatement();
+			$this->forgetClusters($userId, $clusterIds);
 			$this->db->commit();
 		} catch (\Throwable $e) {
 			$this->db->rollBack();
@@ -593,6 +596,37 @@ class PeopleService {
 			->andWhere($qb->expr()->in('c.id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
 			->andWhere($qb->expr()->eq('c.title', $qb->createNamedParameter('')))
 			->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
+		$qb->executeStatement();
+	}
+
+	/**
+	 * Drops what SuggestionService keeps about people that no longer exist: their cached
+	 * centroids and every dismissal that mentions them. Only the merge and delete paths call
+	 * this; a person removed from Memories' side leaves rows behind that are inert, since cluster
+	 * ids are never reused.
+	 *
+	 * @param list<int> $clusterIds
+	 */
+	private function forgetClusters(string $userId, array $clusterIds): void {
+		$this->forgetCentroids($userId, $clusterIds);
+
+		$qb = $this->db->getQueryBuilder();
+		$ids = $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY);
+		$qb->delete('facewright_merge_dismissals')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->orX(
+				$qb->expr()->in('cluster_a', $ids),
+				$qb->expr()->in('cluster_b', $ids),
+			));
+		$qb->executeStatement();
+	}
+
+	/** @param list<int> $clusterIds */
+	private function forgetCentroids(string $userId, array $clusterIds): void {
+		$qb = $this->db->getQueryBuilder();
+		$qb->delete('facewright_cluster_centroids')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
 		$qb->executeStatement();
 	}
 

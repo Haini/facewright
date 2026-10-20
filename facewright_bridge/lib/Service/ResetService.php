@@ -52,6 +52,13 @@ class ResetService {
 		$qb->delete('facewright_processed');
 		$clearedProcessed = $qb->executeStatement();
 
+		// Both reference the clusters deleted above, and nothing else.
+		foreach (['facewright_cluster_centroids', 'facewright_merge_dismissals'] as $table) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete($table);
+			$qb->executeStatement();
+		}
+
 		return [
 			'deletedDetections' => $deletedDetections,
 			'deletedClusters' => $deletedClusters,

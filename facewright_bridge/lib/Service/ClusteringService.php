@@ -312,6 +312,14 @@ class ClusteringService {
 		$qb->delete('recognize_face_clusters')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
 		$qb->executeStatement();
+
+		// The people are gone, so what SuggestionService kept about them is meaningless.
+		foreach (['facewright_cluster_centroids', 'facewright_merge_dismissals'] as $table) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete($table)
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			$qb->executeStatement();
+		}
 	}
 
 	/**

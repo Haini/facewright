@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\PeopleService;
+use OCA\FacewrightBridge\Service\SuggestionService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -20,6 +21,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 class People extends Command {
 	public function __construct(
 		private PeopleService $people,
+		private SuggestionService $suggestions,
 	) {
 		parent::__construct();
 	}
@@ -31,6 +33,8 @@ class People extends Command {
 			->addOption('faces', null, InputOption::VALUE_REQUIRED, 'List faces in this cluster (numeric id or title)')
 			->addOption('unassigned', null, InputOption::VALUE_NONE, 'List faces at cluster_id = -1 (unassigned)')
 			->addOption('ignored', null, InputOption::VALUE_NONE, 'List faces at cluster_id = -3 (marked "not a face")')
+			->addOption('suggest', null, InputOption::VALUE_NONE, 'Suggest people who may be the same person - across the library, or for --faces=<person>. Prints elapsed time and peak memory')
+			->addOption('no-store', null, InputOption::VALUE_NONE, 'With --suggest, compute centroids in memory and write nothing (for measuring against a database that must not change)')
 			->addOption('delete-empty', null, InputOption::VALUE_NONE, 'Delete this user\'s clusters with no remaining members')
 			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --delete-empty, report the count without deleting');
 	}
@@ -40,6 +44,10 @@ class People extends Command {
 
 		if ($input->getOption('delete-empty')) {
 			return $this->deleteEmpty($output, $userId, $input->getOption('dry-run'));
+		}
+
+		if ($input->getOption('suggest')) {
+			return $this->suggest($input, $output, $userId);
 		}
 
 		if ($input->getOption('unassigned')) {
@@ -69,6 +77,52 @@ class People extends Command {
 			$output->writeln("{$cluster['id']}\t{$title}\t{$cluster['count']} face(s)");
 		}
 		return 0;
+	}
+
+	private function suggest(InputInterface $input, OutputInterface $output, string $userId): int {
+		$store = !$input->getOption('no-store');
+		$facesOf = $input->getOption('faces');
+
+		$start = hrtime(true);
+		try {
+			if ($facesOf !== null) {
+				$clusterId = $this->people->resolveCluster($userId, $facesOf);
+				foreach ($this->suggestions->forPerson($userId, $clusterId, 10, $store) as $s) {
+					$output->writeln(sprintf("%.3f\t%s", $s['distance'], $this->label($s)));
+				}
+			} else {
+				foreach ($this->suggestions->global($userId, 50, $store) as $pair) {
+					$output->writeln(sprintf("%.3f\t%s\t%s", $pair['distance'], $this->label($pair['a']), $this->label($pair['b'])));
+				}
+			}
+		} catch (\InvalidArgumentException $e) {
+			$output->writeln('<error>' . $e->getMessage() . '</error>');
+			return 1;
+		}
+		$elapsed = (hrtime(true) - $start) / 1e9;
+
+		$run = $this->suggestions->lastRun();
+		$output->writeln(sprintf(
+			'clusters=%d candidates=%d comparisons=%d centroids(cached=%d computed=%d%s) centroid-time=%.2fs distance-time=%.2fs total=%.2fs peak-memory=%.1fMB max-distance=%.2f',
+			$run['clusters'] ?? 0,
+			$run['candidates'] ?? 0,
+			$run['comparisons'] ?? 0,
+			$run['centroidsCached'] ?? 0,
+			$run['centroidsComputed'] ?? 0,
+			$store ? '' : ', not stored',
+			$run['centroidSeconds'] ?? 0.0,
+			$run['distanceSeconds'] ?? 0.0,
+			$elapsed,
+			memory_get_peak_usage(true) / 1048576,
+			$this->suggestions->maxDistance(),
+		));
+		return 0;
+	}
+
+	/** @param array{id: int, title: string, count: int} $person */
+	private function label(array $person): string {
+		$title = $person['title'] !== '' ? $person['title'] : '(untitled)';
+		return "{$person['id']} {$title} [{$person['count']}]";
 	}
 
 	/** @param list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> $faces */
