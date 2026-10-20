@@ -27,21 +27,26 @@ class PeopleService {
 	) {
 	}
 
-	/** @return list<array{id: int, title: string, count: int}> */
-	public function listClusters(string $userId): array {
-		$qb = $this->db->getQueryBuilder();
+	/**
+	 * Named people are always listed; $minCount only hides untitled ones with fewer faces, so a
+	 * named person with one face can't become unreachable. $limit null = everything (the CLI).
+	 *
+	 * @return list<array{id: int, title: string, count: int, cover?: ?int}>
+	 */
+	public function listClusters(string $userId, ?int $limit = null, int $offset = 0, int $minCount = 0, string $search = '', bool $withCovers = false): array {
+		$qb = $this->clusterListQuery($userId, $minCount, $search);
 		$qb->select('c.id', 'c.title')
 			->selectAlias($qb->func()->count('d.id'), 'c')
-			->from('recognize_face_clusters', 'c')
-			->leftJoin('c', 'recognize_face_detections', 'd', $qb->expr()->eq('d.cluster_id', 'c.id'))
-			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
-			->groupBy('c.id', 'c.title')
 			// Named clusters first, then largest first, then stable by id - matches Recognize's
 			// own FacesHome::getChildren() ordering closely enough for Memories' list to look
 			// sane without depending on it.
 			->orderBy($qb->createFunction("(c.title <> '')"), 'DESC')
 			->addOrderBy('c', 'DESC')
-			->addOrderBy('c.id', 'ASC');
+			->addOrderBy('c.id', 'ASC')
+			->setFirstResult($offset);
+		if ($limit !== null) {
+			$qb->setMaxResults($limit);
+		}
 
 		$clusters = [];
 		$result = $qb->executeQuery();
@@ -49,7 +54,74 @@ class PeopleService {
 			$clusters[] = ['id' => (int)$row['id'], 'title' => (string)$row['title'], 'count' => (int)$row['c']];
 		}
 		$result->closeCursor();
+
+		if ($withCovers) {
+			$covers = $this->coversFor($userId, array_column($clusters, 'id'));
+			foreach ($clusters as &$cluster) {
+				$cluster['cover'] = $covers[$cluster['id']] ?? null;
+			}
+			unset($cluster);
+		}
 		return $clusters;
+	}
+
+	/** How many people listClusters() would return with the same filters and no paging. */
+	public function countClusters(string $userId, int $minCount = 0, string $search = ''): int {
+		$qb = $this->clusterListQuery($userId, $minCount, $search);
+		$qb->select('c.id');
+		// A derived table is the only way to count groups; QueryBuilder has no way to express it.
+		$result = $this->db->executeQuery('SELECT COUNT(*) FROM (' . $qb->getSQL() . ') t', $qb->getParameters(), $qb->getParameterTypes());
+		$count = (int)$result->fetchOne();
+		$result->closeCursor();
+		return $count;
+	}
+
+	private function clusterListQuery(string $userId, int $minCount, string $search): IQueryBuilder {
+		$qb = $this->db->getQueryBuilder();
+		$qb->from('recognize_face_clusters', 'c')
+			->leftJoin('c', 'recognize_face_detections', 'd', $qb->expr()->eq('d.cluster_id', 'c.id'))
+			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
+			->groupBy('c.id', 'c.title');
+		if ($search !== '') {
+			$qb->andWhere($qb->expr()->iLike('c.title', $qb->createNamedParameter('%' . $this->db->escapeLikeParameter($search) . '%')));
+		}
+		if ($minCount > 0) {
+			$qb->having($qb->expr()->orX(
+				$qb->expr()->gte($qb->createFunction('COUNT(d.id)'), $qb->createNamedParameter($minCount, IQueryBuilder::PARAM_INT)),
+				$qb->expr()->neq('c.title', $qb->createNamedParameter('')),
+			));
+		}
+		return $qb;
+	}
+
+	/**
+	 * Each cluster's cover: its best-scoring face (highest detector confidence, then largest),
+	 * one query per cluster on the page. det_score is NULL for backfilled rows, which sort last.
+	 *
+	 * @param list<int> $clusterIds
+	 * @return array<int, int> cluster id => detection id
+	 */
+	private function coversFor(string $userId, array $clusterIds): array {
+		$covers = [];
+		foreach ($clusterIds as $clusterId) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->select('d.id')
+				->from('recognize_face_detections', 'd')
+				->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
+				->innerJoin('l', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'l.face_id'))
+				->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->eq('d.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
+				->orderBy($qb->createFunction('(f.det_score IS NULL)'), 'ASC')
+				->addOrderBy('f.det_score', 'DESC')
+				->addOrderBy($qb->createFunction('(f.width * f.height)'), 'DESC')
+				->addOrderBy('d.id', 'ASC')
+				->setMaxResults(1);
+			$id = $qb->executeQuery()->fetchOne();
+			if ($id !== false) {
+				$covers[$clusterId] = (int)$id;
+			}
+		}
+		return $covers;
 	}
 
 	/** @return array{id: int, title: string} */
@@ -95,28 +167,42 @@ class PeopleService {
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
-	public function listFaces(string $userId, int $clusterId): array {
-		return $this->listFacesByClusterId($userId, $clusterId);
+	public function listFaces(string $userId, int $clusterId, ?int $limit = null, int $offset = 0): array {
+		return $this->listFacesByClusterId($userId, $clusterId, $limit, $offset);
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
-	public function listUnassignedFaces(string $userId): array {
-		return $this->listFacesByClusterId($userId, ClusteringService::UNASSIGNED);
+	public function listUnassignedFaces(string $userId, ?int $limit = null, int $offset = 0): array {
+		return $this->listFacesByClusterId($userId, ClusteringService::UNASSIGNED, $limit, $offset);
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
-	public function listIgnoredFaces(string $userId): array {
-		return $this->listFacesByClusterId($userId, ClusteringService::IGNORED);
+	public function listIgnoredFaces(string $userId, ?int $limit = null, int $offset = 0): array {
+		return $this->listFacesByClusterId($userId, ClusteringService::IGNORED, $limit, $offset);
+	}
+
+	/** Faces at $clusterId, which may be a real cluster or one of ClusteringService's sentinels. */
+	public function countFaces(string $userId, int $clusterId): int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select($qb->func()->count('*'))
+			->from('recognize_face_detections')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)));
+		return (int)$qb->executeQuery()->fetchOne();
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
-	private function listFacesByClusterId(string $userId, int $clusterId): array {
+	private function listFacesByClusterId(string $userId, int $clusterId, ?int $limit, int $offset): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id', 'file_id', 'x', 'y', 'width', 'height')
 			->from('recognize_face_detections')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-			->orderBy('id', 'ASC');
+			->orderBy('id', 'ASC')
+			->setFirstResult($offset);
+		if ($limit !== null) {
+			$qb->setMaxResults($limit);
+		}
 
 		$faces = [];
 		$result = $qb->executeQuery();
@@ -235,32 +321,63 @@ class PeopleService {
 	public function mergeClusters(string $userId, string $keep, string $merge, bool $dryRun = false): array {
 		$keepId = $this->resolveCluster($userId, $keep);
 		$mergeId = $this->resolveCluster($userId, $merge);
+		$result = $this->mergeMany($userId, $keepId, [$mergeId], $dryRun);
+		return ['keepId' => $keepId, 'mergeId' => $mergeId, 'moved' => $result['moved']];
+	}
 
-		if ($keepId === $mergeId) {
+	/**
+	 * Merges several of $userId's clusters into $keepId (whose title survives). All-or-nothing:
+	 * every id is resolved before anything is written, and the move and the deletes share one
+	 * transaction.
+	 *
+	 * @param list<int> $mergeIds
+	 * @return array{keepId: int, merged: list<int>, moved: int}
+	 * @throws \InvalidArgumentException if any id isn't $userId's, $mergeIds is empty, or it
+	 *     contains $keepId
+	 */
+	public function mergeMany(string $userId, int $keepId, array $mergeIds, bool $dryRun = false): array {
+		$mergeIds = array_values(array_unique($mergeIds));
+		if ($mergeIds === []) {
+			throw new \InvalidArgumentException('Pick at least one person to merge.');
+		}
+		if (in_array($keepId, $mergeIds, true)) {
 			throw new \InvalidArgumentException('Cannot merge a person into themselves.');
+		}
+		$this->getCluster($userId, $keepId);
+		foreach ($mergeIds as $id) {
+			$this->getCluster($userId, $id);
 		}
 
 		if ($dryRun) {
 			$qb = $this->db->getQueryBuilder();
 			$qb->select($qb->func()->count('*'))
 				->from('recognize_face_detections')
-				->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter($mergeId, IQueryBuilder::PARAM_INT)));
-			$moved = (int)$qb->executeQuery()->fetchOne();
-			return ['keepId' => $keepId, 'mergeId' => $mergeId, 'moved' => $moved];
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
+			return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => (int)$qb->executeQuery()->fetchOne()];
 		}
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->update('recognize_face_detections')
-			->set('cluster_id', $qb->createNamedParameter($keepId, IQueryBuilder::PARAM_INT))
-			->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter($mergeId, IQueryBuilder::PARAM_INT)));
-		$moved = $qb->executeStatement();
+		$this->db->beginTransaction();
+		try {
+			$qb = $this->db->getQueryBuilder();
+			$qb->update('recognize_face_detections')
+				->set('cluster_id', $qb->createNamedParameter($keepId, IQueryBuilder::PARAM_INT))
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
+			$moved = $qb->executeStatement();
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_clusters')
-			->where($qb->expr()->eq('id', $qb->createNamedParameter($mergeId, IQueryBuilder::PARAM_INT)));
-		$qb->executeStatement();
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete('recognize_face_clusters')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
+			$qb->executeStatement();
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
 
-		return ['keepId' => $keepId, 'mergeId' => $mergeId, 'moved' => $moved];
+		return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => $moved];
 	}
 
 	/**
@@ -272,35 +389,64 @@ class PeopleService {
 	 * @throws \InvalidArgumentException if $clusterId doesn't exist for $userId
 	 */
 	public function deleteCluster(string $userId, int $clusterId): int {
-		$this->getCluster($userId, $clusterId); // throws if not $userId's
+		return $this->deleteMany($userId, [$clusterId]);
+	}
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->update('recognize_face_detections')
-			->set('cluster_id', $qb->createNamedParameter(ClusteringService::UNASSIGNED, IQueryBuilder::PARAM_INT))
-			->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-		$unassigned = $qb->executeStatement();
+	/**
+	 * deleteCluster() for several people at once, all-or-nothing.
+	 *
+	 * @param list<int> $clusterIds
+	 * @return int members unassigned
+	 * @throws \InvalidArgumentException if any id doesn't exist for $userId
+	 */
+	public function deleteMany(string $userId, array $clusterIds): int {
+		$clusterIds = array_values(array_unique($clusterIds));
+		foreach ($clusterIds as $id) {
+			$this->getCluster($userId, $id);
+		}
+		if ($clusterIds === []) {
+			return 0;
+		}
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_clusters')
-			->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-		$qb->executeStatement();
+		$this->db->beginTransaction();
+		try {
+			$qb = $this->db->getQueryBuilder();
+			$qb->update('recognize_face_detections')
+				->set('cluster_id', $qb->createNamedParameter(ClusteringService::UNASSIGNED, IQueryBuilder::PARAM_INT))
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
+			$unassigned = $qb->executeStatement();
+
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete('recognize_face_clusters')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
+			$qb->executeStatement();
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
 
 		return $unassigned;
 	}
 
 	/** @throws \InvalidArgumentException if $detectionId doesn't belong to $userId or isn't in a real cluster */
 	public function detachFace(string $userId, int $detectionId): void {
-		$qb = $this->db->getQueryBuilder();
-		$qb->update('recognize_face_detections')
-			->set('cluster_id', $qb->createNamedParameter(ClusteringService::UNASSIGNED, IQueryBuilder::PARAM_INT))
-			->where($qb->expr()->eq('id', $qb->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->gt('cluster_id', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
-		if ($qb->executeStatement() === 0) {
+		if ($this->detachFaces($userId, [$detectionId]) === 0) {
 			throw new \InvalidArgumentException("Face {$detectionId} does not exist for {$userId}, or is not currently assigned to a person.");
 		}
+	}
+
+	/**
+	 * Takes faces out of their people (cluster_id = -1). Faces that aren't in a real cluster are
+	 * left as they are and not counted; untitled people left empty are deleted.
+	 *
+	 * @param list<int> $detectionIds
+	 * @return int faces detached
+	 */
+	public function detachFaces(string $userId, array $detectionIds): int {
+		return $this->setFacesCluster($userId, $detectionIds, ClusteringService::UNASSIGNED, null, true);
 	}
 
 	/**
@@ -311,16 +457,42 @@ class PeopleService {
 	 *     $detectionId doesn't belong to $userId
 	 */
 	public function moveFace(string $userId, int $detectionId, int $targetClusterId): void {
-		$this->getCluster($userId, $targetClusterId); // throws if not $userId's
-
-		$qb = $this->db->getQueryBuilder();
-		$qb->update('recognize_face_detections')
-			->set('cluster_id', $qb->createNamedParameter($targetClusterId, IQueryBuilder::PARAM_INT))
-			->where($qb->expr()->eq('id', $qb->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-		if ($qb->executeStatement() === 0) {
+		if ($this->moveFaces($userId, [$detectionId], $targetClusterId) === 0) {
 			throw new \InvalidArgumentException("Face {$detectionId} does not exist for {$userId}.");
 		}
+	}
+
+	/**
+	 * Moves faces into one of $userId's clusters from any state, including unassigned and
+	 * ignored; untitled people left empty are deleted.
+	 *
+	 * @param list<int> $detectionIds
+	 * @return int faces moved
+	 * @throws \InvalidArgumentException if $targetClusterId doesn't belong to $userId
+	 */
+	public function moveFaces(string $userId, array $detectionIds, int $targetClusterId): int {
+		$this->getCluster($userId, $targetClusterId); // throws if not $userId's
+		return $this->setFacesCluster($userId, $detectionIds, $targetClusterId, null);
+	}
+
+	/**
+	 * Creates a person and moves the faces into it in one transaction.
+	 *
+	 * @param list<int> $detectionIds
+	 * @return array{clusterId: int, moved: int}
+	 * @throws \InvalidArgumentException on an invalid or already-used title
+	 */
+	public function moveFacesToNewPerson(string $userId, array $detectionIds, string $title): array {
+		$this->db->beginTransaction();
+		try {
+			$clusterId = $this->createCluster($userId, $title);
+			$moved = $this->moveFaces($userId, $detectionIds, $clusterId);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+		return ['clusterId' => $clusterId, 'moved' => $moved];
 	}
 
 	/**
@@ -329,7 +501,7 @@ class PeopleService {
 	 * left with no members are deleted.
 	 *
 	 * @param list<int> $detectionIds
-	 * @return int faces newly ignored
+	 * @return int faces ignored
 	 */
 	public function ignoreFaces(string $userId, array $detectionIds): int {
 		return $this->setFacesCluster($userId, $detectionIds, ClusteringService::IGNORED, null);
@@ -346,14 +518,14 @@ class PeopleService {
 	}
 
 	/**
-	 * The one set-based "change these faces' cluster_id" statement. $onlyFrom restricts to rows
-	 * currently at that value; with null, rows already at $to are skipped instead, so the count
-	 * is "rows that changed". Untitled people emptied by the change are deleted in the same
-	 * transaction.
+	 * The one set-based "change these faces' cluster_id" statement, scoped to $userId. $onlyFrom
+	 * restricts it to rows currently at that value, $onlyAssigned to rows in a real cluster. The
+	 * count is rows matched (the connection runs with FOUND_ROWS), so a face already at $to still
+	 * counts. Untitled people emptied by the change are deleted in the same transaction.
 	 *
 	 * @param list<int> $detectionIds
 	 */
-	private function setFacesCluster(string $userId, array $detectionIds, ?int $to, ?int $onlyFrom): int {
+	private function setFacesCluster(string $userId, array $detectionIds, ?int $to, ?int $onlyFrom, bool $onlyAssigned = false): int {
 		$changed = 0;
 		$this->db->beginTransaction();
 		try {
@@ -367,11 +539,9 @@ class PeopleService {
 					->andWhere($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
 				if ($onlyFrom !== null) {
 					$qb->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($onlyFrom, IQueryBuilder::PARAM_INT)));
-				} else {
-					$qb->andWhere($qb->expr()->orX(
-						$qb->expr()->isNull('cluster_id'),
-						$qb->expr()->neq('cluster_id', $qb->createNamedParameter($to, IQueryBuilder::PARAM_INT)),
-					));
+				}
+				if ($onlyAssigned) {
+					$qb->andWhere($qb->expr()->gt('cluster_id', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
 				}
 				$changed += $qb->executeStatement();
 
