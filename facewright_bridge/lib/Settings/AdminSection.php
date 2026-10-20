@@ -24,6 +24,6 @@ class AdminSection implements IIconSection {
 	}
 
 	public function getIcon(): string {
-		return $this->urlGenerator->imagePath('facewright_bridge', 'app.svg');
+		return $this->urlGenerator->imagePath('facewright_bridge', 'app-dark.svg');
 	}
 }

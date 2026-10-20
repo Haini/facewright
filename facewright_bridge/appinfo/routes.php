@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 return [
 	'routes' => [
+		['name' => 'Page#index', 'url' => '/', 'verb' => 'GET'],
+
 		['name' => 'PeopleSettings#setEnabled', 'url' => '/people-enabled', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#setAutomaticDetectionEnabled', 'url' => '/automatic-detection-enabled', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#setAutomaticClusteringEnabled', 'url' => '/automatic-clustering-enabled', 'verb' => 'PUT'],
