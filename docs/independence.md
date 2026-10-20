@@ -231,6 +231,11 @@ called `recognize`. Stage 3 is about no longer needing that name.
 Recommendation: attempt (a) as an offer once Stages 0–2 have run for a while; do not build (b)
 speculatively.
 
+Update: a narrowed (b) is now planned regardless of (a): a face-crop *curation* page (name,
+merge, delete, fix, ignore faces; no photo galleries), because Memories' write path can't
+make a face removal stick, has no merge, and doesn't page on large libraries. Memories stays
+the place to browse photos. Requirements: `docs/people-ui.md`.
+
 ## What stays coupled regardless
 
 - Memories only shows files present in `oc_memories` (M1). Detection on files Memories has not
