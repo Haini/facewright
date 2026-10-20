@@ -163,6 +163,221 @@
 	font-size: 0.9em;
 }
 
+#facewright-people [hidden] {
+	display: none !important;
+}
+
+#facewright-people h2.unnamed {
+	color: var(--color-text-maxcontrast);
+	font-weight: normal;
+}
+
+.fw-back {
+	margin: 0 0 8px;
+}
+
+.fw-title-input {
+	min-width: 240px;
+	margin: 0;
+	font-size: 1.2em;
+}
+
+.fw-link-button {
+	padding: 4px 8px;
+	border: 0;
+	background: transparent;
+	color: var(--color-primary-element);
+	cursor: pointer;
+}
+
+.fw-link-button:hover {
+	text-decoration: underline;
+}
+
+/* Face grids */
+
+.fw-face-grid {
+	grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+	gap: 8px;
+}
+
+.fw-face {
+	position: relative;
+	border-radius: var(--border-radius-large);
+	cursor: pointer;
+	outline-offset: 2px;
+}
+
+.fw-face:focus-visible {
+	outline: 2px solid var(--color-primary-element);
+}
+
+.fw-face.selected {
+	outline: 3px solid var(--color-primary-element);
+}
+
+.fw-face.selected .fw-crop {
+	opacity: 0.8;
+	transform: scale(0.94);
+}
+
+.fw-face .fw-crop {
+	transition: transform 0.1s;
+}
+
+.fw-face-check {
+	position: absolute;
+	top: 6px;
+	inset-inline-start: 6px;
+	width: 22px;
+	height: 22px;
+	border: 2px solid #fff;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.35);
+	opacity: 0;
+	transition: opacity 0.1s;
+}
+
+.fw-face:hover .fw-face-check,
+.fw-face:focus-visible .fw-face-check,
+.fw-face-grid.selecting .fw-face-check {
+	opacity: 1;
+}
+
+.fw-face.selected .fw-face-check {
+	opacity: 1;
+	border-color: var(--color-primary-element);
+	background: var(--color-primary-element) center / 14px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23fff' d='M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/%3E%3C/svg%3E");
+}
+
+.fw-actionbar {
+	position: sticky;
+	bottom: 8px;
+	z-index: 5;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	margin-top: 16px;
+	padding: 10px 14px;
+	border: 1px solid var(--color-border-dark);
+	border-radius: var(--border-radius-large);
+	background: var(--color-main-background);
+	box-shadow: 0 2px 10px var(--color-box-shadow);
+}
+
+.fw-actionbar.busy {
+	opacity: 0.6;
+	pointer-events: none;
+}
+
+.fw-selected-count {
+	font-weight: bold;
+}
+
+.fw-actionbar-buttons {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.fw-action {
+	margin: 0;
+}
+
+/* Dialogs and the person picker */
+
+.fw-dialog {
+	/* Nextcloud's global reset zeroes the margin a modal dialog is centred with. */
+	inset: 0;
+	margin: auto;
+	width: min(440px, calc(100vw - 32px));
+	padding: 20px;
+	border: 1px solid var(--color-border-dark);
+	border-radius: var(--border-radius-large);
+	background: var(--color-main-background);
+	color: var(--color-main-text);
+}
+
+.fw-dialog::backdrop {
+	background: rgba(0, 0, 0, 0.5);
+}
+
+.fw-dialog h3 {
+	margin: 0 0 12px;
+}
+
+.fw-dialog .fw-search {
+	width: 100%;
+}
+
+.fw-dialog-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.fw-picker-list {
+	display: flex;
+	flex-direction: column;
+	max-height: 50vh;
+	margin-top: 8px;
+	overflow-y: auto;
+}
+
+.fw-picker-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	margin: 0;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: var(--border-radius-large);
+	background: transparent;
+	color: var(--color-main-text);
+	text-align: start;
+	cursor: pointer;
+}
+
+.fw-picker-row:hover,
+.fw-picker-row:focus-visible {
+	background: var(--color-background-hover);
+}
+
+.fw-picker-crop {
+	flex: 0 0 40px;
+	width: 40px;
+	height: 40px;
+	border-radius: 50%;
+	object-fit: cover;
+	background: var(--color-background-dark);
+}
+
+.fw-picker-plus {
+	display: inline-flex;
+	flex: 0 0 40px;
+	align-items: center;
+	justify-content: center;
+	height: 40px;
+	font-size: 1.5em;
+	color: var(--color-primary-element);
+}
+
+.fw-picker-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.fw-picker-none {
+	padding: 12px 8px;
+	color: var(--color-text-maxcontrast);
+}
+
 @media (max-width: 700px) {
 	#facewright-people {
 		flex-direction: column;
@@ -182,5 +397,9 @@
 
 	.fw-grid {
 		grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+	}
+
+	.fw-face-grid {
+		grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
 	}
 }

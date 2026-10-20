@@ -283,7 +283,8 @@ class PeopleService {
 
 	/**
 	 * @throws \InvalidArgumentException an empty title, a purely numeric one (ambiguous with an
-	 *     untitled cluster's own id-as-name), or one already used by another of $userId's clusters
+	 *     untitled cluster's own id-as-name); DuplicateTitleException for one already used by
+	 *     another of $userId's clusters
 	 */
 	private function assertValidTitle(string $userId, string $title, ?int $excludingClusterId): void {
 		if ($title === '') {
@@ -302,7 +303,7 @@ class PeopleService {
 			$qb->andWhere($qb->expr()->neq('id', $qb->createNamedParameter($excludingClusterId, IQueryBuilder::PARAM_INT)));
 		}
 		if ($qb->executeQuery()->fetchOne() !== false) {
-			throw new \InvalidArgumentException("A person named \"{$title}\" already exists; merge instead.");
+			throw new DuplicateTitleException("A person named \"{$title}\" already exists; merge instead.");
 		}
 	}
 

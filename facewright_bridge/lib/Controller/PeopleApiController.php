@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Controller;
 
 use OCA\FacewrightBridge\Service\ClusteringService;
+use OCA\FacewrightBridge\Service\DuplicateTitleException;
 use OCA\FacewrightBridge\Service\PeopleService;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -52,6 +53,20 @@ class PeopleApiController extends OCSController {
 		]);
 	}
 
+	/** One person: what the person page needs for its header. */
+	#[NoAdminRequired]
+	public function getCluster(int $id): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
+		}
+		try {
+			$person = $this->people->getCluster($this->userId, $id);
+		} catch (\InvalidArgumentException $e) {
+			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+		return new DataResponse($person + ['count' => $this->people->countFaces($this->userId, $id)]);
+	}
+
 	#[NoAdminRequired]
 	public function createCluster(string $title): DataResponse {
 		if ($this->userId === null) {
@@ -59,6 +74,8 @@ class PeopleApiController extends OCSController {
 		}
 		try {
 			$id = $this->people->createCluster($this->userId, $title);
+		} catch (DuplicateTitleException $e) {
+			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists'], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -89,6 +106,8 @@ class PeopleApiController extends OCSController {
 		}
 		try {
 			$this->people->renameCluster($this->userId, $id, $title);
+		} catch (DuplicateTitleException $e) {
+			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists'], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -195,6 +214,8 @@ class PeopleApiController extends OCSController {
 				return new DataResponse($this->people->moveFacesToNewPerson($this->userId, $ids, $newTitle));
 			}
 			return new DataResponse(['clusterId' => $clusterId, 'moved' => $this->people->moveFaces($this->userId, $ids, $clusterId)]);
+		} catch (DuplicateTitleException $e) {
+			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists'], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}

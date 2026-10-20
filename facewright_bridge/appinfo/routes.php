@@ -40,6 +40,7 @@ return [
 		['name' => 'SuggestionApi#forPerson', 'url' => '/api/v1/people/{id}/suggestions', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
 		['name' => 'SuggestionApi#dismiss', 'url' => '/api/v1/suggestions/dismiss', 'verb' => 'POST'],
 		['name' => 'PeopleApi#listFaces', 'url' => '/api/v1/people/{id}/faces', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
+		['name' => 'PeopleApi#getCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#renameCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'PUT', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#deleteCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'DELETE', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#mergeClusters', 'url' => '/api/v1/people/{id}/merge', 'verb' => 'POST', 'requirements' => ['id' => '\d+']],
