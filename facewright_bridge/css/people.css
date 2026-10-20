@@ -145,6 +145,10 @@
 	background: var(--color-background-dark);
 }
 
+.fw-crop-empty {
+	background: var(--color-background-dark);
+}
+
 .fw-person-name {
 	margin-top: 4px;
 	overflow: hidden;
@@ -529,6 +533,68 @@
 .fw-photo-actions.busy {
 	opacity: 0.6;
 	pointer-events: none;
+}
+
+/* "Possibly the same person" */
+
+.fw-suggest {
+	margin: 0 0 16px;
+	padding: 12px 14px;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	background: var(--color-background-hover);
+}
+
+.fw-suggest h3 {
+	margin: 0 0 10px;
+}
+
+.fw-suggest-wait {
+	margin: 0;
+	color: var(--color-text-maxcontrast);
+}
+
+.fw-suggest-cards {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+
+.fw-suggest-card {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 156px;
+	padding: 8px;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	background: var(--color-main-background);
+}
+
+.fw-suggest-link {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	color: var(--color-main-text);
+	text-decoration: none;
+}
+
+.fw-suggest-crop {
+	display: block;
+	width: 100%;
+	aspect-ratio: 1;
+	object-fit: cover;
+	border-radius: var(--border-radius);
+	background: var(--color-background-dark);
+}
+
+.fw-suggest-actions {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	margin-top: 4px;
 }
 
 @media (max-width: 700px) {

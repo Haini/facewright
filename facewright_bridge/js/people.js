@@ -88,6 +88,20 @@
 		return OC.generateUrl('/apps/facewright_bridge/faces/' + faceId + '/preview') + '?size=' + size;
 	}
 
+	/**
+	 * A face crop. A crop can fail (the file was deleted or can't be decoded; the endpoint answers
+	 * 404), and the browser's broken-image icon in a grid of faces looks like a bug, so a failed
+	 * one becomes a neutral placeholder instead (the same one a person without a cover gets).
+	 */
+	function cropImg(className, faceId, size, lazy) {
+		var img = h('img', { class: className, src: previewUrl(faceId, size), loading: lazy ? 'lazy' : false, alt: '', draggable: 'false' });
+		img.addEventListener('error', function () {
+			// Not just removing src: a sized <img> without one still draws the broken-image icon.
+			img.replaceWith(h('span', { class: className + ' fw-crop-empty' }));
+		});
+		return img;
+	}
+
 	function toast(message, isError) {
 		var node = h('div', { class: 'fw-toast' + (isError ? ' error' : ''), text: message });
 		document.getElementById('facewright-toasts').appendChild(node);
@@ -313,7 +327,7 @@
 						return person.id !== options.exclude;
 					}).forEach(function (person) {
 						var picture = person.cover
-							? h('img', { class: 'fw-picker-crop', src: previewUrl(person.cover, 64), alt: '' })
+							? cropImg('fw-picker-crop', person.cover, 64, false)
 							: h('span', { class: 'fw-picker-crop fw-crop-empty' });
 						list.appendChild(row(picture, person.title !== '' ? person.title : 'Unnamed', plural(person.count, 'face', 'faces'), function () {
 							choose({ clusterId: person.id, person: person });
@@ -529,7 +543,7 @@
 				h('input', { type: 'radio', name: 'fw-keep', value: String(person.id), checked: person.id === chosen, onchange: function () {
 					chosen = person.id;
 				} }),
-				person.cover ? h('img', { class: 'fw-picker-crop', src: previewUrl(person.cover, 64), alt: '' }) : h('span', { class: 'fw-picker-crop fw-crop-empty' }),
+				person.cover ? cropImg('fw-picker-crop', person.cover, 64, false) : h('span', { class: 'fw-picker-crop fw-crop-empty' }),
 				h('span', { class: 'fw-picker-name', text: person.title !== '' ? person.title : 'Unnamed' }),
 				h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
 			]);
@@ -753,7 +767,7 @@
 
 		function addTile(face) {
 			var tile = h('div', { class: 'fw-face', role: 'checkbox', 'aria-checked': 'false', 'aria-label': 'Face', tabindex: '0' }, [
-				h('img', { class: 'fw-crop', src: previewUrl(face.id, 160), loading: 'lazy', alt: '', draggable: 'false' }),
+				cropImg('fw-crop', face.id, 160, true),
 				h('span', { class: 'fw-face-check', 'aria-hidden': 'true' }),
 			]);
 			function activate(event) {
@@ -889,7 +903,7 @@
 	function personTile(person) {
 		var named = person.title !== '';
 		var picture = person.cover
-			? h('img', { class: 'fw-crop', src: previewUrl(person.cover, 256), loading: 'lazy', alt: '', draggable: 'false' })
+			? cropImg('fw-crop', person.cover, 256, true)
 			: h('div', { class: 'fw-crop fw-crop-empty' });
 		return h('a', { class: 'fw-person', href: '#/person/' + person.id, role: 'checkbox', 'aria-checked': 'false' }, [
 			picture,
@@ -935,6 +949,7 @@
 					return person.id !== keep.id;
 				})).then(function (result) {
 					if (result) {
+						forgetSuggestions();
 						toast('Merged ' + plural(people.length, 'person', 'people') + '. ' + plural(result.moved, 'face', 'faces') + ' moved.');
 						reset();
 					}
@@ -1042,6 +1057,44 @@
 		return scroller.stop;
 	}
 
+	// ---- "possibly the same person" ------------------------------------------------------
+
+	/** person id -> Promise of its suggestions, for the life of the page; cleared by any merge or dismissal. */
+	var suggestionCache = {};
+
+	function forgetSuggestions() {
+		suggestionCache = {};
+	}
+
+	function suggestionsFor(personId) {
+		if (!suggestionCache[personId]) {
+			suggestionCache[personId] = ocs('GET', '/people/' + personId + '/suggestions').then(function (data) {
+				return data.items;
+			});
+			suggestionCache[personId].catch(function () {
+				delete suggestionCache[personId]; // a failed lookup should be retried next time
+			});
+		}
+		return suggestionCache[personId];
+	}
+
+	function suggestionCard(suggestion, actions) {
+		var picture = suggestion.cover
+			? cropImg('fw-suggest-crop', suggestion.cover, 128, true)
+			: h('span', { class: 'fw-suggest-crop fw-crop-empty' });
+		return h('div', { class: 'fw-suggest-card' }, [
+			h('a', { class: 'fw-suggest-link', href: '#/person/' + suggestion.id }, [
+				picture,
+				h('span', { class: 'fw-person-name' + (suggestion.title === '' ? ' unnamed' : ''), text: suggestion.title !== '' ? suggestion.title : 'Unnamed' }),
+			]),
+			h('span', { class: 'fw-person-count', text: plural(suggestion.count, 'face', 'faces') + ' \u00b7 ' + Math.round((1 - suggestion.distance) * 100) + '% similar' }),
+			h('div', { class: 'fw-suggest-actions' }, [
+				h('button', { type: 'button', class: 'fw-action', text: 'Merge\u2026', onclick: actions.merge }),
+				h('button', { type: 'button', class: 'fw-link-button', text: 'Not the same person', onclick: actions.dismiss }),
+			]),
+		]);
+	}
+
 	// ---- person page ---------------------------------------------------------------------
 
 	function personView(idText) {
@@ -1063,8 +1116,12 @@
 		]);
 		var grid = null;
 
+		var suggestBox = h('section', { class: 'fw-suggest', 'aria-label': 'Possibly the same person' });
+		suggestBox.hidden = true;
+
 		main.appendChild(h('p', { class: 'fw-back' }, [h('a', { href: '#/people', text: '← People' })]));
 		main.appendChild(titleRow);
+		main.appendChild(suggestBox);
 
 		function showTitle() {
 			titleNode.textContent = person.title !== '' ? person.title : 'Unnamed';
@@ -1142,6 +1199,7 @@
 		function mergeInto(target) {
 			return mergeFlow(target, [person]).then(function (result) {
 				if (result) {
+					forgetSuggestions();
 					toast('Merged. ' + plural(result.moved, 'face', 'faces') + ' moved into ' + personLabel(target) + '.');
 					location.hash = '#/person/' + target.id;
 				}
@@ -1163,6 +1221,50 @@
 			}).catch(fail);
 		}
 
+		/** Fills the "possibly the same person" strip; nothing is shown if there is nobody to suggest. */
+		function showSuggestions() {
+			suggestBox.hidden = false;
+			clear(suggestBox);
+			suggestBox.appendChild(h('p', { class: 'fw-suggest-wait', text: 'Looking for people who look alike\u2026' }));
+			suggestionsFor(id).then(function (items) {
+				clear(suggestBox);
+				if (items.length === 0) {
+					suggestBox.hidden = true;
+					return;
+				}
+				var cards = h('div', { class: 'fw-suggest-cards' });
+				suggestBox.appendChild(h('h3', { text: 'Possibly the same person' }));
+				suggestBox.appendChild(cards);
+				items.forEach(function (suggestion) {
+					var card = suggestionCard(suggestion, {
+						merge: function () {
+							// This person stays; the suggested one is merged into it.
+							mergeFlow(person, [suggestion]).then(function (result) {
+								if (result) {
+									forgetSuggestions();
+									toast('Merged. ' + plural(result.moved, 'face', 'faces') + ' moved into ' + personLabel(person) + '.');
+									render();
+								}
+							}).catch(fail);
+						},
+						dismiss: function () {
+							ocs('POST', '/suggestions/dismiss', { a: id, b: suggestion.id }).then(function () {
+								forgetSuggestions();
+								card.remove();
+								if (!cards.firstChild) {
+									suggestBox.hidden = true;
+								}
+							}).catch(fail);
+						},
+					});
+					cards.appendChild(card);
+				});
+			}).catch(function (error) {
+				suggestBox.hidden = true;
+				fail(error);
+			});
+		}
+
 		function onTotal(total) {
 			person.count = total;
 			countNode.textContent = plural(total, 'face', 'faces');
@@ -1177,6 +1279,7 @@
 			person = data;
 			showTitle();
 			countNode.textContent = plural(person.count, 'face', 'faces');
+			showSuggestions();
 			grid = faceGrid({
 				list: function (limit, offset) {
 					return ocs('GET', '/people/' + id + '/faces' + query({ limit: limit, offset: offset }));
