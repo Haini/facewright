@@ -81,10 +81,17 @@ Services (`lib/Service/`):
 - `AccessService` / `AccessSyncService` / `PruneService` / `MountFileService` — who can see a file
   and keeping rows in step with that (see "Multi-user fan-out").
 - `ClusteringService`, `ClusterTriggerService` — clustering.
-- `PeopleService` — the one seam every people-level operation (list, create, rename, merge,
-  delete, detach, move, delete-empty) goes through, scoped to one user per call. What
+- `PeopleService` — the one seam every people-level operation (list with paging/search/covers,
+  create, rename, merge, delete, detach, ignore, move, delete-empty) goes through, scoped to one
+  user per call; the bulk forms (`moveFaces`, `detachFaces`, `ignoreFaces`, `mergeMany`,
+  `deleteMany`) resolve every id before writing and run in one transaction. What
   `PeopleApiController`'s OCS API and `occ facewright:people` call, and what a future DAV shim
   (`docs/independence-implementation.md` Stage 2) would call too.
+- `SuggestionService` — "possibly the same person", **per person only** (a library-wide list costs
+  named × candidates comparisons, ~7 s at 400 named people, so it was removed): cosine distance
+  between cached centroids (`facewright_cluster_centroids`, the normalized mean of a person's 10
+  best-scored faces, stale when the person's size changed), threshold `suggest_max_distance`
+  (default 0.6, uncalibrated). Dismissed pairs live in `facewright_merge_dismissals`.
 - `BatchTriggerService` — enumerates unprocessed candidates for enabled users and enqueues jobs.
 - `ResetService`, `VectorCompactionService` — maintenance.
 
@@ -109,12 +116,32 @@ Settings: an admin section (instance-wide toggles, defaults, scan/cluster trigge
 per-user overview) and a personal section (enable, own included paths, own thresholds, own
 backlog scan). Plain PHP templates + vanilla JS, no build step.
 
+The **People page** (`/apps/facewright_bridge/`, a top-bar entry) curates people from face crops:
+name, merge, delete, move/remove/ignore faces, unassigned and ignored views, merge suggestions,
+bulk selection, a photo view with every face boxed. Memories stays the photo browser. It is a
+shell (`PageController`, `templates/main.php`, `js/people.js`, `css/people.css`, hash router) over
+`PeopleApiController` and `SuggestionApiController` (OCS under `/ocs/v2.php/apps/facewright_bridge/
+api/v1/`, every action `#[NoAdminRequired]` and scoped to the session user, no parameter names
+another user) and `FacePreviewController` (`/faces/{id}/preview`, a square crop of Nextcloud's
+1024 px preview; a plain route because `<img>` cannot send OCS headers). Requirements and rationale:
+`docs/people-ui.md`; build plan: `docs/people-ui-implementation.md`. Things that bit:
+- Nextcloud's global CSS resets `dialog` margins and gives every `button` an opaque fill: dialogs
+  need `margin: auto` and the face boxes need `background: transparent !important`.
+- Esc on a `<dialog>` is handled on the document for the topmost one: whether the browser fires
+  `cancel` varies, and focus leaves the dialog when a button is redrawn.
+- An `<img>` with its `src` removed still draws a broken-image icon once sized by CSS; a failed
+  crop is swapped for a placeholder element instead.
+- A name already taken answers 400 with `code: title_exists` (`DuplicateTitleException`), which the
+  page turns into a merge offer; never match on the English message.
+
 `occ` commands: `facewright:detect <user> <path>` (forces re-detection), `facewright:scan`,
 `facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:merge-clusters [--dry-run]`,
 `facewright:backfill-access [--dry-run] [--prune]`, `facewright:compact-vectors [--dry-run]`,
 `facewright:init-user-settings [--dry-run]`, `facewright:reset [--dry-run] [--yes]`,
-`facewright:people <user> [--faces=<idOrTitle>] [--unassigned] [--delete-empty] [--dry-run]`
-(inspection and light maintenance over `PeopleService`), `facewright:reopen-unassigned
+`facewright:people <user> [--faces=<idOrTitle>] [--unassigned] [--ignored] [--delete-empty]
+[--dry-run]` (inspection and light maintenance over `PeopleService`), and `--suggest
+--faces=<idOrTitle> [--no-store]` (merge suggestions with elapsed time and peak memory; `--no-store`
+writes nothing, for measuring against a database that must not change), `facewright:reopen-unassigned
 [--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below),
 `facewright:migrate-faces [--dry-run] [--chunk=<files>] [--reset-cursor]` (Stage 1 backfill,
 see "Schema mapping").
@@ -152,10 +179,21 @@ see "Schema mapping").
   sentinel meaning "evaluated in a full pass, nothing matched". Rows at `-2` stay in the matching
   pool and can still be pulled into a cluster by a later face; they are just not re-attempted as
   seeds.
+  `-3` = `ClusteringService::IGNORED`, "not a face, or not someone to group", set only by a human
+  from the People page. `selectWantedIds()` skips it exactly like `-1` — **without that line a `-3`
+  row is loaded as a real cluster id and offered as a join target** — and `resetUser()` keeps it
+  (an ignore is a judgement about the detection, not about how it was clustered). Memories and
+  Recognize never see it. It is lost when the detection rows are rewritten (forced
+  `occ facewright:detect`, `occ facewright:reset`), a known limitation.
   **Do not use `-1` for `UNCLUSTERABLE`**: Recognize's `sampleRejectedDetectionsByUserId()` selects
   `cluster_id = -1` and feeds those rows into its own clustering (moot now that Recognize's
   classifier is disabled, but still true). Recognize has no predicate matching `-2`, and Memories
   inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
+- `facewright_cluster_centroids` (one cached centroid per person, `member_count` marks staleness)
+  and `facewright_merge_dismissals` (`cluster_a < cluster_b` always) reference
+  `recognize_face_clusters` ids, which are autoincrement and never reused, so a row left behind by a
+  person removed from Memories' side is inert. Merge, delete, `resetUser()` and `ResetService`
+  clear them; nothing else does.
 - `threshold` is left at its DB default, matching Recognize's own insert.
 
 ### Telling our rows from Recognize's
@@ -204,6 +242,10 @@ the `facewright_detection_faces` join) and `loadDetections()` fetches embeddings
 - `ClusterScanJob`'s stop condition is "a full pass made no assignment", not "queue empty" —
   faces below `min-faces` never cluster, so the queue is never empty. Only at that point are
   survivors marked `-2`, by explicit id list.
+- `ClusteringService::persistAssignments()` writes only rows still `NULL`/`-2`, scoped to the user
+  and only into clusters that still exist, and deletes clusters the pass created that ended up
+  empty. A pass loads the pool, matches for seconds to minutes, then writes: anything a human did to
+  those rows meanwhile (a move, a remove, an ignore, a delete or merge of the person) must win.
 - Changing a user's thresholds calls `clearUnclusterableMarks()` (`-2` → `NULL`) for that user,
   or the second change would appear to do nothing. This can reopen a very large number of rows.
 
@@ -263,6 +305,9 @@ admin overview (one query, not N+1). A user with no stored preference is off.
   `facewright_processed` markers survive: delete the markers for the affected files and rescan.
 - Recognize's `IgnoreService` caches in APCu with no TTL, so after adding markers the web
   container needs a restart; cron (CLI) is unaffected.
+- **Never run `occ recognize:reset-face-clusters`**: it deletes every user's clusters (named people
+  included) and sets every `cluster_id` to `NULL` — `-1`, `-2` and `-3` too — with no user or
+  dimension filter. It undoes all curation instance-wide.
 - Naming/merging/deleting people from Memories works on our clusters with no code: those are DAV
   operations against the same table.
 - After any Recognize upgrade or re-enable, check `oc_jobs` for `MaintenanceJob` and confirm the
@@ -291,7 +336,8 @@ tunnels in through HaRP's FRP reverse proxy. See `Makefile` (`daemon-register`, 
 Deployed by copying into the instance's `custom_apps` and `occ app:enable`. Three mechanics
 that are easy to get wrong:
 
-- **Migrations and `info.xml` registrations (background jobs, sections) need a `<version>` bump
+- **Migrations and `info.xml` registrations (background jobs, sections, the navigation entry) need
+  a `<version>` bump
   plus `occ upgrade`.** `occ migrations:*` commands are not available; the version bump is what
   makes Nextcloud run the app's pending migrations, exactly as an app-store update would.
 - **JS changes need a version bump too**: the `?v=` cache-buster is `substr(md5($appVersion),0,8)`,
@@ -368,10 +414,12 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    so the "not yet processed" count can never reach zero; removing a face from a person sets it
    `NULL`, so it rejoins (and Recognize's handler first loads the whole cluster's vectors into one
    web request) — unfixable while Memories' writes land in Recognize's code, see
-   `docs/independence.md` Finding 2. (A fifth bug — deleting a person in Memories set its faces to
+   `docs/independence.md` Finding 2; the People page's "Remove from person" writes `-1` instead and
+   sticks. (A fifth bug — deleting a person in Memories set its faces to
    `-1`, read by us as pending, so the next clustering pass rebuilt the person untitled — is fixed
    by Stage 0 of `docs/independence-implementation.md`: `-1` now means unassigned, not pending.)
-5. **No tests, static analysis, or CI.** The pure-logic pieces (`ClusteringService`'s distance
+5. **No tests, static analysis, or CI** — and the People page has only been exercised by hand in
+   headless Chromium on the compose stack, never against a production-sized library. The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
    unit-testable without an instance and have zero coverage.
 6. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop (now two inserts per user

@@ -146,17 +146,20 @@ Decisions:
   is.
 - Undo. Dry-run counts and confirm dialogs stand in for it.
 
-## Open points to settle in the implementation plan
+## Open points, as resolved
 
-The implementation plan is `docs/people-ui-implementation.md`. It settles point 3 (the race fix is
-step 1) and gates point 1 on a measurement (its step 6).
-1. F7: compute on demand vs. a cached centroid table, decided by measurement. Also the centroid
-   distance threshold. It isn't 0.5, since centroids are tighter than single faces, so it needs
-   calibrating against the hand-labelled ground-truth set (Open item 2).
-2. Crop endpoint caching: rely on the core preview cache plus HTTP caching, or also store crops
-   in appdata.
-3. Whether to put the persistAssignments race fix in its own step before any UI work.
-   Recommended: yes.
+The implementation plan is `docs/people-ui-implementation.md`.
+
+1. **F7 centroids: a cached table from the start, per person only.** Measured on the dev instance
+   with 2,500 synthetic people and a warm buffer pool: suggestions for one person take 0.12 s
+   warm and 1.7 s cold. A library-wide list was built and measured too (0.9 s warm with 40 named
+   people, about 7 s with 400, growing with named × candidates) and removed. Not yet measured on
+   a real library. **The distance threshold is still the 0.6 placeholder**: it needs calibrating
+   against the hand-labelled ground-truth set (CLAUDE.md Open item 2).
+2. **Crop caching: HTTP only.** The ETag is built from the detection, the file's own etag, the
+   size and the box, with a 7-day private cache, and a revalidation is answered with 304 before any
+   preview is generated; on top of core's own preview cache. Nothing is stored in appdata.
+3. **The `persistAssignments` race fix went in as its own first step**, before any UI work.
 
 ## Verification (for the eventual implementation)
 - Compose stack only. Authorization is checked through `ControllerMethodReflector` with a

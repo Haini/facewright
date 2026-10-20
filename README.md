@@ -42,6 +42,14 @@ Two apps live in this repo to make that possible:
   (turning raw detections into "people"), file-event/background-job triggers, and an admin
   settings page.
 
+**A People page of its own.** `facewright_bridge` adds a "People" entry to the top bar for curating
+what clustering produced: browse people as face crops, rename them, merge two that are the same
+person (it suggests likely pairs), delete one, move a face to another person, mark a face as "not
+a face", and do any of that to a whole selection at once. Unlike removing a face in Memories, which
+the next clustering pass can undo, a removal here sticks. Memories remains the place to browse
+photos by person. Merge suggestions are per person and use an uncalibrated distance threshold
+(`suggest_max_distance`, default 0.6).
+
 Rejected alternative: patching Recognize's PHP to call an ExApp instead of its Node subprocess.
 Smaller diff, but it would inherit Recognize's clustering thresholds (tuned for a different
 embedding space) and mean an ongoing rebase against upstream Recognize. See `CLAUDE.md` for the
@@ -60,6 +68,9 @@ full design history and every incident/gotcha hit building this, if you want the
   Recognize's internal tables, which are undocumented and could change in a future Recognize
   release (Recognize 10 already renamed the vector column once). `docs/independence.md` reviews
   the full coupling to Recognize and Memories and lays out a staged way out of it.
+- **The People page has only been tried by hand, on a throwaway instance with generated data,**
+  not yet on a real library. A face marked "not a face" is forgotten if its file is re-detected
+  from scratch (`occ facewright:detect`, `occ facewright:reset`).
 - Rename, delete and mount-change handling exists (`FileCreatedListener`, `FileAccessListener`)
   but `PruneService` has never deleted anything on a real instance.
 
