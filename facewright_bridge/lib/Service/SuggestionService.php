@@ -10,9 +10,11 @@ use OCP\IAppConfig;
 use OCP\IDBConnection;
 
 /**
- * "Possibly the same person": pairs of one user's people whose faces look alike, for the People
- * page. Clustering splits one real person across several clusters when the photos differ enough
- * (age, glasses, lighting); this finds those splits so the user can merge them.
+ * "Possibly the same person": for one of a user's people, the others whose faces look alike, for
+ * the People page. Clustering splits one real person across several clusters when the photos
+ * differ enough (age, glasses, lighting); this finds those splits so the user can merge them.
+ * Per person only: a library-wide list costs named x candidates comparisons, which reaches
+ * seconds once hundreds of people are named, and is less actionable than "who else is this?".
  *
  * A person is represented by a centroid - the normalized mean of up to REPRESENTATIVES of their
  * best-scored faces - and two people are compared by cosine distance between centroids. Centroids
@@ -29,7 +31,7 @@ class SuggestionService {
 	private const KEY_MAX_DISTANCE = 'suggest_max_distance';
 	private const APP_ID = 'facewright_bridge';
 
-	/** @var array<string, int|float> what the last forPerson()/global() call did, for occ's report */
+	/** @var array<string, int|float> what the last forPerson() call did, for occ's report */
 	private array $lastRun = [];
 
 	public function __construct(
@@ -46,8 +48,8 @@ class SuggestionService {
 	}
 
 	/**
-	 * Diagnostics of the last call: clusters, candidates, centroidsCached, centroidsComputed,
-	 * comparisons, centroidSeconds, distanceSeconds. A tool for measuring cost, not an API.
+	 * Diagnostics of the last forPerson() call: clusters, candidates, centroidsCached,
+	 * centroidsComputed, comparisons, centroidSeconds, distanceSeconds. A tool for measuring cost, not an API.
 	 *
 	 * @return array<string, int|float>
 	 */
@@ -113,74 +115,7 @@ class SuggestionService {
 	}
 
 	/**
-	 * Pairs worth a look across the whole library, closest first. Each pair has at least one
-	 * named person: named x everyone, not everyone x everyone, which is quadratic over thousands
-	 * of untitled clusters and mostly pairs a user couldn't act on anyway ("is this Alice too?"
-	 * is answerable, "is untitled 4711 untitled 902?" rarely is).
-	 *
-	 * @return list<array{a: array{id: int, title: string, count: int, cover: ?int}, b: array{id: int, title: string, count: int, cover: ?int}, distance: float}>
-	 */
-	public function global(string $userId, int $limit = 50, bool $store = true): array {
-		$all = $this->people->listClusters($userId, null, 0, $this->userSettings->getClusterMinFaces($userId));
-
-		$t0 = hrtime(true);
-		[$centroids, $stats] = $this->centroids($userId, $all, $store);
-		$t1 = hrtime(true);
-
-		$dismissed = $this->dismissedPairs($userId);
-		$max = $this->maxDistance();
-		$found = [];
-		$comparisons = 0;
-		foreach ($all as $named) {
-			if ($named['title'] === '' || !isset($centroids[$named['id']])) {
-				continue;
-			}
-			foreach ($all as $other) {
-				if ($other['id'] === $named['id'] || !isset($centroids[$other['id']])) {
-					continue;
-				}
-				// Two named people would be visited from both sides; take each pair once.
-				if ($other['title'] !== '' && $other['id'] < $named['id']) {
-					continue;
-				}
-				if (isset($dismissed[min($named['id'], $other['id']) . ':' . max($named['id'], $other['id'])])) {
-					continue;
-				}
-				$comparisons++;
-				$distance = 1.0 - $this->dot($centroids[$named['id']], $centroids[$other['id']]);
-				if ($distance <= $max) {
-					$found[] = ['a' => $named, 'b' => $other, 'distance' => $distance];
-				}
-			}
-		}
-		usort($found, fn (array $x, array $y): int => $x['distance'] <=> $y['distance']);
-		$found = array_slice($found, 0, $limit);
-		$t2 = hrtime(true);
-
-		$ids = [];
-		foreach ($found as $pair) {
-			$ids[$pair['a']['id']] = true;
-			$ids[$pair['b']['id']] = true;
-		}
-		$covers = $this->people->coversFor($userId, array_keys($ids));
-		$this->lastRun = $stats + [
-			'clusters' => count($all),
-			'candidates' => count($all),
-			'comparisons' => $comparisons,
-			'centroidSeconds' => ($t1 - $t0) / 1e9,
-			'distanceSeconds' => ($t2 - $t1) / 1e9,
-		];
-
-		return array_map(fn (array $pair): array => [
-			'a' => ['id' => $pair['a']['id'], 'title' => $pair['a']['title'], 'count' => $pair['a']['count'], 'cover' => $covers[$pair['a']['id']] ?? null],
-			'b' => ['id' => $pair['b']['id'], 'title' => $pair['b']['title'], 'count' => $pair['b']['count'], 'cover' => $covers[$pair['b']['id']] ?? null],
-			'distance' => $pair['distance'],
-		], $found);
-	}
-
-	/**
-	 * Remembers that two people are not the same, so neither suggestion path offers the pair
-	 * again.
+	 * Remembers that two people are not the same, so neither is suggested for the other again.
 	 *
 	 * @throws \InvalidArgumentException if either isn't $userId's, or they are the same
 	 */
@@ -320,21 +255,6 @@ class SuggestionService {
 		}
 		$result->closeCursor();
 		return $partners;
-	}
-
-	/** @return array<string, true> keyed "a:b" with a < b */
-	private function dismissedPairs(string $userId): array {
-		$qb = $this->db->getQueryBuilder();
-		$qb->select('cluster_a', 'cluster_b')
-			->from('facewright_merge_dismissals')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-		$pairs = [];
-		$result = $qb->executeQuery();
-		while ($row = $result->fetch()) {
-			$pairs[$row['cluster_a'] . ':' . $row['cluster_b']] = true;
-		}
-		$result->closeCursor();
-		return $pairs;
 	}
 
 	/**

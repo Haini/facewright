@@ -33,7 +33,7 @@ class People extends Command {
 			->addOption('faces', null, InputOption::VALUE_REQUIRED, 'List faces in this cluster (numeric id or title)')
 			->addOption('unassigned', null, InputOption::VALUE_NONE, 'List faces at cluster_id = -1 (unassigned)')
 			->addOption('ignored', null, InputOption::VALUE_NONE, 'List faces at cluster_id = -3 (marked "not a face")')
-			->addOption('suggest', null, InputOption::VALUE_NONE, 'Suggest people who may be the same person - across the library, or for --faces=<person>. Prints elapsed time and peak memory')
+			->addOption('suggest', null, InputOption::VALUE_NONE, 'With --faces=<person>: suggest other people who may be the same person. Prints elapsed time and peak memory')
 			->addOption('no-store', null, InputOption::VALUE_NONE, 'With --suggest, compute centroids in memory and write nothing (for measuring against a database that must not change)')
 			->addOption('delete-empty', null, InputOption::VALUE_NONE, 'Delete this user\'s clusters with no remaining members')
 			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --delete-empty, report the count without deleting');
@@ -83,17 +83,16 @@ class People extends Command {
 		$store = !$input->getOption('no-store');
 		$facesOf = $input->getOption('faces');
 
+		if ($facesOf === null) {
+			$output->writeln('<error>--suggest needs --faces=<person>.</error>');
+			return 1;
+		}
+
 		$start = hrtime(true);
 		try {
-			if ($facesOf !== null) {
-				$clusterId = $this->people->resolveCluster($userId, $facesOf);
-				foreach ($this->suggestions->forPerson($userId, $clusterId, 10, $store) as $s) {
-					$output->writeln(sprintf("%.3f\t%s", $s['distance'], $this->label($s)));
-				}
-			} else {
-				foreach ($this->suggestions->global($userId, 50, $store) as $pair) {
-					$output->writeln(sprintf("%.3f\t%s\t%s", $pair['distance'], $this->label($pair['a']), $this->label($pair['b'])));
-				}
+			$clusterId = $this->people->resolveCluster($userId, $facesOf);
+			foreach ($this->suggestions->forPerson($userId, $clusterId, 10, $store) as $s) {
+				$output->writeln(sprintf("%.3f\t%s", $s['distance'], $this->label($s)));
 			}
 		} catch (\InvalidArgumentException $e) {
 			$output->writeln('<error>' . $e->getMessage() . '</error>');

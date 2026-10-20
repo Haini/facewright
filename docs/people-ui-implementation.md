@@ -310,9 +310,6 @@ bigint, `cluster_b` bigint. Unique index (`user_id`, `cluster_a`, `cluster_b`)
   candidates are `listClusters($u, null, 0, $minFaces)` where `$minFaces` is the user's
   `getClusterMinFaces()`. Drop the person itself and dismissed pairs; compute distance
   `1 − dot` against each centroid; keep `distance <= suggest_max_distance`; sort ascending.
-- `global(string $userId, int $limit = 50): list<{a, b, distance}>`: pairs between **named**
-  people and all candidates (named × candidates, not candidates²), plus pairs of named×named.
-  Same filters, sorted.
 - `dismiss(string $userId, int $a, int $b): void`: both ids must be the user's (`getCluster`),
   then normalize the order and `setValues()`.
 - `suggest_max_distance`: appconfig `facewright_bridge/suggest_max_distance`, default `0.6`, a
@@ -326,9 +323,13 @@ orphaned by Memories-side deletes (Recognize DAV) are harmless: `rfc` ids are au
 never reused, and every read joins against current clusters. Say so in the docblock rather than
 adding a sweeper.
 
-**Command**: extend `occ facewright:people` with `--suggest` (global) and
-`--suggest --faces=<idOrTitle>` (per person). It prints the pairs, distances and **elapsed
-wall time and peak memory** (`hrtime`, `memory_get_peak_usage(true)`).
+**Command**: extend `occ facewright:people` with `--suggest --faces=<idOrTitle>` (per person;
+`--suggest` alone is an error). It prints the suggestions, distances and **elapsed wall time
+and peak memory** (`hrtime`, `memory_get_peak_usage(true)`).
+
+**Per person only, by decision.** A library-wide list was built first and measured: named ×
+candidates comparisons took ~0.9 s warm with 40 named people but ~7 s with 400, so it was
+removed rather than tuned. There is no global suggestions view anywhere in the UI.
 
 **Measurement gate (stop here and report to the user before step 7).**
 1. On the compose stack: correctness. A person split in two shows up as a top suggestion.
@@ -338,12 +339,12 @@ wall time and peak memory** (`hrtime`, `memory_get_peak_usage(true)`).
    `occ facewright:migrate-faces` has completed there first, or the numbers are meaningless.)
    This needs the new command code copied to production, which is a deployment, so the user
    decides and does it. Record: cluster count, candidate count, time and peak memory for
-   centroid computation (the cold cost) and for the distance pass alone (roughly the warm cost),
-   per-person and global.
-3. Thresholds: if the warm per-person time is over 1 s, the warm global time is over 5 s, or the cold global time
-   is over 60 s, stop. The
-   remedy (precompute in `ClusteringMaintenanceJob`, or sampling) is a decision for the user,
-   not for this session.
+   centroid computation (the cold cost) and for the distance pass alone (roughly the warm cost).
+3. Thresholds: if the warm per-person time is over 1 s or the cold per-person time is over 10 s,
+   stop. The remedy (precompute in `ClusteringMaintenanceJob`, or sampling) is a decision for
+   the user, not for this session. Dev result (synthetic, 2,500 people, warm buffer pool): warm
+   0.12 s, cold 1.7 s, so the gate is met there; the production run is a sanity check, not a
+   blocker.
 4. Calibration of `suggest_max_distance` against the hand-labelled ground-truth set (kept
    outside the repo, CLAUDE.md Open item 2) is the user's call. Ask whether they want to provide
    it. Until then the UI shows the top 10 under the placeholder, sorted by distance, which stays
@@ -357,12 +358,13 @@ passes ~250 lines; same conventions either way):
 | verb | url | action |
 |---|---|---|
 | GET | `/api/v1/people/{id}/suggestions` | `forPerson` → `{items}` |
-| GET | `/api/v1/suggestions` | `global` → `{items}` |
 | POST | `/api/v1/suggestions/dismiss` | `dismiss` (`a`, `b`) |
 
-`/suggestions` routes are static, but `/people/{id}/suggestions` comes before the generic
-`/people/{id}` routes as well. Restart the web container. **Verify** with `curl` that the result
-matches step 6's command output.
+Declare `/people/{id}/suggestions` before the generic `/people/{id}` routes, with the `id`
+digits requirement. `forPerson` clamps `limit` to 1..50 and answers 404 for a person that isn't
+the user's; `dismiss` answers 400 for a foreign or identical pair. Restart the web container.
+**Verify** with `curl` that the result matches step 6's command output, that a second user gets
+404/400 for the first user's people, and that a dismissed pair disappears from `forPerson`.
 
 ## 8 — Page skeleton: navigation, controller, template, routing
 
@@ -378,7 +380,7 @@ matches step 6's command output.
   (`resources/app-info.xsd`) and put `<navigations>` where its sequence says, then run
   `occ app:check-code facewright_bridge` or open the apps page to confirm it parses. Version bump,
   `occ upgrade`, restart.
-- `templates/main.php`: a left navigation (`People`, `Unassigned`, `Ignored`, `Suggestions`) and
+- `templates/main.php`: a left navigation (`People`, `Unassigned`, `Ignored`) and
   a content area. Use core's app layout markup (`#app-navigation`, `#app-content`) if it still
   styles correctly on the stack; otherwise use a plain flex layout in `people.css`. Strings via
   `$l->t()`. Pass `minFaces`, `enabled` and URLs to JS via `data-` attributes on the root
@@ -387,7 +389,7 @@ matches step 6's command output.
   - `ocs(method, path, body)` → `fetch(OC.linkToOCS('apps/facewright_bridge/api/v1', 2) + path + '?format=json' …)`
     with `OCS-APIRequest: true`, `requesttoken: OC.requestToken`, JSON body. It unwraps
     `ocs.data` and throws `ocs.data.message` on non-2xx.
-  - A hash router: `#/people`, `#/person/<id>`, `#/unassigned`, `#/ignored`, `#/suggestions`.
+  - A hash router: `#/people`, `#/person/<id>`, `#/unassigned`, `#/ignored`.
     Default is `#/people`.
   - An empty state when `enabled` is false: one sentence and a link to personal settings.
 - `css/people.css`: only Nextcloud CSS variables (`--color-main-background`,
@@ -469,18 +471,17 @@ may place it.
 the sum. Memories shows one person. The dry-run count equals the real `moved`. Delete a person:
 `count(-1)` rises by its size.
 
-## 13 — Suggestions view
+## 13 — Suggestions on the person page
 
-- `#/suggestions`: a list of pairs (two crop covers side by side, names, distance shown as
-  "similarity" `round((1 − d) * 100)`%). Each row has "Merge" (the left one is kept unless it's
-  unnamed and the right is named; let the user swap with one click) and "Not the same person"
-  (→ dismiss, the row disappears).
-- Person detail: a "Possibly the same person" strip from `/people/{id}/suggestions`, with the
-  same two actions.
-- Show a spinner, since the first (cold) request can be slow per step 6's numbers. The request
-  isn't repeated on every navigation; cache the response in memory for the session.
+No separate view. Person detail gets a "Possibly the same person" strip from
+`/people/{id}/suggestions`: each suggestion shows its cover crop, name or "Unnamed", face count
+and similarity (`round((1 − d) * 100)`%), with "Merge" (this person is kept; the dry-run
+confirmation from step 12) and "Not the same person" (→ dismiss, the card disappears).
+- Load it after the face grid, with a spinner; the first (cold) request is the slow one per
+  step 6's numbers. Don't show the strip at all when the list is empty.
+- Cache the response in memory for the page's lifetime; invalidate on merge or dismiss.
 
-**Verify.** After a merge or dismiss the pair is gone after a reload. A dismissed pair doesn't
+**Verify.** After a merge or dismiss the suggestion is gone after a reload. A dismissed pair doesn't
 come back after a clustering pass.
 
 ## 14 — Docs
@@ -529,12 +530,11 @@ user's action; prepare the commands, don't run them.
 1. **The centroid cache table is part of the design from the start** (step 6), not a fallback.
    On demand, every person view would read up to 10 embeddings for every candidate cluster.
    That's 2,000 clusters × 10 × 2 KB ≈ 40 MB per request, which is too much regardless of CPU.
-   The open measurement is now whether the *cached* path is fast enough, and whether global
-   suggestions need precomputing.
-2. **Global suggestions are named × candidates, not all pairs.** All pairs over thousands of
-   untitled clusters is quadratic, and most of those pairs are untitled-vs-untitled, which a user
-   can act on less easily than "is this Alice too?". If the user wants untitled×untitled later,
-   it belongs in a background job.
+   The measurement was whether the *cached* path is fast enough: it is (step 6).
+2. **Suggestions are per person only; there is no library-wide list.** Decided by the user
+   after a global list was built and measured: its cost grows with named people × candidates
+   (~7 s warm at 400 named people), and "who else is this person?" is the more actionable
+   question. If a global view is wanted later, it belongs in a background job.
 3. **The list filter always shows named people**, even below the minimum size, so a named
    person with one face can't become unreachable.
 4. **Moving faces out of an untitled person that becomes empty deletes it**, and named ones

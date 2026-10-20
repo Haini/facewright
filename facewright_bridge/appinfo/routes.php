@@ -35,6 +35,8 @@ return [
 		['name' => 'PeopleApi#listIgnoredFaces', 'url' => '/api/v1/people/ignored', 'verb' => 'GET'],
 		['name' => 'PeopleApi#mergeMany', 'url' => '/api/v1/people/merge', 'verb' => 'POST'],
 		['name' => 'PeopleApi#deleteMany', 'url' => '/api/v1/people/delete', 'verb' => 'POST'],
+		['name' => 'SuggestionApi#forPerson', 'url' => '/api/v1/people/{id}/suggestions', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
+		['name' => 'SuggestionApi#dismiss', 'url' => '/api/v1/suggestions/dismiss', 'verb' => 'POST'],
 		['name' => 'PeopleApi#listFaces', 'url' => '/api/v1/people/{id}/faces', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#renameCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'PUT', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#deleteCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'DELETE', 'requirements' => ['id' => '\d+']],
