@@ -8,6 +8,7 @@ use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use OCP\IUser;
 use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 
 /**
  * Prototype clustering, extracted from the facewright:cluster command so both it and the admin
@@ -80,6 +81,7 @@ class ClusteringService {
 	public function __construct(
 		private IDBConnection $db,
 		private IUserManager $userManager,
+		private LoggerInterface $logger,
 	) {
 	}
 
@@ -88,7 +90,7 @@ class ClusteringService {
 		['detections' => $detections, 'pendingIds' => $idsToProcess, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
 
 		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
-		$this->persistAssignments($detections, $stats['changedIds']);
+		$this->persistAssignments($userId, $detections, $stats['changedIds'], $stats['createdClusterIds']);
 
 		// One full pass that assigned nothing is the same proof ClusterScanJob's chain uses: with
 		// the data and thresholds unchanged, re-running it would decide identically. Everything
@@ -139,7 +141,7 @@ class ClusteringService {
 		$idsToProcess = array_slice($unclusteredIds, 0, $chunkSize);
 
 		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
-		$this->persistAssignments($detections, $stats['changedIds']);
+		$this->persistAssignments($userId, $detections, $stats['changedIds'], $stats['createdClusterIds']);
 
 		// Only rows that were pending on entry and are still unassigned - not every null in the
 		// pool, which now also includes already-evaluated UNCLUSTERABLE rows. This feeds
@@ -312,13 +314,14 @@ class ClusteringService {
 	 *
 	 * @param array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}> $detections
 	 * @param list<int> $idsToProcess
-	 * @return array{newClusters: int, joined: int, skipped: int, changedIds: list<int>}
+	 * @return array{newClusters: int, joined: int, skipped: int, changedIds: list<int>, createdClusterIds: list<int>}
 	 */
 	private function assignClusters(array &$detections, array $idsToProcess, string $userId, float $maxDistance, int $minFaces): array {
 		$newClusters = 0;
 		$joined = 0;
 		$skipped = 0;
 		$changedIds = [];
+		$createdClusterIds = [];
 
 		foreach ($idsToProcess as $id) {
 			if ($detections[$id]['cluster_id'] !== null) {
@@ -343,6 +346,7 @@ class ClusteringService {
 
 			if ($clusterId === null) {
 				$clusterId = $this->createCluster($userId);
+				$createdClusterIds[] = $clusterId;
 				$newClusters++;
 			} else {
 				$joined++;
@@ -358,7 +362,7 @@ class ClusteringService {
 			}
 		}
 
-		return ['newClusters' => $newClusters, 'joined' => $joined, 'skipped' => $skipped, 'changedIds' => $changedIds];
+		return ['newClusters' => $newClusters, 'joined' => $joined, 'skipped' => $skipped, 'changedIds' => $changedIds, 'createdClusterIds' => $createdClusterIds];
 	}
 
 	/**
@@ -536,18 +540,86 @@ class ClusteringService {
 		return $qb->getLastInsertId();
 	}
 
-	/** @param list<int> $ids */
-	private function persistAssignments(array $detections, array $ids): void {
-		foreach (array_unique($ids) as $id) {
+	/**
+	 * Writes the assignments a pass decided on, but only onto rows that are still pending
+	 * (NULL) or UNCLUSTERABLE, and only into clusters that still exist. A pass spends seconds to
+	 * minutes matching between loading the pool and getting here, and a human can act on the same
+	 * rows in that window: a face moved to a person, removed (UNASSIGNED) or ignored must keep
+	 * what the human set, and a person deleted or merged away must not be refilled. Clusters this
+	 * pass created that ended up with no member are deleted again rather than left as empty
+	 * "Unnamed" people.
+	 *
+	 * @param list<int> $ids
+	 * @param list<int> $createdClusterIds
+	 * @return int rows actually written
+	 */
+	private function persistAssignments(string $userId, array $detections, array $ids, array $createdClusterIds): int {
+		$ids = array_values(array_unique($ids));
+
+		$targets = [];
+		foreach ($ids as $id) {
+			if ($detections[$id]['cluster_id'] !== null) {
+				$targets[(int)$detections[$id]['cluster_id']] = true;
+			}
+		}
+		$existing = [];
+		foreach (array_chunk(array_keys($targets), 1000) as $batch) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->select('id')
+				->from('recognize_face_clusters')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
+			$result = $qb->executeQuery();
+			while (($clusterId = $result->fetchOne()) !== false) {
+				$existing[(int)$clusterId] = true;
+			}
+			$result->closeCursor();
+		}
+
+		$written = 0;
+		$requested = 0;
+		foreach ($ids as $id) {
 			$clusterId = $detections[$id]['cluster_id'];
 			if ($clusterId === null) {
+				continue;
+			}
+			$requested++;
+			if (!isset($existing[(int)$clusterId])) {
 				continue;
 			}
 			$qb = $this->db->getQueryBuilder();
 			$qb->update('recognize_face_detections')
 				->set('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT))
-				->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
+				->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
+				->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->orX(
+					$qb->expr()->isNull('cluster_id'),
+					$qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)),
+				));
+			$written += $qb->executeStatement();
+		}
+
+		if ($createdClusterIds !== []) {
+			$sub = $this->db->getQueryBuilder();
+			$sub->select($sub->expr()->literal(1))
+				->from('recognize_face_detections')
+				->where($sub->expr()->eq('cluster_id', $sub->createFunction('c.id')));
+
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete('recognize_face_clusters', 'c')
+				->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('c.id', $qb->createNamedParameter($createdClusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
+				->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
 			$qb->executeStatement();
 		}
+
+		if ($written < $requested) {
+			$this->logger->info(
+				'facewright: ' . ($requested - $written) . " cluster assignment(s) for {$userId} skipped, rows changed during the pass",
+				['app' => 'facewright_bridge'],
+			);
+		}
+
+		return $written;
 	}
 }
