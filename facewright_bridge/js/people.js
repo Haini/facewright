@@ -57,7 +57,7 @@
 
 	var OCS_BASE = OC.getRootPath() + '/ocs/v2.php/apps/facewright_bridge/api/v1';
 
-	/** One OCS call; resolves with the unwrapped `ocs.data`, rejects with Error(message, status). */
+	/** One OCS call; resolves with the unwrapped `ocs.data`, rejects with Error(message, status, code). */
 	function ocs(method, path, body) {
 		var options = {
 			method: method,
@@ -162,113 +162,112 @@
 		return count.toLocaleString() + ' ' + (count === 1 ? one : many);
 	}
 
-	// ---- people list ---------------------------------------------------------------------
-
-	var PEOPLE_PAGE = 60;
-
-	function personTile(person) {
-		var named = person.title !== '';
-		var picture = person.cover
-			? h('img', { class: 'fw-crop', src: previewUrl(person.cover, 256), loading: 'lazy', alt: '', draggable: 'false' })
-			: h('div', { class: 'fw-crop fw-crop-empty' });
-		return h('a', { class: 'fw-person', href: '#/person/' + person.id }, [
-			picture,
-			h('span', { class: 'fw-person-name' + (named ? '' : ' unnamed'), text: named ? person.title : 'Unnamed' }),
-			h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
-		]);
+	/** How a person is named in a sentence. */
+	function personLabel(person) {
+		return person.title !== '' ? '“' + person.title + '”' : 'an unnamed person';
 	}
 
-	function peopleView() {
-		var state = { generation: 0, offset: 0, total: null, loading: false, done: false };
-		var minCount = Math.max(0, parseInt(readStored('minCount', config.minFaces), 10) || 0);
-		var search = '';
+	// ---- dialogs -------------------------------------------------------------------------
 
-		var totalNode = h('span', { class: 'fw-total' });
-		var searchInput = h('input', { type: 'search', class: 'fw-search', placeholder: 'Search by name', 'aria-label': 'Search people by name' });
-		var minInput = h('input', { type: 'number', min: '0', class: 'fw-min', value: String(minCount), 'aria-label': 'Minimum number of faces for unnamed people' });
-		var grid = h('div', { class: 'fw-grid fw-people-grid' });
-		var message = h('div', { class: 'fw-empty' });
-
-		main.appendChild(h('div', { class: 'fw-toolbar' }, [
-			h('h2', { text: 'People' }),
-			totalNode,
-			h('span', { class: 'fw-spacer' }),
-			searchInput,
-			h('label', { class: 'fw-min-label' }, ['Hide unnamed people with fewer than ', minInput, ' faces']),
-		]));
-		main.appendChild(grid);
-		main.appendChild(message);
-
-		var scroller = infiniteScroll(loadMore);
-
-		function loadMore() {
-			if (state.loading || state.done) {
-				return;
-			}
-			state.loading = true;
-			var generation = state.generation;
-			ocs('GET', '/people' + query({ limit: PEOPLE_PAGE, offset: state.offset, minCount: minCount, search: search })).then(function (data) {
-				if (generation !== state.generation) {
-					return; // a filter changed while this was in flight
-				}
-				state.loading = false;
-				data.items.forEach(function (person) {
-					grid.appendChild(personTile(person));
-				});
-				state.offset += data.items.length;
-				state.total = data.total;
-				state.done = data.items.length < PEOPLE_PAGE || state.offset >= data.total;
-				totalNode.textContent = plural(data.total, 'person', 'people');
-				message.textContent = '';
-				if (data.total === 0) {
-					message.textContent = search !== '' || minCount > 0
-						? 'No people match. Try a lower minimum or a different name.'
-						: 'No people yet. They appear here once your photos have been scanned and grouped.';
-				}
-				scroller.check();
-			}).catch(function (error) {
-				if (generation === state.generation) {
-					state.loading = false;
-					fail(error);
-				}
-			});
-		}
-
-		function reset() {
-			state.generation++;
-			state.offset = 0;
-			state.done = false;
-			state.loading = false;
-			clear(grid);
-			message.textContent = '';
-			loadMore();
-		}
-
-		searchInput.addEventListener('input', debounce(function () {
-			search = searchInput.value.trim();
-			reset();
-		}, 300));
-		minInput.addEventListener('input', debounce(function () {
-			minCount = Math.max(0, parseInt(minInput.value, 10) || 0);
-			writeStored('minCount', minCount);
-			reset();
-		}, 400));
-
-		loadMore();
-		return scroller.stop;
-	}
-
-	// ---- person picker -------------------------------------------------------------------
+	var dialogStack = [];
 
 	/**
-	 * A modal "choose a person" dialog. Resolves with {clusterId} for an existing person,
+	 * Wires a <dialog> into the page: Esc and a click on the backdrop close it, and `done` runs
+	 * exactly once however it closes. Returns close(), for the dialog's own buttons.
+	 *
+	 * Esc is handled on the document, for the topmost dialog only, rather than left to the
+	 * browser: whether a browser fires `cancel` for it varies (it was observed not to for the
+	 * photo dialog), and once a button the user pressed is redrawn, focus falls back to the page
+	 * where a listener on the dialog never sees the key. A native close that skipped close()
+	 * would leave the element behind and `done` unrun, so `cancel` and `close` are listened to too;
+	 * close() is safe to call twice.
+	 */
+	function showDialog(dialog, done) {
+		var finished = false;
+		function onKey(event) {
+			if (event.key === 'Escape' && dialogStack[dialogStack.length - 1] === dialog) {
+				event.preventDefault();
+				close();
+			}
+		}
+		function close() {
+			if (finished) {
+				return;
+			}
+			finished = true;
+			document.removeEventListener('keydown', onKey);
+			dialogStack.splice(dialogStack.indexOf(dialog), 1);
+			dialog.close();
+			dialog.remove();
+			done();
+		}
+		dialog.addEventListener('cancel', function (event) {
+			event.preventDefault();
+			close();
+		});
+		dialog.addEventListener('close', close);
+		dialog.addEventListener('click', function (event) {
+			if (event.target === dialog) {
+				close();
+			}
+		});
+		document.addEventListener('keydown', onKey);
+		dialogStack.push(dialog);
+		root.appendChild(dialog);
+		dialog.showModal();
+		return close;
+	}
+
+	/**
+	 * A modal with a heading, some content and buttons. Resolves with the clicked button's
+	 * `value`, or null if it was dismissed. buttons: [{label, value, primary, danger}].
+	 */
+	function openDialog(title, body, buttons) {
+		return new Promise(function (resolve) {
+			var result = null;
+			var close = null;
+			var rendered = buttons.map(function (button) {
+				return h('button', {
+					type: 'button',
+					class: (button.primary ? 'primary' : '') + (button.danger ? ' fw-danger' : ''),
+					text: button.label,
+					onclick: function () {
+						result = button.value;
+						close();
+					},
+				});
+			});
+			var dialog = h('dialog', { class: 'fw-dialog', 'aria-label': title }, [h('h3', { text: title })].concat(body, [
+				h('div', { class: 'fw-dialog-buttons' }, rendered),
+			]));
+			close = showDialog(dialog, function () {
+				resolve(result);
+			});
+			(dialog.querySelector('.primary, .fw-danger') || rendered[rendered.length - 1]).focus();
+		});
+	}
+
+	/** Resolves true only if the user confirmed. */
+	function confirmDialog(options) {
+		return openDialog(options.title, h('p', { class: 'fw-dialog-text', text: options.message }), [
+			{ label: 'Cancel', value: false },
+			{ label: options.confirmLabel, value: true, primary: !options.danger, danger: !!options.danger },
+		]).then(function (value) {
+			return value === true;
+		});
+	}
+
+	/**
+	 * A modal "choose a person" dialog. Resolves with {clusterId, person} for an existing person,
 	 * {newTitle} when the user types a new name (only if options.allowNew), or null if cancelled.
 	 * options.exclude is a person id to leave out, normally the one the faces come from.
 	 */
 	function pickPerson(options) {
 		return new Promise(function (resolve) {
-			var finished = false;
+			var result = null;
 			var generation = 0;
+			var finished = false;
+			var close = null;
 			var input = h('input', { type: 'search', class: 'fw-search', placeholder: 'Search people', 'aria-label': 'Search people' });
 			var list = h('div', { class: 'fw-picker-list' });
 			var dialog = h('dialog', { class: 'fw-dialog', 'aria-label': options.title }, [
@@ -276,18 +275,13 @@
 				input,
 				list,
 				h('div', { class: 'fw-dialog-buttons' }, [h('button', { type: 'button', text: 'Cancel', onclick: function () {
-					finish(null);
+					close();
 				} })]),
 			]);
 
-			function finish(result) {
-				if (finished) {
-					return;
-				}
-				finished = true;
-				dialog.close();
-				dialog.remove();
-				resolve(result);
+			function choose(value) {
+				result = value;
+				close();
 			}
 
 			function row(picture, name, detail, onClick, extraClass) {
@@ -312,7 +306,7 @@
 					// Offering a name that is already taken would only end in an error.
 					if (options.allowNew && term !== '' && !exact) {
 						list.appendChild(row(h('span', { class: 'fw-picker-plus', text: '+' }), 'New person named “' + term + '”', '', function () {
-							finish({ newTitle: term });
+							choose({ newTitle: term });
 						}, 'fw-picker-new'));
 					}
 					data.items.filter(function (person) {
@@ -322,7 +316,7 @@
 							? h('img', { class: 'fw-picker-crop', src: previewUrl(person.cover, 64), alt: '' })
 							: h('span', { class: 'fw-picker-crop fw-crop-empty' });
 						list.appendChild(row(picture, person.title !== '' ? person.title : 'Unnamed', plural(person.count, 'face', 'faces'), function () {
-							finish({ clusterId: person.id });
+							choose({ clusterId: person.id, person: person });
 						}));
 					});
 					if (!list.firstChild) {
@@ -336,22 +330,386 @@
 			}
 
 			input.addEventListener('input', debounce(refresh, 200));
-			// Esc, and a click on the backdrop, cancel; the browser's own close would skip finish().
-			dialog.addEventListener('cancel', function (event) {
-				event.preventDefault();
-				finish(null);
+			close = showDialog(dialog, function () {
+				finished = true;
+				resolve(result);
 			});
-			dialog.addEventListener('click', function (event) {
-				if (event.target === dialog) {
-					finish(null);
-				}
-			});
-
-			root.appendChild(dialog);
-			dialog.showModal();
 			input.focus();
 			refresh();
 		});
+	}
+
+	// ---- selection -----------------------------------------------------------------------
+
+	/**
+	 * Which tiles of a grid are selected, shared by the face grids and the people list.
+	 * A click toggles once anything is selected (or with Ctrl/Cmd), Shift-click selects the range
+	 * from the last tile touched, and a click with nothing selected is left to the caller (open).
+	 */
+	function createSelection(onChange) {
+		var order = [];
+		var tiles = {};
+		var selected = {};
+		var anchor = null;
+
+		function mark(id, on) {
+			if (on) {
+				selected[id] = true;
+			} else {
+				delete selected[id];
+			}
+			tiles[id].classList.toggle('selected', on);
+			tiles[id].setAttribute('aria-checked', on ? 'true' : 'false');
+		}
+
+		var selection = {
+			add: function (id, tile) {
+				order.push(id);
+				tiles[id] = tile;
+			},
+			remove: function (ids) {
+				ids.forEach(function (id) {
+					tiles[id].remove();
+					delete tiles[id];
+					delete selected[id];
+				});
+				order = order.filter(function (id) {
+					return tiles[id] !== undefined;
+				});
+				anchor = null;
+				onChange();
+			},
+			reset: function () {
+				order = [];
+				tiles = {};
+				selected = {};
+				anchor = null;
+				onChange();
+			},
+			ids: function () {
+				return order.filter(function (id) {
+					return selected[id];
+				});
+			},
+			all: function () {
+				return order.slice();
+			},
+			count: function () {
+				return selection.ids().length;
+			},
+			toggle: function (id) {
+				mark(id, !selected[id]);
+				anchor = id;
+				onChange();
+			},
+			selectAll: function () {
+				order.forEach(function (id) {
+					mark(id, true);
+				});
+				onChange();
+			},
+			clear: function () {
+				order.forEach(function (id) {
+					if (selected[id]) {
+						mark(id, false);
+					}
+				});
+				anchor = null;
+				onChange();
+			},
+			/** @return boolean whether the click was a selection gesture (false: the caller opens it) */
+			activate: function (id, event) {
+				if (event.shiftKey && anchor !== null && tiles[anchor]) {
+					var from = order.indexOf(anchor);
+					var to = order.indexOf(id);
+					order.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(function (rangeId) {
+						mark(rangeId, true);
+					});
+					onChange();
+					return true;
+				}
+				if (selection.count() > 0 || event.ctrlKey || event.metaKey) {
+					selection.toggle(id);
+					return true;
+				}
+				return false;
+			},
+		};
+		return selection;
+	}
+
+	/** The sticky bar that appears while something is selected. */
+	function createActionBar(nouns, selection) {
+		var countNode = h('span', { class: 'fw-selected-count' });
+		var buttons = h('span', { class: 'fw-actionbar-buttons' });
+		var bar = h('div', { class: 'fw-actionbar', role: 'toolbar', 'aria-label': 'Actions for the selection' }, [
+			countNode,
+			buttons,
+			h('span', { class: 'fw-spacer' }),
+			h('button', { type: 'button', class: 'fw-link-button', text: 'Select all loaded', onclick: selection.selectAll }),
+			h('button', { type: 'button', class: 'fw-link-button', text: 'Clear', onclick: selection.clear }),
+		]);
+		bar.hidden = true;
+		return {
+			element: bar,
+			add: function (label, onClick) {
+				var button = h('button', { type: 'button', class: 'fw-action', text: label, onclick: onClick });
+				buttons.appendChild(button);
+				return button;
+			},
+			update: function () {
+				var count = selection.count();
+				bar.hidden = count === 0;
+				countNode.textContent = plural(count, nouns[0], nouns[1]) + ' selected';
+			},
+			busy: function (on) {
+				bar.classList.toggle('busy', on);
+			},
+		};
+	}
+
+	// ---- merge and delete ----------------------------------------------------------------
+
+	/**
+	 * Merges `merging` (a list of {id, title, count}) into `keep`: shows how many faces will move,
+	 * asks, then does it. Resolves {keepId, moved}, or null if the user backed out.
+	 */
+	function mergeFlow(keep, merging) {
+		var ids = merging.map(function (person) {
+			return person.id;
+		});
+		return ocs('POST', '/people/merge', { keep: keep.id, merge: ids, dryRun: true }).then(function (plan) {
+			var droppedName = keep.title === '' && merging.some(function (person) {
+				return person.title !== '';
+			});
+			var message = 'Move ' + plural(plan.moved, 'face', 'faces') + ' from '
+				+ merging.map(personLabel).join(', ') + ' into ' + personLabel(keep)
+				+ '. The merged ' + (merging.length === 1 ? 'person is' : 'people are') + ' removed and ' + personLabel(keep) + ' stays.'
+				+ (droppedName ? ' ' + personLabel(keep) + ' has no name, so the name is lost.' : '');
+			return confirmDialog({ title: 'Merge people', message: message, confirmLabel: 'Merge' }).then(function (yes) {
+				if (!yes) {
+					return null;
+				}
+				return ocs('POST', '/people/merge', { keep: keep.id, merge: ids }).then(function (result) {
+					return { keepId: result.keepId, moved: result.moved };
+				});
+			});
+		});
+	}
+
+	/** Deletes people after asking. Resolves {unassigned} or null if the user backed out. */
+	function deleteFlow(people) {
+		var faces = people.reduce(function (sum, person) {
+			return sum + person.count;
+		}, 0);
+		var subject = people.length === 1 ? personLabel(people[0]) : plural(people.length, 'person', 'people');
+		return confirmDialog({
+			title: people.length === 1 ? 'Delete person' : 'Delete people',
+			message: 'Delete ' + subject + '? Their ' + plural(faces, 'face', 'faces') + ' move to Unassigned. Nothing is deleted from your files.',
+			confirmLabel: 'Delete',
+			danger: true,
+		}).then(function (yes) {
+			if (!yes) {
+				return null;
+			}
+			return ocs('POST', '/people/delete', { ids: people.map(function (person) {
+				return person.id;
+			}) });
+		});
+	}
+
+	/** Asks which of several people to keep when merging them. Resolves a person, or null. */
+	function chooseKeep(people) {
+		var best = people.slice().sort(function (a, b) {
+			return (b.title !== '') - (a.title !== '') || b.count - a.count;
+		})[0];
+		var chosen = best.id;
+		var rows = people.map(function (person) {
+			return h('label', { class: 'fw-radio-row' }, [
+				h('input', { type: 'radio', name: 'fw-keep', value: String(person.id), checked: person.id === chosen, onchange: function () {
+					chosen = person.id;
+				} }),
+				person.cover ? h('img', { class: 'fw-picker-crop', src: previewUrl(person.cover, 64), alt: '' }) : h('span', { class: 'fw-picker-crop fw-crop-empty' }),
+				h('span', { class: 'fw-picker-name', text: person.title !== '' ? person.title : 'Unnamed' }),
+				h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
+			]);
+		});
+		return openDialog('Merge ' + plural(people.length, 'person', 'people'), [
+			h('p', { class: 'fw-dialog-text', text: 'Which one do you want to keep? The others are merged into it, and its name stays.' }),
+			h('div', { class: 'fw-picker-list' }, rows),
+		], [
+			{ label: 'Cancel', value: false },
+			{ label: 'Continue', value: true, primary: true },
+		]).then(function (go) {
+			return go === true ? people.filter(function (person) {
+				return person.id === chosen;
+			})[0] : null;
+		});
+	}
+
+	// ---- one photo, with all its faces ---------------------------------------------------
+
+	/** Where a face currently is, in words. cluster_id: a person's id, or -1 / -2 / -3 / null. */
+	function faceState(face) {
+		if (face.cluster_id > 0) {
+			return { label: face.title !== null && face.title !== '' ? face.title : 'Unnamed', css: 'person' };
+		}
+		if (face.cluster_id === -1) {
+			return { label: 'Unassigned', css: 'unassigned' };
+		}
+		if (face.cluster_id === -3) {
+			return { label: 'Not a face', css: 'ignored' };
+		}
+		return { label: 'Not grouped yet', css: 'pending' };
+	}
+
+	/**
+	 * Shows the photo a face is in with every face of the user's drawn on it. Clicking a box makes
+	 * it the current face, which the buttons below act on. onChanged runs when the dialog closes
+	 * if anything was changed, so the grid behind it can refresh.
+	 */
+	function openPhoto(face, onChanged) {
+		var fileId = face.file_id;
+		var current = face.id;
+		var changed = false;
+		var faces = [];
+
+		var image = h('img', { class: 'fw-photo-img', alt: '', src: OC.generateUrl('/core/preview') + query({ fileId: fileId, x: 1024, y: 1024, a: 1 }) });
+		var wrap = h('div', { class: 'fw-photo-wrap' }, [image]);
+		var status = h('p', { class: 'fw-photo-status' });
+		var actions = h('div', { class: 'fw-photo-actions' });
+		var closeButton = h('button', { type: 'button', text: 'Close', onclick: function () {
+			close();
+		} });
+		var dialog = h('dialog', { class: 'fw-dialog fw-photo', 'aria-label': 'Photo' }, [
+			wrap,
+			status,
+			actions,
+			h('div', { class: 'fw-dialog-buttons' }, [
+				h('a', { class: 'button', href: OC.generateUrl('/f/' + fileId), target: '_blank', rel: 'noopener', text: 'Open in Files' }),
+				closeButton,
+			]),
+		]);
+		var close = showDialog(dialog, function () {
+			if (changed && onChanged) {
+				onChanged();
+			}
+		});
+		closeButton.focus();
+
+		image.addEventListener('error', function () {
+			status.textContent = 'This photo could not be loaded.';
+		});
+
+		function currentFace() {
+			return faces.filter(function (candidate) {
+				return candidate.id === current;
+			})[0] || null;
+		}
+
+		function draw() {
+			[].forEach.call(wrap.querySelectorAll('.fw-box'), function (box) {
+				box.remove();
+			});
+			faces.forEach(function (candidate) {
+				var state = faceState(candidate);
+				var box = h('button', {
+					type: 'button',
+					class: 'fw-box ' + state.css + (candidate.id === current ? ' current' : ''),
+					'aria-label': state.label,
+					'aria-pressed': candidate.id === current ? 'true' : 'false',
+					onclick: function () {
+						current = candidate.id;
+						draw();
+					},
+				}, [h('span', { class: 'fw-box-label', text: state.label })]);
+				box.style.left = (candidate.x * 100) + '%';
+				box.style.top = (candidate.y * 100) + '%';
+				box.style.width = (candidate.width * 100) + '%';
+				box.style.height = (candidate.height * 100) + '%';
+				wrap.appendChild(box);
+			});
+			drawActions();
+		}
+
+		function drawActions() {
+			clear(actions);
+			var target = currentFace();
+			if (!target) {
+				return;
+			}
+			var state = faceState(target);
+			status.textContent = 'Selected face: ' + state.label + '.';
+			var available = [moveAction(target.cluster_id > 0 ? target.cluster_id : null)];
+			if (target.cluster_id > 0) {
+				available.push(detachAction(state.label));
+			}
+			available.push(target.cluster_id === -3 ? restoreAction() : ignoreAction());
+			available.forEach(function (action) {
+				actions.appendChild(h('button', { type: 'button', class: 'fw-action', text: action.label, onclick: function () {
+					actions.classList.add('busy');
+					action.run([target.id]).then(function (outcome) {
+						if (outcome !== null) {
+							toast(outcome.message);
+							changed = true;
+							return load();
+						}
+					}).catch(fail).then(function () {
+						actions.classList.remove('busy');
+					});
+				} }));
+			});
+		}
+
+		function load() {
+			return ocs('GET', '/files/' + fileId + '/faces').then(function (list) {
+				faces = list;
+				draw();
+			});
+		}
+
+		load().catch(fail);
+	}
+
+	// ---- face actions shared by the grids ------------------------------------------------
+
+	/** "Move to...": pick a person (or type a new name), then move the selected faces there. */
+	function moveAction(excludeId) {
+		return { label: 'Move to…', run: function (ids) {
+			return pickPerson({ title: 'Move ' + plural(ids.length, 'face', 'faces') + ' to', exclude: excludeId, allowNew: true }).then(function (choice) {
+				if (choice === null) {
+					return null;
+				}
+				var body = choice.newTitle !== undefined ? { ids: ids, newTitle: choice.newTitle } : { ids: ids, clusterId: choice.clusterId };
+				return ocs('POST', '/faces/move', body).then(function (result) {
+					return { count: result.moved, message: 'Moved ' + plural(result.moved, 'face', 'faces') + (choice.newTitle !== undefined ? ' to ' + choice.newTitle : '') + '.' };
+				});
+			});
+		} };
+	}
+
+	function detachAction(personName) {
+		return { label: 'Remove from person', run: function (ids) {
+			return ocs('POST', '/faces/detach', { ids: ids }).then(function (result) {
+				return { count: result.count, message: 'Removed ' + plural(result.count, 'face', 'faces') + ' from ' + personName + '. They are now under Unassigned.' };
+			});
+		} };
+	}
+
+	function ignoreAction() {
+		return { label: 'Not a face', run: function (ids) {
+			return ocs('POST', '/faces/ignore', { ids: ids }).then(function (result) {
+				return { count: result.count, message: 'Marked ' + plural(result.count, 'face', 'faces') + ' as not a face.' };
+			});
+		} };
+	}
+
+	function restoreAction() {
+		return { label: 'Restore', run: function (ids) {
+			return ocs('POST', '/faces/unignore', { ids: ids }).then(function (result) {
+				return { count: result.count, message: 'Restored ' + plural(result.count, 'face', 'faces') + '. They will be considered the next time faces are grouped.' };
+			});
+		} };
 	}
 
 	// ---- face grids with selection -------------------------------------------------------
@@ -368,117 +726,57 @@
 	 * options.onTotal(total)       -> called when the count changes
 	 * options.emptyText            -> shown when there are no faces
 	 *
-	 * Selecting: the corner mark toggles; a click toggles once anything is selected (or with
-	 * Ctrl/Cmd); Shift-click selects the range from the last one touched. Every action removes the
-	 * affected tiles locally rather than reloading, so the scroll position survives.
+	 * Clicking a face with nothing selected opens its photo; every action removes the affected
+	 * tiles locally rather than reloading, so the scroll position survives.
 	 */
 	function faceGrid(options) {
-		var state = { offset: 0, total: null, loading: false, done: false, busy: false, anchor: null, generation: 0, order: [], faces: {}, tiles: {}, selected: {} };
+		var state = { offset: 0, total: null, loading: false, done: false, busy: false, generation: 0, faces: {} };
 		var grid = h('div', { class: 'fw-grid fw-face-grid' });
 		var message = h('div', { class: 'fw-empty' });
-		var countNode = h('span', { class: 'fw-selected-count' });
-		var buttons = h('span', { class: 'fw-actionbar-buttons' });
-		var bar = h('div', { class: 'fw-actionbar', role: 'toolbar', 'aria-label': 'Actions for the selected faces' }, [
-			countNode,
-			buttons,
-			h('span', { class: 'fw-spacer' }),
-			h('button', { type: 'button', class: 'fw-link-button', text: 'Select all loaded', onclick: function () {
-				state.order.forEach(function (id) {
-					setSelected(id, true);
-				});
-				updateBar();
-			} }),
-			h('button', { type: 'button', class: 'fw-link-button', text: 'Clear', onclick: clearSelection }),
-		]);
-		bar.hidden = true;
+		var selection = createSelection(function () {
+			bar.update();
+			grid.classList.toggle('selecting', selection.count() > 0);
+		});
+		var bar = createActionBar(['face', 'faces'], selection);
 
 		options.actions.forEach(function (action) {
-			buttons.appendChild(h('button', { type: 'button', class: 'fw-action', text: action.label, onclick: function () {
+			bar.add(action.label, function () {
 				runAction(action);
-			} }));
+			});
 		});
 
 		main.appendChild(grid);
 		main.appendChild(message);
-		main.appendChild(bar);
+		main.appendChild(bar.element);
 
 		var scroller = infiniteScroll(loadMore);
-
-		function selectedIds() {
-			return state.order.filter(function (id) {
-				return state.selected[id];
-			});
-		}
-
-		function setSelected(id, on) {
-			if (on) {
-				state.selected[id] = true;
-			} else {
-				delete state.selected[id];
-			}
-			var tile = state.tiles[id];
-			tile.classList.toggle('selected', on);
-			tile.setAttribute('aria-checked', on ? 'true' : 'false');
-		}
-
-		function updateBar() {
-			var count = selectedIds().length;
-			bar.hidden = count === 0;
-			grid.classList.toggle('selecting', count > 0);
-			countNode.textContent = plural(count, 'face', 'faces') + ' selected';
-		}
-
-		function clearSelection() {
-			state.order.forEach(function (id) {
-				if (state.selected[id]) {
-					setSelected(id, false);
-				}
-			});
-			state.anchor = null;
-			updateBar();
-		}
-
-		function onTileActivate(id, event) {
-			var anything = selectedIds().length > 0;
-			if (event.shiftKey && state.anchor !== null && state.tiles[state.anchor]) {
-				var from = state.order.indexOf(state.anchor);
-				var to = state.order.indexOf(id);
-				state.order.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(function (rangeId) {
-					setSelected(rangeId, true);
-				});
-			} else if (anything || event.ctrlKey || event.metaKey || !options.onOpen) {
-				setSelected(id, !state.selected[id]);
-				state.anchor = id;
-			} else {
-				options.onOpen(state.faces[id]);
-			}
-			updateBar();
-		}
 
 		function addTile(face) {
 			var tile = h('div', { class: 'fw-face', role: 'checkbox', 'aria-checked': 'false', 'aria-label': 'Face', tabindex: '0' }, [
 				h('img', { class: 'fw-crop', src: previewUrl(face.id, 160), loading: 'lazy', alt: '', draggable: 'false' }),
 				h('span', { class: 'fw-face-check', 'aria-hidden': 'true' }),
 			]);
+			function activate(event) {
+				if (!selection.activate(face.id, event)) {
+					openPhoto(face, reload);
+				}
+			}
 			tile.addEventListener('click', function (event) {
 				// The corner mark always means "select", never "open".
 				if (event.target.classList.contains('fw-face-check')) {
-					setSelected(face.id, !state.selected[face.id]);
-					state.anchor = face.id;
-					updateBar();
-					return;
+					selection.toggle(face.id);
+				} else {
+					activate(event);
 				}
-				onTileActivate(face.id, event);
 			});
 			tile.addEventListener('keydown', function (event) {
 				if (event.key === ' ' || event.key === 'Enter') {
 					event.preventDefault();
-					onTileActivate(face.id, event);
+					activate(event);
 				}
 			});
-			state.order.push(face.id);
 			state.faces[face.id] = face;
-			state.tiles[face.id] = tile;
+			selection.add(face.id, tile);
 			grid.appendChild(tile);
 		}
 
@@ -519,43 +817,32 @@
 			state.offset = 0;
 			state.done = false;
 			state.loading = false;
-			state.anchor = null;
-			state.order = [];
 			state.faces = {};
-			state.tiles = {};
-			state.selected = {};
 			clear(grid);
-			updateBar();
+			selection.reset();
 			loadMore();
 		}
 
 		function removeTiles(ids) {
 			ids.forEach(function (id) {
-				state.tiles[id].remove();
-				delete state.tiles[id];
 				delete state.faces[id];
-				delete state.selected[id];
 			});
-			state.order = state.order.filter(function (id) {
-				return state.tiles[id] !== undefined;
-			});
-			state.anchor = null;
+			selection.remove(ids);
 			// Rows before the next page's offset just disappeared from the server's list too.
 			state.offset = Math.max(0, state.offset - ids.length);
 			showTotal(Math.max(0, state.total - ids.length));
-			updateBar();
-			if (state.order.length === 0 && !state.done) {
+			if (selection.all().length === 0 && !state.done) {
 				loadMore();
 			}
 		}
 
 		function runAction(action) {
-			var ids = selectedIds();
+			var ids = selection.ids();
 			if (ids.length === 0 || state.busy) {
 				return;
 			}
 			state.busy = true;
-			bar.classList.add('busy');
+			bar.busy(true);
 			action.run(ids).then(function (outcome) {
 				if (outcome === null) {
 					return;
@@ -569,45 +856,12 @@
 				}
 			}).catch(fail).then(function () {
 				state.busy = false;
-				bar.classList.remove('busy');
+				bar.busy(false);
 			});
 		}
 
 		loadMore();
 		return { stop: scroller.stop, reload: reload };
-	}
-
-	// ---- face actions shared by the grids ------------------------------------------------
-
-	/** "Move to...": pick a person (or type a new name), then move the selected faces there. */
-	function moveAction(excludeId) {
-		return { label: 'Move to…', run: function (ids) {
-			return pickPerson({ title: 'Move ' + plural(ids.length, 'face', 'faces') + ' to', exclude: excludeId, allowNew: true }).then(function (choice) {
-				if (choice === null) {
-					return null;
-				}
-				var body = choice.newTitle !== undefined ? { ids: ids, newTitle: choice.newTitle } : { ids: ids, clusterId: choice.clusterId };
-				return ocs('POST', '/faces/move', body).then(function (result) {
-					return { count: result.moved, message: 'Moved ' + plural(result.moved, 'face', 'faces') + (choice.newTitle !== undefined ? ' to ' + choice.newTitle : '') + '.' };
-				});
-			});
-		} };
-	}
-
-	function ignoreAction() {
-		return { label: 'Not a face', run: function (ids) {
-			return ocs('POST', '/faces/ignore', { ids: ids }).then(function (result) {
-				return { count: result.count, message: 'Marked ' + plural(result.count, 'face', 'faces') + ' as not a face.' };
-			});
-		} };
-	}
-
-	function restoreAction() {
-		return { label: 'Restore', run: function (ids) {
-			return ocs('POST', '/faces/unignore', { ids: ids }).then(function (result) {
-				return { count: result.count, message: 'Restored ' + plural(result.count, 'face', 'faces') + '. They will be considered the next time faces are grouped.' };
-			});
-		} };
 	}
 
 	/** A page that is only a titled, explained, selectable grid of faces: Unassigned, Ignored. */
@@ -628,6 +882,166 @@
 		return grid.stop;
 	}
 
+	// ---- people list ---------------------------------------------------------------------
+
+	var PEOPLE_PAGE = 60;
+
+	function personTile(person) {
+		var named = person.title !== '';
+		var picture = person.cover
+			? h('img', { class: 'fw-crop', src: previewUrl(person.cover, 256), loading: 'lazy', alt: '', draggable: 'false' })
+			: h('div', { class: 'fw-crop fw-crop-empty' });
+		return h('a', { class: 'fw-person', href: '#/person/' + person.id, role: 'checkbox', 'aria-checked': 'false' }, [
+			picture,
+			h('span', { class: 'fw-face-check', 'aria-hidden': 'true' }),
+			h('span', { class: 'fw-person-name' + (named ? '' : ' unnamed'), text: named ? person.title : 'Unnamed' }),
+			h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
+		]);
+	}
+
+	function peopleView() {
+		var state = { generation: 0, offset: 0, total: null, loading: false, done: false, busy: false, people: {} };
+		var minCount = Math.max(0, parseInt(readStored('minCount', config.minFaces), 10) || 0);
+		var search = '';
+
+		var totalNode = h('span', { class: 'fw-total' });
+		var searchInput = h('input', { type: 'search', class: 'fw-search', placeholder: 'Search by name', 'aria-label': 'Search people by name' });
+		var minInput = h('input', { type: 'number', min: '0', class: 'fw-min', value: String(minCount), 'aria-label': 'Minimum number of faces for unnamed people' });
+		var grid = h('div', { class: 'fw-grid fw-people-grid' });
+		var message = h('div', { class: 'fw-empty' });
+		var selection = createSelection(function () {
+			bar.update();
+			mergeButton.hidden = selection.count() < 2;
+			grid.classList.toggle('selecting', selection.count() > 0);
+		});
+		var bar = createActionBar(['person', 'people'], selection);
+
+		function chosenPeople() {
+			return selection.ids().map(function (id) {
+				return state.people[id];
+			});
+		}
+
+		var mergeButton = bar.add('Merge selected…', function () {
+			var people = chosenPeople();
+			if (people.length < 2 || state.busy) {
+				return;
+			}
+			chooseKeep(people).then(function (keep) {
+				if (keep === null) {
+					return null;
+				}
+				return mergeFlow(keep, people.filter(function (person) {
+					return person.id !== keep.id;
+				})).then(function (result) {
+					if (result) {
+						toast('Merged ' + plural(people.length, 'person', 'people') + '. ' + plural(result.moved, 'face', 'faces') + ' moved.');
+						reset();
+					}
+				});
+			}).catch(fail);
+		});
+		bar.add('Delete…', function () {
+			var people = chosenPeople();
+			if (people.length === 0 || state.busy) {
+				return;
+			}
+			deleteFlow(people).then(function (result) {
+				if (result) {
+					toast('Deleted ' + plural(people.length, 'person', 'people') + '. ' + plural(result.unassigned, 'face', 'faces') + ' are now under Unassigned.');
+					reset();
+				}
+			}).catch(fail);
+		});
+		mergeButton.hidden = true;
+
+		main.appendChild(h('div', { class: 'fw-toolbar' }, [
+			h('h2', { text: 'People' }),
+			totalNode,
+			h('span', { class: 'fw-spacer' }),
+			searchInput,
+			h('label', { class: 'fw-min-label' }, ['Hide unnamed people with fewer than ', minInput, ' faces']),
+		]));
+		main.appendChild(grid);
+		main.appendChild(message);
+		main.appendChild(bar.element);
+
+		var scroller = infiniteScroll(loadMore);
+
+		function addTile(person) {
+			var tile = personTile(person);
+			tile.addEventListener('click', function (event) {
+				// The corner mark selects; anything else selects only once a selection exists, and
+				// otherwise follows the link to the person.
+				if (event.target.classList.contains('fw-face-check')) {
+					event.preventDefault();
+					selection.toggle(person.id);
+				} else if (selection.activate(person.id, event)) {
+					event.preventDefault();
+				}
+			});
+			state.people[person.id] = person;
+			selection.add(person.id, tile);
+			grid.appendChild(tile);
+		}
+
+		function loadMore() {
+			if (state.loading || state.done) {
+				return;
+			}
+			state.loading = true;
+			var generation = state.generation;
+			ocs('GET', '/people' + query({ limit: PEOPLE_PAGE, offset: state.offset, minCount: minCount, search: search })).then(function (data) {
+				if (generation !== state.generation) {
+					return; // a filter changed while this was in flight
+				}
+				state.loading = false;
+				data.items.forEach(addTile);
+				state.offset += data.items.length;
+				state.total = data.total;
+				state.done = data.items.length < PEOPLE_PAGE || state.offset >= data.total;
+				totalNode.textContent = plural(data.total, 'person', 'people');
+				message.textContent = '';
+				if (data.total === 0) {
+					message.textContent = search !== '' || minCount > 0
+						? 'No people match. Try a lower minimum or a different name.'
+						: 'No people yet. They appear here once your photos have been scanned and grouped.';
+				}
+				scroller.check();
+			}).catch(function (error) {
+				if (generation === state.generation) {
+					state.loading = false;
+					fail(error);
+				}
+			});
+		}
+
+		function reset() {
+			state.generation++;
+			state.offset = 0;
+			state.done = false;
+			state.loading = false;
+			state.people = {};
+			clear(grid);
+			selection.reset();
+			message.textContent = '';
+			loadMore();
+		}
+
+		searchInput.addEventListener('input', debounce(function () {
+			search = searchInput.value.trim();
+			reset();
+		}, 300));
+		minInput.addEventListener('input', debounce(function () {
+			minCount = Math.max(0, parseInt(minInput.value, 10) || 0);
+			writeStored('minCount', minCount);
+			reset();
+		}, 400));
+
+		loadMore();
+		return scroller.stop;
+	}
+
 	// ---- person page ---------------------------------------------------------------------
 
 	function personView(idText) {
@@ -640,7 +1054,13 @@
 		var titleNode = h('h2');
 		var countNode = h('span', { class: 'fw-total' });
 		var renameButton = h('button', { type: 'button', class: 'fw-link-button', text: 'Rename', onclick: startRename });
-		var titleRow = h('div', { class: 'fw-toolbar' }, [titleNode, renameButton, countNode]);
+		var titleRow = h('div', { class: 'fw-toolbar' }, [
+			titleNode,
+			renameButton,
+			h('button', { type: 'button', class: 'fw-link-button', text: 'Merge into…', onclick: startMerge }),
+			h('button', { type: 'button', class: 'fw-link-button fw-danger-link', text: 'Delete person…', onclick: startDelete }),
+			countNode,
+		]);
 		var grid = null;
 
 		main.appendChild(h('p', { class: 'fw-back' }, [h('a', { href: '#/people', text: '← People' })]));
@@ -672,7 +1092,14 @@
 					showTitle();
 					stop();
 					toast('Renamed.');
-				}).catch(fail);
+				}).catch(function (error) {
+					if (error.code === 'title_exists') {
+						stop();
+						offerMerge(title);
+					} else {
+						fail(error);
+					}
+				});
 			}
 			input.addEventListener('keydown', function (event) {
 				if (event.key === 'Enter') {
@@ -691,6 +1118,51 @@
 			input.select();
 		}
 
+		/** The name typed is another person's: probably the same person, so offer to merge. */
+		function offerMerge(title) {
+			ocs('GET', '/people' + query({ search: title, limit: 200 })).then(function (data) {
+				var target = data.items.filter(function (candidate) {
+					return candidate.title === title && candidate.id !== id;
+				})[0];
+				if (!target) {
+					toast('A person named “' + title + '” already exists.', true);
+					return null;
+				}
+				return confirmDialog({
+					title: 'That name is already used',
+					message: '“' + title + '” is another person with ' + plural(target.count, 'face', 'faces') + '. If it is the same person, you can merge them.',
+					confirmLabel: 'Review merge',
+				}).then(function (yes) {
+					return yes ? mergeInto(target) : null;
+				});
+			}).catch(fail);
+		}
+
+		/** Merges this person into $target, then shows $target. */
+		function mergeInto(target) {
+			return mergeFlow(target, [person]).then(function (result) {
+				if (result) {
+					toast('Merged. ' + plural(result.moved, 'face', 'faces') + ' moved into ' + personLabel(target) + '.');
+					location.hash = '#/person/' + target.id;
+				}
+			});
+		}
+
+		function startMerge() {
+			pickPerson({ title: 'Merge ' + personLabel(person) + ' into', exclude: id, allowNew: false }).then(function (choice) {
+				return choice === null ? null : mergeInto(choice.person);
+			}).catch(fail);
+		}
+
+		function startDelete() {
+			deleteFlow([person]).then(function (result) {
+				if (result) {
+					toast('Deleted. ' + plural(result.unassigned, 'face', 'faces') + ' are now under Unassigned.');
+					location.hash = '#/people';
+				}
+			}).catch(fail);
+		}
+
 		function onTotal(total) {
 			person.count = total;
 			countNode.textContent = plural(total, 'face', 'faces');
@@ -699,10 +1171,6 @@
 				toast('That was the last face, so this person is gone.');
 				location.hash = '#/people';
 			}
-		}
-
-		function name() {
-			return person.title !== '' ? person.title : 'this person';
 		}
 
 		ocs('GET', '/people/' + id).then(function (data) {
@@ -717,11 +1185,7 @@
 				emptyText: 'There are no faces in this person.',
 				actions: [
 					moveAction(id),
-					{ label: 'Remove from person', run: function (ids) {
-						return ocs('POST', '/faces/detach', { ids: ids }).then(function (result) {
-							return { count: result.count, message: 'Removed ' + plural(result.count, 'face', 'faces') + ' from ' + name() + '. They are now under Unassigned.' };
-						});
-					} },
+					detachAction(person.title !== '' ? person.title : 'this person'),
 					ignoreAction(),
 				],
 			});

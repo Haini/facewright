@@ -384,6 +384,153 @@
 	color: var(--color-text-maxcontrast);
 }
 
+/* Selecting people on the list reuses the faces' corner mark */
+
+.fw-person {
+	position: relative;
+}
+
+.fw-person .fw-face-check {
+	top: 12px;
+	inset-inline-start: 12px;
+}
+
+.fw-person:hover .fw-face-check,
+.fw-person:focus-visible .fw-face-check,
+.fw-people-grid.selecting .fw-face-check {
+	opacity: 1;
+}
+
+.fw-person.selected {
+	background: var(--color-background-hover);
+	outline: 3px solid var(--color-primary-element);
+}
+
+.fw-person.selected .fw-face-check {
+	opacity: 1;
+	border-color: var(--color-primary-element);
+	background: var(--color-primary-element) center / 14px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23fff' d='M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/%3E%3C/svg%3E");
+}
+
+.fw-danger-link {
+	color: var(--color-error-text, var(--color-error));
+}
+
+#facewright-people button.fw-danger {
+	background: var(--color-error);
+	color: #fff;
+}
+
+.fw-dialog-text {
+	margin: 0 0 4px;
+	line-height: 1.5;
+}
+
+.fw-radio-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 8px;
+	border-radius: var(--border-radius-large);
+	cursor: pointer;
+}
+
+.fw-radio-row:hover {
+	background: var(--color-background-hover);
+}
+
+.fw-radio-row input {
+	margin: 0;
+}
+
+/* One photo with its faces */
+
+.fw-photo {
+	width: min(920px, calc(100vw - 32px));
+}
+
+.fw-photo-wrap {
+	position: relative;
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	margin: 0 auto;
+	line-height: 0;
+}
+
+.fw-photo-img {
+	display: block;
+	max-width: 100%;
+	max-height: 62vh;
+	width: auto;
+	height: auto;
+	border-radius: var(--border-radius);
+}
+
+/* !important: core styles every button with an opaque fill, which would hide the face. */
+.fw-box,
+.fw-box:hover,
+.fw-box:focus-visible {
+	background: transparent !important;
+}
+
+.fw-box {
+	position: absolute;
+	min-height: 0;
+	margin: 0;
+	padding: 0;
+	border: 2px solid #fff;
+	border-radius: 4px;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+	cursor: pointer;
+}
+
+.fw-box.current {
+	border-color: var(--color-primary-element-light, #4aa3ff);
+	box-shadow: 0 0 0 2px var(--color-primary-element), 0 0 0 4px rgba(255, 255, 255, 0.7);
+	z-index: 2;
+}
+
+.fw-box.ignored {
+	border-style: dashed;
+}
+
+.fw-box.unassigned {
+	border-style: dotted;
+}
+
+.fw-box-label {
+	position: absolute;
+	top: 100%;
+	inset-inline-start: -2px;
+	padding: 1px 6px;
+	border-radius: 4px;
+	background: rgba(0, 0, 0, 0.75);
+	color: #fff;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+.fw-photo-status {
+	margin: 10px 0 6px;
+	line-height: 1.4;
+	color: var(--color-text-maxcontrast);
+}
+
+.fw-photo-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	min-height: 34px;
+}
+
+.fw-photo-actions.busy {
+	opacity: 0.6;
+	pointer-events: none;
+}
+
 @media (max-width: 700px) {
 	#facewright-people {
 		flex-direction: column;
