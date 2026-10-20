@@ -13,6 +13,9 @@ return [
 		['name' => 'PeopleSettings#runClustering', 'url' => '/run-clustering', 'verb' => 'PUT'],
 		['name' => 'PeopleSettings#mergeClusters', 'url' => '/merge-clusters', 'verb' => 'PUT'],
 
+		// A face as a square crop, for <img src> on the People page - see FacePreviewController.
+		['name' => 'FacePreview#preview', 'url' => '/faces/{id}/preview', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
+
 		// Personal settings. Separate controller, every action #[NoAdminRequired], every action
 		// scoped to the session user - see PersonalSettingsController.
 		['name' => 'PersonalSettings#setEnabled', 'url' => '/personal/enabled', 'verb' => 'PUT'],
