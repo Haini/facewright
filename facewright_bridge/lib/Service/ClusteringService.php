@@ -66,6 +66,15 @@ class ClusteringService {
 	// as special-cased -1 handling.
 	public const UNASSIGNED = -1;
 
+	// -3 means "not a face, or not someone the user wants to see": set only by a human, from the
+	// People page. Clustering never seeds from it, never matches against it and never changes it,
+	// and resetUser() keeps it - an ignore is a judgement about the detection, not about how it
+	// was clustered. Invisible to Memories (it inner-joins recognize_face_clusters, and its
+	// unassigned view reads -1 only) and to Recognize (its cluster_id predicates are IS NULL,
+	// = -1 and = <real id>; only its own resetClusters() would wipe it, like every other
+	// assignment). Not a cluster: nothing may ever create a recognize_face_clusters row for it.
+	public const IGNORED = -3;
+
 	// Once a pre-existing cluster has this many representatives loaded in loadDetections(),
 	// further members are skipped entirely (never fetched, decoded, or held in memory) instead
 	// of loading the full cluster - at this project's current scale (a handful of clusters
@@ -287,15 +296,16 @@ class ClusteringService {
 
 	/**
 	 * Clears every cluster_id for $userId and deletes their clusters outright. This also reopens
-	 * UNASSIGNED (-1) rows back to pending, which is the intended meaning of a full reset: a
-	 * person a human previously unassigned goes back into the matching pool along with
-	 * everything else.
+	 * UNASSIGNED (-1) and UNCLUSTERABLE (-2) rows back to pending, which is the intended meaning
+	 * of a full reset: a person a human previously unassigned goes back into the matching pool
+	 * along with everything else. IGNORED (-3) rows are kept.
 	 */
 	public function resetUser(string $userId): void {
 		$qb = $this->db->getQueryBuilder();
 		$qb->update('recognize_face_detections')
 			->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->neq('cluster_id', $qb->createNamedParameter(self::IGNORED, IQueryBuilder::PARAM_INT)));
 		$qb->executeStatement();
 
 		$qb = $this->db->getQueryBuilder();
@@ -478,9 +488,10 @@ class ClusteringService {
 		$representativeCounts = []; // cluster_id => representatives already taken this call
 		while ($row = $result->fetch()) {
 			$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
-			if ($clusterId === self::UNASSIGNED) {
+			if ($clusterId === self::UNASSIGNED || $clusterId === self::IGNORED) {
 				// Excluded from clustering entirely - never a seed, never a match candidate, never
-				// fetched. See the constant's docblock.
+				// fetched. See the constants' docblocks. Without the IGNORED half, a -3 row would
+				// be loaded as a real cluster id and offered as a join target.
 				continue;
 			}
 			// Only real clusters (positive ids) get capped. UNCLUSTERABLE is not a cluster, and

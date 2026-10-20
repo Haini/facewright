@@ -105,6 +105,11 @@ class PeopleService {
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
+	public function listIgnoredFaces(string $userId): array {
+		return $this->listFacesByClusterId($userId, ClusteringService::IGNORED);
+	}
+
+	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
 	private function listFacesByClusterId(string $userId, int $clusterId): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id', 'file_id', 'x', 'y', 'width', 'height')
@@ -316,6 +321,109 @@ class PeopleService {
 		if ($qb->executeStatement() === 0) {
 			throw new \InvalidArgumentException("Face {$detectionId} does not exist for {$userId}.");
 		}
+	}
+
+	/**
+	 * Marks faces "not a face" (IGNORED): clustering leaves them alone and no UI lists them under
+	 * a person. Accepts a face in any state, including one already unassigned; untitled people
+	 * left with no members are deleted.
+	 *
+	 * @param list<int> $detectionIds
+	 * @return int faces newly ignored
+	 */
+	public function ignoreFaces(string $userId, array $detectionIds): int {
+		return $this->setFacesCluster($userId, $detectionIds, ClusteringService::IGNORED, null);
+	}
+
+	/**
+	 * Puts ignored faces back to pending (NULL) so clustering may place them again.
+	 *
+	 * @param list<int> $detectionIds
+	 * @return int faces restored
+	 */
+	public function unignoreFaces(string $userId, array $detectionIds): int {
+		return $this->setFacesCluster($userId, $detectionIds, null, ClusteringService::IGNORED);
+	}
+
+	/**
+	 * The one set-based "change these faces' cluster_id" statement. $onlyFrom restricts to rows
+	 * currently at that value; with null, rows already at $to are skipped instead, so the count
+	 * is "rows that changed". Untitled people emptied by the change are deleted in the same
+	 * transaction.
+	 *
+	 * @param list<int> $detectionIds
+	 */
+	private function setFacesCluster(string $userId, array $detectionIds, ?int $to, ?int $onlyFrom): int {
+		$changed = 0;
+		$this->db->beginTransaction();
+		try {
+			foreach (array_chunk(array_values(array_unique($detectionIds)), 1000) as $batch) {
+				$sources = $this->sourceClusters($userId, $batch);
+
+				$qb = $this->db->getQueryBuilder();
+				$qb->update('recognize_face_detections')
+					->set('cluster_id', $qb->createNamedParameter($to, $to === null ? IQueryBuilder::PARAM_NULL : IQueryBuilder::PARAM_INT))
+					->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+					->andWhere($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
+				if ($onlyFrom !== null) {
+					$qb->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($onlyFrom, IQueryBuilder::PARAM_INT)));
+				} else {
+					$qb->andWhere($qb->expr()->orX(
+						$qb->expr()->isNull('cluster_id'),
+						$qb->expr()->neq('cluster_id', $qb->createNamedParameter($to, IQueryBuilder::PARAM_INT)),
+					));
+				}
+				$changed += $qb->executeStatement();
+
+				$this->deleteEmptyUntitledClusters($userId, $sources);
+			}
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+		return $changed;
+	}
+
+	/**
+	 * The distinct real clusters these faces currently belong to - read before a change, so
+	 * deleteEmptyUntitledClusters() knows which people may have just been emptied.
+	 *
+	 * @param list<int> $detectionIds
+	 * @return list<int>
+	 */
+	private function sourceClusters(string $userId, array $detectionIds): array {
+		$qb = $this->db->getQueryBuilder();
+		$qb->selectDistinct('cluster_id')
+			->from('recognize_face_detections')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->in('id', $qb->createNamedParameter($detectionIds, IQueryBuilder::PARAM_INT_ARRAY)))
+			->andWhere($qb->expr()->gt('cluster_id', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+		return array_map('intval', $qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
+	}
+
+	/**
+	 * Deletes those of $clusterIds that are untitled and have no member left. A titled person is
+	 * kept even when empty: the user may be about to move faces into it.
+	 *
+	 * @param list<int> $clusterIds
+	 */
+	private function deleteEmptyUntitledClusters(string $userId, array $clusterIds): void {
+		if ($clusterIds === []) {
+			return;
+		}
+		$sub = $this->db->getQueryBuilder();
+		$sub->select($sub->expr()->literal(1))
+			->from('recognize_face_detections')
+			->where($sub->expr()->eq('cluster_id', $sub->createFunction('c.id')));
+
+		$qb = $this->db->getQueryBuilder();
+		$qb->delete('recognize_face_clusters', 'c')
+			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->in('c.id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
+			->andWhere($qb->expr()->eq('c.title', $qb->createNamedParameter('')))
+			->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
+		$qb->executeStatement();
 	}
 
 	/**

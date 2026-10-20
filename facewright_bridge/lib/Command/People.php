@@ -30,6 +30,7 @@ class People extends Command {
 			->addArgument('user', InputArgument::REQUIRED, 'Nextcloud user id')
 			->addOption('faces', null, InputOption::VALUE_REQUIRED, 'List faces in this cluster (numeric id or title)')
 			->addOption('unassigned', null, InputOption::VALUE_NONE, 'List faces at cluster_id = -1 (unassigned)')
+			->addOption('ignored', null, InputOption::VALUE_NONE, 'List faces at cluster_id = -3 (marked "not a face")')
 			->addOption('delete-empty', null, InputOption::VALUE_NONE, 'Delete this user\'s clusters with no remaining members')
 			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --delete-empty, report the count without deleting');
 	}
@@ -43,6 +44,11 @@ class People extends Command {
 
 		if ($input->getOption('unassigned')) {
 			$this->printFaces($output, $this->people->listUnassignedFaces($userId));
+			return 0;
+		}
+
+		if ($input->getOption('ignored')) {
+			$this->printFaces($output, $this->people->listIgnoredFaces($userId));
 			return 0;
 		}
 
