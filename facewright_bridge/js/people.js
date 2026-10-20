@@ -99,12 +99,168 @@
 		toast(error && error.message ? error.message : 'Something went wrong', true);
 	}
 
+	/** localStorage is a per-viewer convenience: it can be missing, full or blocked. */
+	function readStored(key, fallback) {
+		try {
+			var value = window.localStorage.getItem('facewright.' + key);
+			return value === null ? fallback : value;
+		} catch (e) {
+			return fallback;
+		}
+	}
+
+	function writeStored(key, value) {
+		try {
+			window.localStorage.setItem('facewright.' + key, String(value));
+		} catch (e) {
+			// Not remembering the setting is fine.
+		}
+	}
+
+	function debounce(fn, ms) {
+		var timer = null;
+		return function () {
+			var args = arguments;
+			clearTimeout(timer);
+			timer = setTimeout(function () {
+				fn.apply(null, args);
+			}, ms);
+		};
+	}
+
+	/**
+	 * Calls load() whenever the scroll container is within ~600px of its end and load() isn't
+	 * already running. Returns a stop function, for the view's teardown.
+	 */
+	function infiniteScroll(load) {
+		var scheduled = false;
+		function check() {
+			scheduled = false;
+			if (main.scrollHeight - main.scrollTop - main.clientHeight < 600) {
+				load();
+			}
+		}
+		function onScroll() {
+			if (!scheduled) {
+				scheduled = true;
+				requestAnimationFrame(check);
+			}
+		}
+		main.addEventListener('scroll', onScroll);
+		window.addEventListener('resize', onScroll);
+		return {
+			check: onScroll,
+			stop: function () {
+				main.removeEventListener('scroll', onScroll);
+				window.removeEventListener('resize', onScroll);
+			},
+		};
+	}
+
+	function plural(count, one, many) {
+		return count.toLocaleString() + ' ' + (count === 1 ? one : many);
+	}
+
+	// ---- people list ---------------------------------------------------------------------
+
+	var PEOPLE_PAGE = 60;
+
+	function personTile(person) {
+		var named = person.title !== '';
+		var picture = person.cover
+			? h('img', { class: 'fw-crop', src: previewUrl(person.cover, 256), loading: 'lazy', alt: '', draggable: 'false' })
+			: h('div', { class: 'fw-crop fw-crop-empty' });
+		return h('a', { class: 'fw-person', href: '#/person/' + person.id }, [
+			picture,
+			h('span', { class: 'fw-person-name' + (named ? '' : ' unnamed'), text: named ? person.title : 'Unnamed' }),
+			h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
+		]);
+	}
+
+	function peopleView() {
+		var state = { generation: 0, offset: 0, total: null, loading: false, done: false };
+		var minCount = Math.max(0, parseInt(readStored('minCount', config.minFaces), 10) || 0);
+		var search = '';
+
+		var totalNode = h('span', { class: 'fw-total' });
+		var searchInput = h('input', { type: 'search', class: 'fw-search', placeholder: 'Search by name', 'aria-label': 'Search people by name' });
+		var minInput = h('input', { type: 'number', min: '0', class: 'fw-min', value: String(minCount), 'aria-label': 'Minimum number of faces for unnamed people' });
+		var grid = h('div', { class: 'fw-grid fw-people-grid' });
+		var message = h('div', { class: 'fw-empty' });
+
+		main.appendChild(h('div', { class: 'fw-toolbar' }, [
+			h('h2', { text: 'People' }),
+			totalNode,
+			h('span', { class: 'fw-spacer' }),
+			searchInput,
+			h('label', { class: 'fw-min-label' }, ['Hide unnamed people with fewer than ', minInput, ' faces']),
+		]));
+		main.appendChild(grid);
+		main.appendChild(message);
+
+		var scroller = infiniteScroll(loadMore);
+
+		function loadMore() {
+			if (state.loading || state.done) {
+				return;
+			}
+			state.loading = true;
+			var generation = state.generation;
+			ocs('GET', '/people' + query({ limit: PEOPLE_PAGE, offset: state.offset, minCount: minCount, search: search })).then(function (data) {
+				if (generation !== state.generation) {
+					return; // a filter changed while this was in flight
+				}
+				state.loading = false;
+				data.items.forEach(function (person) {
+					grid.appendChild(personTile(person));
+				});
+				state.offset += data.items.length;
+				state.total = data.total;
+				state.done = data.items.length < PEOPLE_PAGE || state.offset >= data.total;
+				totalNode.textContent = plural(data.total, 'person', 'people');
+				message.textContent = '';
+				if (data.total === 0) {
+					message.textContent = search !== '' || minCount > 0
+						? 'No people match. Try a lower minimum or a different name.'
+						: 'No people yet. They appear here once your photos have been scanned and grouped.';
+				}
+				scroller.check();
+			}).catch(function (error) {
+				if (generation === state.generation) {
+					state.loading = false;
+					fail(error);
+				}
+			});
+		}
+
+		function reset() {
+			state.generation++;
+			state.offset = 0;
+			state.done = false;
+			state.loading = false;
+			clear(grid);
+			message.textContent = '';
+			loadMore();
+		}
+
+		searchInput.addEventListener('input', debounce(function () {
+			search = searchInput.value.trim();
+			reset();
+		}, 300));
+		minInput.addEventListener('input', debounce(function () {
+			minCount = Math.max(0, parseInt(minInput.value, 10) || 0);
+			writeStored('minCount', minCount);
+			reset();
+		}, 400));
+
+		loadMore();
+		return scroller.stop;
+	}
+
 	// ---- views ---------------------------------------------------------------------------
 
 	var views = {
-		people: function () {
-			main.appendChild(h('h2', { text: 'People' }));
-		},
+		people: peopleView,
 		person: function () {
 			main.appendChild(h('h2', { text: 'Person' }));
 		},
@@ -136,7 +292,13 @@
 		return { name: name, args: parts.slice(1) };
 	}
 
+	var teardown = null;
+
 	function render() {
+		if (teardown) {
+			teardown();
+			teardown = null;
+		}
 		var route = parseRoute();
 		[].forEach.call(root.querySelectorAll('.fw-nav-link'), function (link) {
 			// The person page belongs under People in the navigation.
@@ -154,7 +316,7 @@
 			renderDisabled();
 			return;
 		}
-		views[route.name].apply(null, route.args);
+		teardown = views[route.name].apply(null, route.args) || null;
 	}
 
 	window.addEventListener('hashchange', render);

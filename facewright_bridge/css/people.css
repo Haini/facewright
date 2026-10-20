@@ -77,6 +77,92 @@
 	border-color: var(--color-error);
 }
 
+#facewright-people h2 {
+	margin: 0;
+}
+
+.fw-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+	margin-bottom: 16px;
+}
+
+.fw-total {
+	color: var(--color-text-maxcontrast);
+}
+
+.fw-spacer {
+	flex: 1;
+}
+
+.fw-search {
+	width: 220px;
+	max-width: 100%;
+}
+
+.fw-min-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--color-text-maxcontrast);
+}
+
+.fw-min {
+	width: 4.5em;
+	margin: 0;
+}
+
+.fw-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	gap: 16px 12px;
+}
+
+.fw-person {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	padding: 6px;
+	border-radius: var(--border-radius-large);
+	color: var(--color-main-text);
+	text-decoration: none;
+}
+
+.fw-person:hover,
+.fw-person:focus-visible {
+	background: var(--color-background-hover);
+}
+
+.fw-crop {
+	display: block;
+	width: 100%;
+	aspect-ratio: 1;
+	object-fit: cover;
+	border-radius: var(--border-radius-large);
+	background: var(--color-background-dark);
+}
+
+.fw-person-name {
+	margin-top: 4px;
+	overflow: hidden;
+	font-weight: bold;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.fw-person-name.unnamed {
+	font-weight: normal;
+	color: var(--color-text-maxcontrast);
+}
+
+.fw-person-count {
+	color: var(--color-text-maxcontrast);
+	font-size: 0.9em;
+}
+
 @media (max-width: 700px) {
 	#facewright-people {
 		flex-direction: column;
@@ -92,5 +178,9 @@
 
 	.fw-main {
 		padding: 12px 12px 80px;
+	}
+
+	.fw-grid {
+		grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
 	}
 }
