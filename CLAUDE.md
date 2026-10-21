@@ -333,7 +333,9 @@ tunnels in through HaRP's FRP reverse proxy. See `Makefile` (`daemon-register`, 
 
 ### Bridge app (`facewright_bridge`)
 
-Deployed by copying into the instance's `custom_apps` and `occ app:enable`. Three mechanics
+Deployed by copying into the instance's `custom_apps` and `occ app:enable`; `git archive HEAD
+facewright_bridge | docker exec -i -u www-data <app> tar -C <custom_apps> -x` copies only tracked files
+with the right owner. Three mechanics
 that are easy to get wrong:
 
 - **Migrations and `info.xml` registrations (background jobs, sections, the navigation entry) need
