@@ -52,7 +52,7 @@ services:
       # page, not the JSON/auth error it looked like at first.
       NEXTCLOUD_TRUSTED_DOMAINS: localhost nextcloud
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
       - nextcloud_html:/var/www/html
       # Bind-mount facewright_bridge straight from the repo so local edits show up without a
