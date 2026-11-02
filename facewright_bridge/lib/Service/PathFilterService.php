@@ -4,8 +4,14 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Service;
 
+use OC\Files\Search\SearchComparison;
+use OC\Files\Search\SearchOrder;
+use OC\Files\Search\SearchQuery;
 use OCP\Files\Folder;
+use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\Files\Search\ISearchComparison;
+use OCP\Files\Search\ISearchOrder;
 
 /**
  * Matches a file path against one user's own allowlist of paths considered for face detection.
@@ -26,7 +32,40 @@ use OCP\Files\NotFoundException;
  * faces. Detection rows still fan out to every user with access. See AccessService.
  */
 class PathFilterService {
+	/** Rows per page in images(). Bounds peak memory to roughly this many Node objects. */
+	private const IMAGE_PAGE_SIZE = 2500;
+
 	public function __construct(private UserSettingsService $userSettings) {
+	}
+
+	/**
+	 * Every `image/*` file under $folder, fetched a page at a time. Use this instead of
+	 * `$folder->searchByMime('image')`: that one builds a Node for every image in the folder in a
+	 * single array before returning. On a ~54k-photo library that peaked at ~880 MB per call and
+	 * set off core's "Cron job used more than 300 MiB" warning on every BatchScanJob tick.
+	 *
+	 * Pages are ordered by fileid and LIMIT/OFFSET is applied in SQL (QuerySearchHelper), so only
+	 * one page is in memory at a time. A file created or deleted mid-walk can shift a page
+	 * boundary and be missed or seen twice. Both are harmless here: duplicates are deduped by the
+	 * caller's seen-set and by IJobList::add(), and anything missed is picked up on the next pass
+	 * or by FileCreatedListener.
+	 *
+	 * Uses core's OC\Files\Search classes because OCP only ships the interfaces. Memories and Maps
+	 * depend on these classes the same way.
+	 *
+	 * @return \Generator<int, Node>
+	 */
+	public function images(Folder $folder): \Generator {
+		$operator = new SearchComparison(ISearchComparison::COMPARE_LIKE, 'mimetype', 'image/%');
+		$order = [new SearchOrder(ISearchOrder::DIRECTION_ASCENDING, 'fileid')];
+
+		for ($offset = 0; ; $offset += self::IMAGE_PAGE_SIZE) {
+			$page = $folder->search(new SearchQuery($operator, self::IMAGE_PAGE_SIZE, $offset, $order));
+			yield from $page;
+			if (count($page) < self::IMAGE_PAGE_SIZE) {
+				return;
+			}
+		}
 	}
 
 	public function isIncluded(string $userId, string $path): bool {

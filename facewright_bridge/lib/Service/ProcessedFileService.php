@@ -237,7 +237,7 @@ class ProcessedFileService {
 		$ids = [];
 		$userFolder = $this->rootFolder->getUserFolder($userId);
 		foreach ($this->pathFilter->resolveSearchRoots($userId, $userFolder) as $folder) {
-			foreach ($folder->searchByMime('image') as $node) {
+			foreach ($this->pathFilter->images($folder) as $node) {
 				$ids[$node->getId()] = true;
 			}
 		}
