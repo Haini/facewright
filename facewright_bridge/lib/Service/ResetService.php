@@ -145,14 +145,15 @@ class ResetService {
 	private function deleteOrphanedFaces(array $faceIds): int {
 		$deleted = 0;
 		foreach (array_chunk($faceIds, self::CHUNK_SIZE) as $chunk) {
+			// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
 			$existsQb = $this->db->getQueryBuilder();
 			$existsQb->select($existsQb->expr()->literal(1))
 				->from('facewright_detection_faces')
-				->where($existsQb->expr()->eq('face_id', $existsQb->createFunction('f.id')));
+				->where($existsQb->expr()->eq('face_id', $existsQb->createFunction($existsQb->getTableName('facewright_faces') . '.id')));
 
 			$qb = $this->db->getQueryBuilder();
-			$qb->delete('facewright_faces', 'f')
-				->where($qb->expr()->in('f.id', $qb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)))
+			$qb->delete('facewright_faces')
+				->where($qb->expr()->in('id', $qb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)))
 				->andWhere($qb->createFunction('NOT EXISTS (' . $existsQb->getSQL() . ')'));
 			$deleted += $qb->executeStatement();
 		}

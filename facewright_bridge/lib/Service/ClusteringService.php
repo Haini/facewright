@@ -619,15 +619,16 @@ class ClusteringService {
 		}
 
 		if ($createdClusterIds !== []) {
+			// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
 			$sub = $this->db->getQueryBuilder();
 			$sub->select($sub->expr()->literal(1))
 				->from('recognize_face_detections')
-				->where($sub->expr()->eq('cluster_id', $sub->createFunction('c.id')));
+				->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
 
 			$qb = $this->db->getQueryBuilder();
-			$qb->delete('recognize_face_clusters', 'c')
-				->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('c.id', $qb->createNamedParameter($createdClusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
+			$qb->delete('recognize_face_clusters')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($createdClusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
 				->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
 			$qb->executeStatement();
 		}

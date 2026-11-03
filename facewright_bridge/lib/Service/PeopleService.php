@@ -586,16 +586,17 @@ class PeopleService {
 		if ($clusterIds === []) {
 			return;
 		}
+		// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
 		$sub = $this->db->getQueryBuilder();
 		$sub->select($sub->expr()->literal(1))
 			->from('recognize_face_detections')
-			->where($sub->expr()->eq('cluster_id', $sub->createFunction('c.id')));
+			->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
 
 		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_clusters', 'c')
-			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->in('c.id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
-			->andWhere($qb->expr()->eq('c.title', $qb->createNamedParameter('')))
+		$qb->delete('recognize_face_clusters')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->in('id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
+			->andWhere($qb->expr()->eq('title', $qb->createNamedParameter('')))
 			->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
 		$qb->executeStatement();
 	}
@@ -639,14 +640,15 @@ class PeopleService {
 	 * @return int clusters deleted
 	 */
 	public function deleteEmptyClusters(string $userId): int {
+		// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
 		$sub = $this->db->getQueryBuilder();
 		$sub->select($sub->expr()->literal(1))
 			->from('recognize_face_detections')
-			->where($sub->expr()->eq('cluster_id', $sub->createFunction('c.id')));
+			->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
 
 		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_clusters', 'c')
-			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
+		$qb->delete('recognize_face_clusters')
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
 		return $qb->executeStatement();
 	}
