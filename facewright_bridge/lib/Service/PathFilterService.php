@@ -53,6 +53,9 @@ class PathFilterService {
 	 * Uses core's OC\Files\Search classes because OCP only ships the interfaces. Memories and Maps
 	 * depend on these classes the same way.
 	 *
+	 * Only an empty page ends the walk. A short page does not: LIMIT is applied in SQL, then core
+	 * drops rows a storage wrapper rejects, so a page can come back short with more rows after it.
+	 *
 	 * @return \Generator<int, Node>
 	 */
 	public function images(Folder $folder): \Generator {
@@ -61,9 +64,12 @@ class PathFilterService {
 
 		for ($offset = 0; ; $offset += self::IMAGE_PAGE_SIZE) {
 			$page = $folder->search(new SearchQuery($operator, self::IMAGE_PAGE_SIZE, $offset, $order));
-			yield from $page;
-			if (count($page) < self::IMAGE_PAGE_SIZE) {
+			if ($page === []) {
 				return;
+			}
+			// Not `yield from`: that keeps each page's own keys 0..n, which collide across pages.
+			foreach ($page as $node) {
+				yield $node;
 			}
 		}
 	}
