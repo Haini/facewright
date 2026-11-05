@@ -1,7 +1,9 @@
 
 services:
   db:
-    image: mariadb:11
+    # Same major as production. SQL that only newer MariaDB accepts must fail here, not there.
+    # A volume initialized by a newer MariaDB will not start on this image; recreate it.
+    image: mariadb:10.11
     restart: unless-stopped
     environment:
       MARIADB_ROOT_PASSWORD: dev-root-password
