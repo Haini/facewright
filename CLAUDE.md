@@ -76,7 +76,10 @@ Services (`lib/Service/`):
   the detections table — is the idempotency check everywhere.
 - `PathFilterService` — per-user included-paths allowlist, exact-or-folder-prefix matching.
   Empty list = nothing included. Also `resolveSearchRoots()` so enumeration and the "not yet
-  processed" statistic walk the identical file set.
+  processed" statistic walk the identical file set. `images()` is how anything here lists a
+  folder's images: `searchByMime()` builds every Node in one array and is unaffordable on a large
+  library. Only an empty page ends that walk: LIMIT is applied in SQL and core drops rejected rows
+  afterwards, so a short page does not mean the last page.
 - `UserSettingsService` — per-user config via `OCP\Config\IUserConfig`.
 - `AccessService` / `AccessSyncService` / `PruneService` / `MountFileService` — who can see a file
   and keeping rows in step with that (see "Multi-user fan-out").
@@ -353,6 +356,14 @@ maintenance window is the wrong place for gigabytes of `UPDATE`s.
 
 ### Database
 
+- `docker-compose.yml` pins the dev database to the production major (MariaDB 10.11), so SQL only
+  newer versions accept fails in dev first. Keep them in step.
+- A single-table `DELETE` cannot take an alias before MariaDB 11.6 (error 1064). To correlate a
+  subquery with the row being deleted, use `$qb->getTableName(...) . '.id'`.
+- MariaDB has no in-place downgrade: moving a volume to an older version means dump and reload.
+  Dump the one database, not `--all-databases` (the older image creates its own system tables and
+  users). `utf8mb4_uca1400_ai_ci` does not exist on 10.11: a dump from 11.x can carry it in trigger
+  metadata (Memories' `memories_fcu_trg`) and in `CREATE DATABASE`, and fails to load.
 - `oc_recognize_face_detections` dominates the instance's working set. Size InnoDB's buffer pool
   so the table fits, or every clustering pass evicts everyone else's cache.
 - Off-page BLOB reads cannot be batched by read-ahead; keeping vectors in-page (the precision
@@ -402,7 +413,8 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 1. **Share/unshare at runtime is built but only exercised by command**, never by a real share
    created in the browser. `PruneService` has never actually deleted. Empty-cluster cleanup after a
    prune, a user-deleted listener, and a resume cursor for `BatchTriggerService`'s O(processed)
-   re-walk (~880 MB per pass on a large library) are all still open.
+   re-walk (memory is bounded by paging now, but every pass still reads the whole library, and
+   paging made that walk several times slower) are all still open.
 2. **Clustering quality is unvalidated at scale.** The 0.5 / 3 defaults were validated by eye on
    ~740 detections; real libraries are two orders of magnitude larger, and a couple of very large
    clusters look like over-merging. A hand-labelled ground-truth set exists outside the repo.
