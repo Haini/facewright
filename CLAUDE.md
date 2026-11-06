@@ -213,12 +213,19 @@ processing paused; `docs/own-tables.md`).
 
 `facewright_clusters` and `facewright_user_faces` (state `FaceState`: pending, assigned, unassigned,
 unclusterable, ignored) are kept as an exact mirror of `recognize_face_clusters` / `_detections` for the move
-to tables we own (`docs/own-tables.md`). Recognize's tables are still the source of truth; **every writer to
-them must tell `FaceStore` which ids it touched** (`mirrorFaces`, `mirrorClusters`, `addFaces`, `deleteFaces`)
-inside the same transaction, after its own statement. The copy is rewritten from the Recognize rows, never
-computed from what the caller meant to do. A new writer that skips this makes `occ facewright:own-tables
---verify` fail; fix the writer, do not re-run the backfill to hide it. Ids are shared: a copy has the same id as
-the row it mirrors.
+to tables we own (`docs/own-tables.md`). Recognize's tables are still the source of truth for what Memories
+shows; **every writer to them must tell `FaceStore` which ids it touched** (`mirrorFaces`, `mirrorClusters`,
+`addFaces`, `deleteFaces`) inside the same transaction, after its own statement. The copy is rewritten from the
+Recognize rows, never computed from what the caller meant to do. A new writer that skips this makes `occ
+facewright:own-tables --verify` fail; fix the writer, do not re-run the backfill to hide it. Ids are shared: a
+copy has the same id as the row it mirrors.
+
+**Reads use the copies** (Stage D): clustering, the People page and API, suggestions, face crops, access sync,
+reset and the commands read `facewright_user_faces` / `facewright_clusters` / `facewright_faces`, not Recognize's
+tables, so a row there is ours by construction and Recognize's legacy rows never show up. What still looks at
+Recognize's tables: the face vector `copyToUsers()` copies (until Stage E), and member or existence checks inside
+statements that delete from, or write to, Recognize's table (the empty-people deletes, `persistAssignments()`).
+Keep it that way for any new destructive statement on those tables: guard it with Recognize's own rows.
 
 ### Telling our rows from Recognize's
 

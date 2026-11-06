@@ -748,7 +748,60 @@ Authorization there is the `user_id` condition, so keep it in the `WHERE`.
 then for real. `occ facewright:reset --dry-run` counts agree with `--verify`'s. `--verify` exits 0.
 
 **Stage D done when:** `grep -rn "recognize_face" lib/` lists only statements that write, plus
-`copyToUsers()`'s `face_vector` read, the migration commands and comments.
+`copyToUsers()`'s `face_vector` read, the migration commands and comments. (Exact list, with the guards that
+read Recognize's rows inside write statements: see "As built" below.)
+
+### As built (2026-11-06, dev only)
+
+Four commits, one per step: D.1 `ClusteringService`, D.2 `PeopleService`, D.3 `SuggestionService` and
+`FacePreviewController`, D.4 `AccessSyncService`, `DetectionService::usersWithRowsFor()`, `ResetService`, the
+reset and cluster commands, `ReopenUnassigned`. Method signatures and API JSON are unchanged; the sentinels
+(-1, -2, -3) still appear wherever a UI reads them, through `FaceState::toSentinel()`.
+
+What still reads Recognize's tables, and why (the plan's done-criterion, made exact):
+
+- `AccessSyncService::copyToUsers()` reads the face **vector**: the copy is still written to Recognize's
+  table until Stage E.
+- The two "delete empty people" statements in `PeopleService` keep a member test on Recognize's rows. They
+  delete from Recognize's table, and a person whose only members are legacy rows (which have no row of ours)
+  is not ours to delete. This goes away with the legacy decision in F.3. (Deviation from the plan.)
+- `ClusteringService::persistAssignments()` still reads which of its target people exist, and its cleanup of
+  empty people still tests membership in Recognize's table. Both guard writes to Recognize's table, which the
+  plan says not to touch. (Deviation.)
+- `DetectionService::ownRowsExpr()` remains defined, with no reader; it goes in F.2.
+
+Behaviour that changes, all intended: Recognize's legacy rows no longer appear in any count or list (they have
+no row of ours); a face assigned to a person that no longer exists is pending (the backfill's rule); and
+`copyToUsers()` / `pruneExceptUsers()` no longer touch a detection row that has no link, since such a row is not
+ours (the precheck guarantees there are none to lose on live: `unlinked_long_rows` is 0).
+
+**How it was verified on dev.** The risk of this stage is a read that silently disagrees with the old one, so the
+method was a before/after comparison, not error-watching:
+
+- A harness captured 46 read outputs on the old code: the People API (list with covers, search, paging, minimum
+  size, unassigned, ignored, one person, its faces, boxes on six files, suggestions), the same for a second user
+  and the cross-user requests that must fail, face crops for the owner and for another user (status, ETag and a
+  hash of the image), the People CLI views, and the reset, backfill and reopen dry-runs. A second capture proved it
+  deterministic; the final code, all four steps together, produces identical output.
+- SuggestionService was checked at the byte level: the centroid cache was cleared and every centroid recomputed
+  from the embeddings (302 of them), then hashed; identical before and after.
+- A second harness called each D.4 reader directly (including the private ones) on every file that has faces
+  plus two that do not, with rows for two users on four files: 595 results, identical.
+- D.1 specifically: reset and recluster gives identical member sets (admin 306 people, bob 2), `-1` and `-3` rows
+  stay put through a clustering run, and the unclustered count and clear-marks read agree with the old behaviour
+  with real pending rows present.
+- Pagination and the merge dry-run count were compared with direct SQL; crops were requested across users
+  (19 of 19 refused) and a legacy row is refused.
+- The write suites from Stage C (People API, DAV battery, clustering, reopen, reset, detect, share copy, prune,
+  delete) all pass with `--verify` clean after every step.
+
+Mistakes in my own harness that were caught by looking at the output, not the exit code, and are worth keeping
+in mind: a `limit` above the API's maximum of 500 made one baseline call an error in both captures; a loop that
+did not split a comma list sent malformed requests (every status `000`), so a "pass" proved nothing; and a
+"stay put" check ran with no `-1` rows because the setup call had failed. Each was redone properly.
+
+Not covered: a library of production size, and concurrent writers during the reads (the second `--verify` on
+live is the check for the second). Nothing of Stage D is deployed to live.
 
 ---
 
