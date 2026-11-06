@@ -26,6 +26,7 @@ run project-failure        "$DEV_DIR/project-failure.sh"
 run project-concurrency    "$DEV_DIR/project-concurrency.sh"
 run project-recognize-trap "$DEV_DIR/project-recognize-trap.sh"
 run project-recognize-copies "$DEV_DIR/project-recognize-copies.sh"
+run rollback-drill         "$DEV_DIR/rollback-drill.sh"
 run clustering-truth       "$DEV_DIR/clustering-truth.sh"      # downloads the dataset on first use
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1

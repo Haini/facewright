@@ -36,6 +36,7 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `project-concurrency.sh` | two parallel writers on the same faces; the copy must still agree; fails if the upsert is degraded | yes (restore) |
 | `project-recognize-trap.sh` | Recognize's own `.noimage` deletion job and `recognize:reset-face-clusters` (dev only): the projection brings everything back and Memories shows what it showed before | yes (restore) |
 | `project-recognize-copies.sh` | Recognize's access-sync handler writes rows of its own; reconcile removes them; ids that meet (squatters) | yes (restore) |
+| `rollback-drill.sh` | rollback tier R2: hydrate, swap the bridge files back to the Stage D commit, pass the Stage D checks, roll forward again (swaps tracked files; refuses unless clean) | yes (restore) |
 | `memories-api.py capture\|compare\|stable` | what Memories itself shows (people, photos per person, unassigned) as the oracle for table changes; proven able to fail | no |
 | `memories-ui/flows.py` | Memories' own UI: rename, remove face, move face, merge, remove person; requests and database | yes (restore) |
 | `live-capture.sh OUT users` | read-only capture for another instance (`NC_CONTAINER=…`); pause processing first | no |
