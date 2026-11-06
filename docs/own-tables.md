@@ -5,7 +5,7 @@
 > **Stages A to E are done and live.** Live (`<app>`) runs bridge 0.10.0: our tables are the source of
 > truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
 > confirmed in Memories that rename, move and remove-face edits work and show at once. Merged to `master`
-> (fast-forward, 2026-11-06; the branch `docs/own-tables` is kept, not pushed). Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
+> (fast-forward, 2026-11-06; the branch `docs/own-tables` was then deleted, nothing pushed). Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
 >
 > **What is open, in order** (nothing below is started; each destructive one needs the user's go-ahead):
 > 1. **Day-after check (from 2026-11-07).** On live, `docker exec -u www-data <app> php occ facewright:project
