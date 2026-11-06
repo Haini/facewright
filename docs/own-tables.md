@@ -9,20 +9,26 @@
 >
 > **What is open, in order** (nothing below is started; each destructive step needs the user's go-ahead):
 > 1. **Day-after check (from 2026-11-07).** A clean dry run alone proves little, because the hourly
->    `ProjectionMaintenanceJob` repairs drift before anyone looks. The evidence is what the job logged. On live:
+>    `ProjectionMaintenanceJob` repairs drift before anyone looks, and its `repaired N difference(s)` line is logged at
+>    info while live's log level is Warning, so **a past repair leaves no trace on live**. So look just before the job
+>    runs: the first command gives its `last_run`; run the rest 50 to 55 minutes after that, when a dry run shows
+>    whatever drifted in the past hour.
 >    ```
+>    docker exec -u www-data <app> php occ background-job:list -c 'OCA\FacewrightBridge\BackgroundJob\ProjectionMaintenanceJob'
 >    docker exec -u www-data <app> php occ facewright:project --dry-run
 >    docker exec -u www-data <app> php occ facewright:own-tables --verify
 >    docker exec -u www-data <app> php occ config:app:get facewright_bridge projection_last_error
 >    docker exec <app> grep '"app":"facewright_bridge"' /var/www/html/data/nextcloud.log
 >    ```
 >    Expected: A = C = D = 0, `--verify` exits 0, B 44,858 or lower (it falls as faces change, it never rises), legacy
->    40, and no `projection_last_error` value (the command exits 1 when the key is unset). In the log, read every
->    `repaired N difference(s) ... (A x, C y, D z)` line and any error. C after a share is expected: Recognize's own
->    access sync writes rows, and that is what reconcile removes. A or D needs an explanation: a failed push logs an
->    error, Recognize's handlers can delete rows; with neither, a writer is missing its push. Do this after a clustering
->    run and a share have happened; if either has not, say so rather than calling it clean. Also open the admin page
->    and confirm the "Memories sync" line says up to date (never looked at in a browser).
+>    40, no `projection_last_error` value (the command exits 1 when the key is unset), and no warnings or errors in the
+>    log: a failed push is an error there, and differences left after a repair run are a warning. C after a share is
+>    expected: Recognize's own access sync writes rows, and that is what reconcile removes. A or D needs an explanation:
+>    Recognize's handlers can delete rows; otherwise a writer is missing its push. The check only covers the hour before
+>    it, so run it soon after a clustering run or a share; if neither has happened, say so rather than calling it clean.
+>    Also open the admin page and confirm the "Memories sync" line says up to date (never looked at in a browser).
+>    *Proposed, not done:* raise that log line to warning, so repairs are visible on live (one line in the job and a
+>    file copy to live, which needs the user's go-ahead).
 > 2. **If A, C or D is not 0:** save the dry-run output first, then find the cause, and only then run `occ
 >    facewright:project` (the hourly job may repair it first, so check the log too). Drift that comes back is a missed
 >    writer: fix the writer. Rollback tiers are under "Rollback".
@@ -768,8 +774,8 @@ means `occ upgrade` applies whatever is pending).
 ## Stage F: Contract
 
 **Goal.** Remove what is no longer needed. Destructive, so everything here waits until Stage E has run on
-production for at least two weeks (not before 2026-11-20) with the dry run clean and every repair the job logged in that
-time explained (see the day-after check at the top). Ask the user before starting, and take a fresh full dump first:
+production for at least two weeks (not before 2026-11-20) with the checks at the top of this document clean, repeated
+after clustering runs and shares, and any repair explained. Ask the user before starting, and take a fresh full dump first:
 the pre-cutover one will be too old to restore.
 
 **Order: F.1, F.3, F.2, F.4.** F.3's numbers need the link table that F.2 drops.
