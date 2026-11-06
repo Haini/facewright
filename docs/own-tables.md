@@ -852,7 +852,7 @@ Fixed (E.0): those rows were reopened to `NULL` in Recognize's table (id list du
 
 ## Stage E: Push instead of mirror
 
-**Status: planned, revised 2026-11-06 after Stages A to D. Not built.**
+**Status: built and verified on dev (2026-11-06); NOT deployed to live. Live still runs Stage D until the cutover below, which needs the user's go-ahead and a quiet window.** See "As built" at the end of this stage for what differs from the plan.
 
 **Goal.** Our tables are the source of truth; Recognize's `rfd` and `rfc` become a copy that a projection writes.
 **This is the point of no easy return:** after it, an older bridge would read stale data, so it has its own
@@ -999,13 +999,47 @@ Compose stack; every test asserts its precondition and is run by the `dev/` scri
 9. **Clustering regression:** the dangling-face fixture from E.0.
 10. **Rollback drill** (below).
 
+### As built (2026-11-06, dev only)
+
+Commits `4dcb839` (E.1 and E.2), `b8093d8` (E.3 and E.4), `1deda14` (job, status, no router switch), `e790c0d`
+(squatters), plus the `dev/` suites. Differences from the text above, each found by a test:
+
+- **`push()` inside a transaction does not throw.** It logs, flags the copy dirty and returns false. A listener (a file
+  being deleted) must not fail because of it, and the repair job does the copy.
+- **Squatters.** Pushing an explicit id moves Recognize's counter past it, so its next row (its access sync writes
+  rows of its own) lands exactly where our next id will; a larger seed margin cannot prevent that (it is 1,000).
+  A visible face overwrites the row it finds (the upsert); on a hidden face it is category C and is removed.
+- **Emptied people** are judged on ours plus Recognize's legacy rows (`FaceStore::emptyClusterIds`), not on a table that
+  lags until the push. Merge and delete also move legacy rows with the person (`moveLegacyMembers`), as Recognize's own
+  code would have.
+- **`markUnclusterable` now guards on state** (pending or unclusterable); before, a face a human had moved meanwhile
+  could be overwritten by the verdict.
+- **Rollback R2 needed two fixes** (above). **Opcache:** the web process revalidates compiled PHP every 60 s, so any
+  test that edits a source file restarts Apache (`reload_web` in `dev/lib.sh`); one concurrency run was contaminated by
+  a stale broken copy before this was understood.
+- **`recognize:reset-face-clusters`, which the docs say undoes all curation, is recoverable**: after `occ
+  facewright:project`, Memories shows exactly what it showed before (`dev/project-recognize-trap.sh`, dev only).
+
+Verified on dev (all suites in `dev/run-all.sh`): reads (49 outputs), the direct-call harness and Memories' own API
+identical to the Stage D baselines on unchanged data; People (40 checks), clustering writers (16), DAV battery (44),
+file writers (21), Memories UI flows (16), drift repair (24), failure isolation (15), concurrency (96 requests, copy
+agrees; fails when the upsert is degraded), Recognize's destructive actions (21), Recognize's copies and squatters
+(26), rollback drill (25), and clustering against ground truth (50 people, 750 faces, pure and complete).
+
+Not yet done: the live cutover itself, and the admin page's new line has been rendered but not looked at in a browser.
+
 ### Rollback
 
 - **R1, before unpausing at the cutover:** restore the previous files. Nothing ran under the new code and no data
   changed.
 - **R2, after use:** `occ facewright:project --hydrate` writes every state back into Recognize's table; restore the
-  Stage D files; run the Stage D checks; unpause. Nothing is lost. Hidden rows come back as `NULL`, `-2` and `-3`
-  with `'[]'` vectors, which Stage D code tolerates.
+  Stage D files **with `info.xml`'s `<version>` set to the installed one** (`occ config:app:get facewright_bridge
+  installed_version`); run the Stage D checks; unpause. Nothing is lost. Hidden rows come back as `NULL`, `-2` and `-3`
+  with `'[]'` vectors, which Stage D code tolerates. Two things the dev drill found: the restored files' own version is
+  the OLD one, and a mismatch makes Nextcloud demand an upgrade (no `occ` commands, web 503), while `occ upgrade`
+  would apply every pending store update; and Nextcloud drops the hourly job from `oc_jobs` while its class is
+  missing, so **rolling forward again** needs `occ app:disable facewright_bridge && occ app:enable facewright_bridge`
+  (and Recognize's `MaintenanceJob` deleted in the same chain, as after any enable).
 - **R3:** restore the full database dump taken before the cutover. Loses edits made since; last resort.
 
 Drill on dev: cut over, use it, hydrate, revert, then run the Stage C and D suites and the Stage C `--verify`.
@@ -1019,7 +1053,7 @@ means `occ upgrade` applies whatever is pending).
 1. Full database dump, bridge tarball, and recorded counts (Recognize's table by value, ours by state, covers,
    people). Pause processing and wait for in-flight jobs.
 2. Deploy the files, bump the version, `occ upgrade`, delete Recognize's `MaintenanceJob` if present (one command
-   chain), seed the counters.
+   chain, `y` piped with `docker exec -i`), `occ facewright:own-tables --seed-ids`. The bridge version is 0.10.0.
 3. **Go/no-go, still paused:** `project --dry-run` must show A, C and D at 0, B equal to the hidden-state rows that
    were in Recognize's table (counted in step 1), and the legacy rows untouched; the new `--verify` exits 0. Any
    other number: R1 and stop. This is the shadow phase's check, made at the cutover.
