@@ -439,6 +439,16 @@ another process.
 
 **Stage B rollback:** set `block_recognize_writes` to `false`; Recognize handles writes itself again.
 
+**Deployed to live (2026-11-06).** Copied with the version left at 0.8.0 and no `occ upgrade`: the router
+has no migration and no `info.xml` change, and an upgrade would also apply the pending App Store updates
+(Memories 11.0.2, Recognize 12.0.3, about ten more). Backups in `<backups>/facewright-pre-router/`
+(`bridge-pre-router.tgz` and a fresh dump of the face tables). Checked without a login: no new log
+errors, `occ` loads, and an unauthenticated DAV request is 401 (a 500 would mean the plugin failed to
+build). **Not checked on live:** an authenticated edit. Live runs Memories 10.1.0 and Recognize 12.0.2,
+while all router testing was on 11.0.2 and 12.0.3; the request shapes were read from the 10.1.0 bundle and
+match, but a real rename in the live Memories UI is the test. Rollback: the switch above, or restore the
+tarball.
+
 ---
 
 ## Stage C: Expand
