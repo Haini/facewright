@@ -681,6 +681,15 @@ Processing was unpaused, and `--verify` after a further minute of live traffic w
 errors from our code in the log. **Still due:** a second `--verify` after a few days of normal use (concurrent
 writers, real clustering runs, shares and deletions). Stage D starts only after that passes.
 
+**Second live `--verify` (2026-11-06, about two hours after the migration, earlier than the few days planned; the
+user judged it sufficient).** Before it: the user's own operations on the live data, 88 newly detected faces (24
+files) written to both tables by normal detection, and a clustering run forced with `occ facewright:cluster-scan`
+(the same chunked jobs the hourly trigger starts): 75 of the new faces were assigned, 13 marked unclusterable, and
+two new people created. `--verify` afterwards: exit 0, every check ok, people equal in both tables (4,680), no
+queued clustering jobs left, no errors from our code in the log. This covers the detection, People-page, DAV and
+clustering writers on real data. Not covered: sharing and unsharing on live (no such events in that window) and
+a long run of concurrent writers; those remain what dev tested.
+
 ---
 
 ## Stage D: Switch reads
