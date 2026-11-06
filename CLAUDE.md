@@ -227,6 +227,12 @@ Recognize's tables: the face vector `copyToUsers()` copies (until Stage E), and 
 statements that delete from, or write to, Recognize's table (the empty-people deletes, `persistAssignments()`).
 Keep it that way for any new destructive statement on those tables: guard it with Recognize's own rows.
 
+**Stage E (planned, `docs/own-tables.md`) inverts this direction:** ours becomes the source of truth and Recognize's
+tables a copy written by a projection, in one cutover; until then, do not edit the writers' mirror calls. Two rules
+that hold in either direction: a read and the guard on the write that follows it must test the same table (a
+clustering chain once looped on live because the read used ours and the guard used Recognize's), and a chain's
+progress must mean rows *written*, not matches found.
+
 ### Telling our rows from Recognize's
 
 The table may hold Recognize's legacy 128-dim rows alongside ours. **Never compute a distance
@@ -468,7 +474,8 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 5. **No tests, static analysis, or CI** — and the People page has only been exercised by hand in
    headless Chromium on the compose stack, never against a production-sized library. The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
-   unit-testable without an instance and have zero coverage.
+   unit-testable without an instance and have zero coverage. Stages A to D were verified with scripts that
+   live outside the repo; committing them under `dev/` is step E.0 of `docs/own-tables.md`.
 6. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop (now two inserts per user
    per face, plus a per-face read-back query for `facewright_faces.id` — `IDBConnection::
    setValues()` has no id-returning mode), `AccessSyncService::copyToUsers()` and

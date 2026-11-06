@@ -213,6 +213,15 @@ re-projecting, instead of losing curation or forcing a rescan.
    says so, dump id lists before deleting, and print before/after counts that must reconcile.
 8. MariaDB before 11.6 rejects an alias on a single-table `DELETE`, and dev is pinned to 10.11 for that
    reason. Correlate with `$qb->getTableName(...) . '.id'`.
+9. **How to test** (learned in Stages A to D; Stage E turns these into scripts under `dev/`, see E.0):
+   - Capture the outputs of every read path on the *old* code, prove the capture deterministic (two captures
+     identical), change the code, capture again, and diff. Error-free output is not evidence.
+   - Look at the output of every test, not its exit code. Three tests in this project passed without testing
+     anything (an out-of-range API parameter, a loop that did not split its input, a setup call that had failed).
+   - Every test asserts its own precondition: the rows it needs exist, and something actually changed.
+   - Plant a failure to prove each checker can fail, then repair it.
+   - Dev has no dangling, legacy or oddly shaped rows. Before a change reaches live, list what live has that dev
+     does not (the precheck's informational counts) and decide how each would behave.
 
 Each stage is deployable and useful alone. Stop at a stage boundary and report.
 
@@ -809,168 +818,221 @@ in mind: a `limit` above the API's maximum of 500 made one baseline call an erro
 did not split a comma list sent malformed requests (every status `000`), so a "pass" proved nothing; and a
 "stay put" check ran with no `-1` rows because the setup call had failed. Each was redone properly.
 
-Not covered: a library of production size, and concurrent writers during the reads (the second `--verify` on
-live is the check for the second). Nothing of Stage D is deployed to live.
+Not covered on dev: a library of production size, and concurrent writers during the reads.
+
+### Stage D on live (2026-11-06)
+
+Deployed after the second live `--verify` passed: the ten changed files copied, **no version bump and no `occ
+upgrade`** (Stage D has no migration, so no store updates and no Recognize job to clean up), after a backup of the
+previous bridge. Processing was paused for a few minutes so a before/after capture compared the same data. The
+capture was read-only: the People CLI views for both users (lists, unassigned, ignored, the empty-people dry run,
+the faces of four people), the reset and reopen dry runs, and a direct-call harness over 302 files, 150 of them
+held by more than one user.
+
+Result: every list and view identical, and all 2,114 per-file results identical. Three differences, each
+explained before the capture or confirmed by SQL afterwards: the reset's cluster count and the cluster-size
+printout lost the id of a deleted person that a few faces still pointed at; the unclustered count rose by
+exactly those faces (pending in ours); and the unclusterable group shrank by the number of Recognize's legacy rows
+(the old printout counted them, ours correctly does not). `--verify` afterwards: clean.
+
+**Found afterwards: a clustering chain that never ends.** The faces just mentioned (pending in ours, but still
+carrying the id of a deleted person in Recognize's table) made the clustering job loop on live: a run every five
+minutes, for hours. Cause: D.1 moved the clustering *read* to our table, but `persistAssignments()`'s write guard
+still tests Recognize's row (`cluster_id IS NULL OR = -2`). The guard rejected the write, the faces stayed pending,
+and `passProgress` counted the in-memory matches as progress, so the chain restarted forever. No data was wrong and
+no ids were burned; the cost was a job at about 300 MB every five minutes. Dev has no such rows, so no dev test saw
+it, and the live precheck had listed them as informational. Two lessons: a read and the guard on the write that
+follows it must test the same table, and a chain's progress must mean rows *written*, not matches found.
+
+Fix, to be made before Stage E (E.0): reopen those rows in Recognize's table to `NULL` (dump the id list first, update
+by that list), and change `passProgress` to count written rows.
 
 ---
 
 ## Stage E: Push instead of mirror
 
-**Goal.** Our tables are the source of truth; `rfd` and `rfc` are written only by `ProjectionService`.
-**This is the point of no easy return:** after it, an older bridge would read stale data. Before step E.4,
-the user must have a fresh backup.
+**Status: planned, revised 2026-11-06 after Stages A to D. Not built.**
+
+**Goal.** Our tables are the source of truth; Recognize's `rfd` and `rfc` become a copy that a projection writes.
+**This is the point of no easy return:** after it, an older bridge would read stale data, so it has its own
+rollback design (below) and a cutover that is gated before processing resumes.
+
+**Decisions (with the user, 2026-11-06).**
+- **Single cutover** on live, not a separate observe-only phase. The safety a shadow phase would give is kept by
+  running the projection's dry run while processing is still paused (step 3 of the runbook).
+- **Hidden rows stay in Recognize's table until Stage F.** Pending, unclusterable and ignored faces are no longer
+  written there, but tens of thousands already are; they are not deleted in the cutover. A row leaves when its
+  face next changes, and the rest in F.1 with a dumped id list.
+- **The verification scripts are committed under `dev/`** (E.0).
+
+**What changed from the first draft of this stage.** Each item is a problem found by doing Stages A to D.
+
+1. **`FaceStore::mirrorFaces()` deletes our row when Recognize's row is missing.** Harmless while Recognize's
+   table is complete. After Stage E (hidden states absent from it) it would delete our rows for faces touched after
+   their Recognize row is gone. It is also a hazard today: Recognize's own access sync deletes our rows by file, and
+   a later write of ours on that face would then destroy our copy. The mirror methods are removed in E, and **no
+   mirror-era code may run once hidden rows are absent.** That is why projection and writers change in one deploy.
+2. **The projection upserts.** Delete-then-insert races when two pushes touch the same ids (duplicate key), and
+   would overwrite every real vector with `'[]'` on each update. Use `INSERT ... SELECT ... ON DUPLICATE KEY UPDATE`
+   that leaves `face_vector` and `threshold` alone; new rows get `'[]'`. Delete only ids that are no longer visible.
+3. **Reconcile must not read vectors of rows we own.** Measuring `CHAR_LENGTH(face_vector)` on every Recognize row
+   without a visible copy would read the off-page vectors of every hidden row each hour (hundreds of MB on a real
+   library), evicting the buffer pool. Candidates are found by id only; length is measured only for rows with *no row
+   of ours at all*.
+4. **The Stage C `--verify` stops being valid.** It asserts Recognize's table equals ours row for row; after E it is
+   a visible subset. It is rewritten (E.5).
+5. **Reads and the guards on the writes that follow them must test the same table** (the clustering loop above). In E
+   both move to ours together, which removes the class of bug.
+6. **Rollback was not designed.** Added below: three tiers and a `--hydrate` mode, rehearsed on dev.
+7. **Push order matters to Memories.** People that exist first, then faces, deleted people last, so no face ever
+   points at a person that is gone and none shows without its person.
+8. **The delete-empty statements still need Recognize's member test**, so a person whose only members are legacy
+   rows is never deleted. They keep reading Recognize's rows until the legacy decision (F.3); everything else stops.
+9. **Recognize's own writers get more room.** Its access sync copies rows for users who "have none"; once hidden
+   states are absent from its table, more users look like they have none. Those copies are stale rows, and reconcile
+   removes them. Recognize's `MaintenanceJob`, which `occ upgrade` re-adds and which runs at the next cron tick, is
+   deleted in the same command chain as any upgrade.
+10. **Verification discipline** (see "How to work this plan", item 9) is part of the stage, not an afterthought.
+
+### E.0 Preconditions
+
+- **The clustering fix** (Stage D record): reopen the stranded rows in Recognize's table, and make `passProgress`
+  count rows written (`persistAssignments()` already returns the count; `clusterUser()`, `clusterUserChunk()` and
+  `ClusterScanJob` must use it). Dev regression: faces pending in ours that carry a dead person id in Recognize's;
+  before the fix the chain must loop (assert it passes more than a bound), after it it must stop.
+- **`dev/`**: commit the verification scripts with a README (see "The `dev/` scripts" below).
+- Stage D running on live for a few days with `--verify` clean.
 
 ### E.1 `ProjectionService`
 
-New `lib/Service/ProjectionService.php`. Constructor `IDBConnection $db`, `IAppConfig $appConfig`,
-`LoggerInterface $logger`.
+`lib/Service/ProjectionService.php`, MariaDB only (the same platform check as `OwnTablesMigrationService`).
+`push(array $faceIds, array $clusterIds)` and a hydrate variant.
 
-```php
-public function pushFaces(array $rowIds): void     // chunks of 500
-public function pushClusters(array $clusterIds): void
-public function available(): bool
-public function markDirty(string $reason): void
-```
+- **People first:** upsert the rows of `facewright_clusters` into `rfc` for ids that exist.
+- **Faces:** per chunk of 500, in its own transaction, upsert the visible ones (`state IN (ASSIGNED, UNASSIGNED)`;
+  `cluster_id` is the person for ASSIGNED and `-1` for UNASSIGNED) and delete ids that are no longer visible.
+  Name every column on both sides: Recognize's physical order is `x, y, height, width`.
+- **Deleted people last.**
+- Never called inside an open transaction (assert it); catches `\Throwable`, logs, sets the dirty flag, and **never
+  rethrows**: a Recognize schema change must not break our own pages. `available()` probes the columns once per process.
+- **Hydrate mode** writes all five states with their sentinels (`NULL`, `-2`, `-3`) and deletes nothing. It exists
+  for rollback only.
 
-`pushFaces()`, per chunk, in its own transaction:
+### E.2 Reconcile, `occ facewright:project`, and an hourly job
 
-```sql
-DELETE FROM rfd WHERE id IN (...);
-INSERT INTO rfd (id, user_id, file_id, x, y, width, height, face_vector, cluster_id)
-SELECT u.id, u.user_id, f.file_id, f.x, f.y, f.width, f.height, '[]',
-       CASE WHEN u.state = 1 THEN u.cluster_id ELSE -1 END
-FROM facewright_user_faces u
-INNER JOIN facewright_faces f ON f.id = u.face_id
-WHERE u.id IN (...) AND u.state IN (1, 2);
-```
+`occ facewright:project [--user=<uid>] [--dry-run] [--hydrate] [--limit=<n>]` and `ProjectionMaintenanceJob`
+(a new background job: needs a version bump, hence an `occ upgrade`). Categories, all paged by id:
 
-Every column is named on both sides: the table's physical order is `x, y, height, width`. Ids are cast with
-`intval` and inlined, since `INSERT ... SELECT` cannot be built with the query builder. Use the constants,
-not literals, when composing the string. `threshold` stays at its default.
+- **A. Missing or wrong visible faces** (user, file, cluster, geometry compared): must be 0.
+- **B. Hidden-state remnants:** Recognize rows whose face is pending, unclusterable or ignored in ours. Reported and
+  tolerated until F.1. Found without reading vectors.
+- **C. Unknown stale rows:** rows with no row of ours at all that look like copies of ours (vector length 2 or above
+  3,500). Must be 0 after a repair. Recognize's legacy rows (about 2,600 characters) are reported separately and
+  never touched.
+- **D. People:** missing or wrong, or present in Recognize's table with no row of ours and no face referencing them.
 
-`pushClusters()` works the same way, with `id, title, user_id`, and no state filter.
+Exit status 1 on A, C or D. The job honours `processing_paused`, is capped per run, and clears the dirty flag only
+if no newer failure arrived while it ran.
 
-Both public push methods:
-- return at once if `$rowIds` is empty;
-- catch `\Throwable`, roll back, log at error level, and call `markDirty()`. **They never rethrow**;
-- must not be called inside a caller's open transaction (see E.3). Assert it:
-  `if ($this->db->inTransaction()) { throw new \LogicException(...); }` before the `try`, because this is a
-  programming error, not a runtime failure.
+### E.3 `FaceStore` becomes the primary writer
 
-`available()` runs `SELECT id, user_id, file_id, x, y, width, height, face_vector, cluster_id FROM rfd
-WHERE 1 = 0` and the equivalent on `rfc`, cached per process. When false, pushes skip and mark dirty, so
-a renamed column degrades Memories' view rather than our own pages.
+Remove `mirrorFaces()` and `mirrorClusters()`. Add `addPendingFace(user, faceId): int` (the id comes from our own
+counter), `allocateCluster(user, title): int`, state changes that take their guard as a parameter, `renameCluster`,
+`deleteClusters`, `deleteFaces`, `resetUser`. Each returns the ids it changed. `facewright_detection_faces` is still
+written until F.2, because rollback needs it. Seed the counters above `max(rfd.id)` and `max(rfc.id)` plus a margin
+(`occ facewright:own-tables --seed-ids`, MariaDB only), so a new id never lands on an existing Recognize row.
 
-`markDirty()` sets appconfig `projection_dirty` to the current timestamp and `projection_last_error`.
+### E.4 Switch the writers
 
-### E.2 Reconcile: `ProjectionReconcileService`, job and command
+All in the same deploy as E.1 to E.3. A caller writes ours inside its transaction, commits, then calls `push()` once
+with everything it touched.
 
-`reconcile(?string $userId, bool $dryRun, int $limit): array` runs three queries, each paged by keyset id:
+| Writer | Change |
+|---|---|
+| `DetectionService::storeFaces`, `AccessSyncService::copyRowsToUser` | no Recognize insert and no vector read; `addPendingFace` and the link; no push (pending is hidden) |
+| `AccessSyncService::pruneExceptUsers` | delete ours (links, and faces when nobody keeps the file), commit, push |
+| `ClusteringService::createCluster`, `persistAssignments` | `createCluster` uses `allocateCluster` (the person is pushed with the faces it ends up holding); `persistAssignments` guard on ours: `WHERE id = ? AND user_id = ? AND state IN (PENDING, UNCLUSTERABLE)`, target person in `facewright_clusters`; `$written` counted on ours; emptied created people judged on ours; then push people, then faces |
+| `ClusteringService::markUnclusterable`, `clearUnclusterableMarks`, `resetUser` | ours, then push (this is how remnants disappear) |
+| `PeopleService` mutators, and through it the DAV router | `$onlyFrom` and `$onlyAssigned` become `state` predicates; the ids "now at the target" are read back from ours; split `...InTransaction()` variants where one mutator calls another; push after commit |
+| `ResetService` | delete ours, then delete the Recognize rows and people it collected, directly: a full reset must not depend on the projection |
+| `Command/ReopenUnassigned` | state to PENDING, push |
+| `PeopleService` delete-empty statements (`deleteEmptyClusters`, the empty-person cleanup inside `setFacesCluster`) | the decision keeps Recognize's member test (F.3), so a legacy-only person is never chosen; the delete itself then goes through ours (`deleteClusters`) and is pushed |
 
-- **Missing or wrong:**
+Remove the router's `block_recognize_writes` switch. Once vectors can be `'[]'`, Recognize's own "remove face"
+would fail, and handing writes back to it would lose them.
 
-  ```sql
-  SELECT u.id FROM facewright_user_faces u
-  INNER JOIN facewright_faces f ON f.id = u.face_id
-  LEFT JOIN rfd d ON d.id = u.id
-  WHERE u.state IN (1, 2) AND u.id > ?
-    AND (d.id IS NULL OR d.user_id <> u.user_id OR d.file_id <> f.file_id
-         OR d.cluster_id <> CASE WHEN u.state = 1 THEN u.cluster_id ELSE -1 END)
-  ORDER BY u.id LIMIT ?
-  ```
+### E.5 `--verify` rewritten
 
-- **Stale.** `rfd` rows with no visible own row that are recognizably ours or copies of ours:
-
-  ```sql
-  SELECT d.id FROM rfd d
-  LEFT JOIN facewright_user_faces u ON u.id = d.id AND u.state IN (1, 2)
-  WHERE u.id IS NULL AND d.id > ?
-    AND (CHAR_LENGTH(d.face_vector) = 2 OR CHAR_LENGTH(d.face_vector) > 3500)
-  ORDER BY d.id LIMIT ?
-  ```
-
-  The length test keeps legacy 128-dim rows out (they measure about 2,600) and is deliberate.
-  `DetectionService::VECTOR_LENGTH_FLOOR` holds the 3500 until F.2 moves it here.
-- **Clusters.** Both directions and title differences, returning ids. An `rfc` row with no own row is
-  deleted only if no `rfd` row still references it.
-
-Feed the ids to `pushFaces()` and `pushClusters()`: a push of an id with no visible own row deletes it.
-Log counts at warning level when non-zero, because drift means something else wrote.
-
-`lib/BackgroundJob/ProjectionMaintenanceJob.php` extends `TimedJob`, `setInterval(60 * 60)`, registered in
-`info.xml`. It honours `processing_paused`, and caps each run with a `limit` of 20,000 rows. A `TimedJob`
-needs no re-add when paused: it simply runs again next hour. After a run that finished under the cap,
-clear `projection_dirty`, comparing the timestamp it read at the start so a newer failure is not lost.
-
-`occ facewright:project [--user=<uid>] [--dry-run] [--limit=<n>]`: dry-run prints the three counts and
-the first 20 ids of each. Without `--limit` it loops until clean.
-
-### E.3 Allocate ids ourselves
-
-Add `FaceStore::addPendingFaces(string $userId, array $faceIds): void`, which inserts rows with no explicit
-id, so the autoincrement allocates them. Add `FaceStore::allocateCluster(string $userId, string $title): int`,
-which returns `getLastInsertId()`. Use plain inserts: `DetectionService` already filters its targets through
-`usersWithRowsFor()`, and the unique index on (`user_id`, `face_id`) turns a logic error into a visible failure
-rather than a duplicate row. Stage E.5 removes the explicit-id forms from C.2 once nothing calls them.
-
-### E.4 Seed the counters: `occ facewright:own-tables --seed-ids`
-
-Reads `max(id)` from `rfd` and from `facewright_user_faces`, adds 1,000, and runs
-`ALTER TABLE <prefix>facewright_user_faces AUTO_INCREMENT = <n>`. Same for `rfc` and `facewright_clusters`.
-The margin guards against rows inserted between the read and the alter. MariaDB syntax: refuse on any other
-platform with a clear message. Prints old and new values. Safe to re-run.
-
-### E.5 Switch the writers
-
-One step per service, removing the `rfd`/`rfc` statement and the `facewright_detection_faces` statement,
-keeping the `FaceStore` call:
-
-- **`DetectionService::detect()`:** stop writing `rfd` and links; `addPendingFaces()`. No push: pending rows
-  are not projected. `encodeVector()` goes in F.2. The row-before-marker invariant stays.
-- **`AccessSyncService::copyToUsers()`:** the same; drop `face_vector`.
-- **`AccessSyncService::pruneExceptUsers()`:** delete own rows, commit, `pushFaces($idsToDelete)`. Keep
-  the deletion of `facewright_faces` when `$keep === []`. Rows are still in the id list so `rfd` follows.
-- **`ClusteringService`:** `createCluster()` uses `FaceStore` and returns its id. `persistAssignments()`
-  keeps its exact guard, now on `facewright_user_faces`:
-  `WHERE id = ? AND user_id = ? AND state IN (PENDING, UNCLUSTERABLE)`, and checks the target cluster in
-  `facewright_clusters`. After the loop it calls `pushClusters($targets + $createdClusterIds)`, then
-  `pushFaces($writtenIds)`. Order matters: clusters first, so Memories' inner join never sees a face
-  with no cluster.
-- **`ClusteringService::markUnclusterable()`, `clearUnclusterableMarks()`:** `FaceStore` only, no push.
-- **`ClusteringService::resetUser()`:** select the user's visible row ids and cluster ids, `FaceStore::resetUser()`,
-  then `pushFaces()`, `pushClusters()`. Keeps `IGNORED`, as today.
-- **`PeopleService`:** each public mutator commits, then pushes. Split out private `...InTransaction()`
-  forms where one public method calls another inside its transaction: `moveFacesToNewPerson()` is the known
-  case, and the `inTransaction()` assertion catches any other. `setFacesCluster()` collects `$sources`
-  across batches, then `pushFaces($detectionIds)`, `pushClusters($sources)` after commit.
-- **`ResetService`:** delete own rows, then delete the `rfd` and `rfc` rows it collected, directly, in chunks.
-  This is the one remaining direct `rfd` write, because a full reset must not depend on the projection.
-- **`Command/ReopenUnassigned`:** state update, `pushFaces(ids)`.
-
-Then remove the appconfig switch `block_recognize_writes` from `RecognizeWriteRouterPlugin`. From here on,
-allowing Recognize's writes would lose them and would reach `FacePhoto::delete()` with an empty vector.
+Ours internally (the state and cluster invariant, uniqueness, links, people) plus categories A, C and D above; B is
+informational. The row-for-row mirror lines are removed.
 
 ### E.6 Admin status
 
-`AdminSettings` and `templates/admin.php`: show "Memories sync: up to date" or the time and text of
-`projection_last_error`, read from appconfig. Server-rendered, no JS.
+"Memories sync: up to date" or the time and text of the last error, read from appconfig, rendered on the server.
 
-**Stage E verify (compose stack):**
+### Dev acceptance
 
-1. `occ facewright:own-tables --verify` before starting; snapshot member lists as in D.1.
-2. People page: rename, merge, delete person, move, remove, ignore, restore, create. After each, Memories
-   shows the result on reload, with no delay.
-3. Upload a photo. The row exists in `facewright_user_faces`, not in `rfd`. After clustering, it exists in both.
-4. Share to a second user. Rows appear pending for them, and in `rfd` once clustered.
-5. Delete a file. It is gone from both.
-6. `occ facewright:project --dry-run`: at this point it may list stale hidden rows (F.1 removes them).
-   Nothing else.
-7. Simulate a Recognize schema change on dev: temporarily point `ProjectionService` at a table name that
-   does not exist, in the bind-mounted source. Do not alter the real table: MariaDB DDL cannot be rolled back.
-   The People page must keep working and the admin page must show the error. After restoring the name,
-   `occ facewright:project` must repair everything.
-8. Delete 10 mirrored rows by hand, and run `UPDATE rfc SET title = 'x'` on one row. `occ facewright:project`
-   restores both.
+Compose stack; every test asserts its precondition and is run by the `dev/` scripts.
+
+1. **Baseline:** the read capture and the direct-call harness identical before and after (reads already come from
+   ours since D).
+2. **Memories as the oracle:** capture Memories' own API (the people list, a person's photos, unassigned) on Stage D
+   code, then on Stage E code with unchanged data: identical. After each change below, assert Memories shows it at
+   once, and that it differs from before.
+3. **Writer matrix:** the People API, the DAV battery, the clustering writers, detection with a real face, share
+   copy, prune, delete, reset, reopen. After every step `project --dry-run` shows A, C and D at 0 and B as expected.
+4. **Drift repair:** plant faults (delete projected rows, retitle a person, change a cluster id, insert a stale copy
+   with a long vector, touch a legacy row). The dry run reports exactly those; `project` repairs them; the legacy
+   row is untouched; a clean run exits 0.
+5. **The mass-delete trap:** a `.noimage` marker in a folder with faces and Recognize's deletion job: assert its rows
+   are gone and Memories lost the people; `project` restores them and Memories returns to the captured output. The
+   same recovery applies to Recognize's own reset commands, which wipe its tables without a user or dimension filter.
+6. **Recognize copy cleanup:** a share plus Recognize's access-update job creates unlinked copies (assert they
+   exist); reconcile removes them and leaves legacy rows alone.
+7. **Failure isolation:** point the projection at a table that does not exist (in the bind-mounted source; never
+   alter the real table). People writes still succeed, the admin page shows the error, and after restoring the name
+   `project` repairs everything.
+8. **Concurrency:** two parallel loops of overlapping renames, moves and detaches on the same faces; afterwards A, C
+   and D are 0 (the case delete-then-insert would fail).
+9. **Clustering regression:** the dangling-face fixture from E.0.
+10. **Rollback drill** (below).
+
+### Rollback
+
+- **R1, before unpausing at the cutover:** restore the previous files. Nothing ran under the new code and no data
+  changed.
+- **R2, after use:** `occ facewright:project --hydrate` writes every state back into Recognize's table; restore the
+  Stage D files; run the Stage D checks; unpause. Nothing is lost. Hidden rows come back as `NULL`, `-2` and `-3`
+  with `'[]'` vectors, which Stage D code tolerates.
+- **R3:** restore the full database dump taken before the cutover. Loses edits made since; last resort.
+
+Drill on dev: cut over, use it, hydrate, revert, then run the Stage C and D suites and the Stage C `--verify`.
+
+### Live cutover runbook
+
+Needs the user's go-ahead and a quiet window they choose. Preconditions: dev acceptance green, Stage D on live for
+a few days with `--verify` clean, the E.0 fix deployed, and `occ app:update --showonly` reviewed (the version bump
+means `occ upgrade` applies whatever is pending).
+
+1. Full database dump, bridge tarball, and recorded counts (Recognize's table by value, ours by state, covers,
+   people). Pause processing and wait for in-flight jobs.
+2. Deploy the files, bump the version, `occ upgrade`, delete Recognize's `MaintenanceJob` if present (one command
+   chain), seed the counters.
+3. **Go/no-go, still paused:** `project --dry-run` must show A, C and D at 0, B equal to the hidden-state rows that
+   were in Recognize's table (counted in step 1), and the legacy rows untouched; the new `--verify` exits 0. Any
+   other number: R1 and stop. This is the shadow phase's check, made at the cutover.
+4. Unpause. First hour: a dry run every 15 minutes; the user renames, moves and removes a face in Memories and sees
+   it at once; the log and the admin status are clean.
+5. After a day that includes a clustering run and any shares: the dry run is clean. Stage F waits at least two weeks.
+
+### The `dev/` scripts
+
+Committed with a README that says what each checks and how to run it on the compose stack: the read capture, the
+direct-call harness over the access-sync readers, the 33-check DAV battery, the People, clustering, file and direct
+writer suites, the member-set comparison, and the Playwright driver for Memories' UI. Two fragile spots found while
+using them are fixed on the way in (ids are taken from SQL and split explicitly, because the shell does not split
+variables; and counts are printed, not just pass or fail). They use only the dev stack's existing passwords. The
+Stage E checks above are added to the same set.
 
 ---
 
@@ -981,7 +1043,10 @@ production for at least two weeks with `project --dry-run` clean. Ask the user b
 
 ### F.1 Empty the hidden rows, blank the vectors
 
-`occ facewright:project` removes stale hidden rows, because a push deletes any id with no visible own row.
+Stage E leaves the hidden-state rows (pending, unclusterable, ignored) in Recognize's table; reconcile reports them
+as category B and tolerates them. Here they are removed in bulk: dump the id list to a file, delete by that list in
+chunks, and print `before - listed = after`, which must reconcile exactly. Never do this while any mirror-era code
+is deployed (E, item 1).
 
 New option `occ facewright:own-tables --blank-vectors [--dry-run] [--chunk=<n>]`: resumable by keyset on
 `id`; `UPDATE rfd SET face_vector = '[]' WHERE id IN (...)`, selecting ids with a matching row in
@@ -1001,13 +1066,15 @@ their `info.xml` entries. Delete `ClusteringService::UNASSIGNED`, `IGNORED` and 
 `FaceState` now says it; keep the in-memory `UNCLUSTERABLE` marker only if D.1 still needs it.
 
 New migration: drop `facewright_detection_faces`, only after `grep -rn detection_faces lib/` is empty apart
-from that migration. Update `ResetService` first.
+from that migration. Update `ResetService` first. The links table is kept until here on purpose: rollback to
+Stage D code needs it (E.3).
 
 ### F.3 Legacy rows: **user decision**
 
 Report `--precheck`'s numbers for legacy rows and for clusters with no own member, split titled and untitled.
 Do not delete anything without an explicit answer. If the user approves: dump the id list to a file, rehearse
-inside a rolled-back transaction, delete by that list, and print `before − listed = after`.
+inside a rolled-back transaction, delete by that list, and print `before − listed = after`. The member tests that
+the two delete-empty statements in `PeopleService` make against Recognize's rows go away with this decision.
 
 ### F.4 Docs
 
