@@ -8,12 +8,15 @@ This repo holds two apps:
 - `appinfo/`, `ex_app/` etc. at the top level — `facewright`, the Python AppAPI ExApp (InsightFace
   detection).
 - `facewright_bridge/` — a small, separate, regular Nextcloud PHP app. It exists because ExApps
-  have no path to real database access; it calls `facewright` and writes results into Recognize's
-  tables.
+  have no path to real database access; it calls `facewright`, keeps the results in its own tables
+  and copies what Memories needs into Recognize's.
 
 `README.md` is the user-facing overview and quickstart. This file is for anyone changing the code:
 the architecture, the invariants that are easy to break silently, and the operational rules that
 were learned the hard way. It deliberately does not narrate how each of those was discovered.
+
+**Current work:** start at "Where things stand", the top of `docs/own-tables.md`. It says what runs on live and what is
+open next, with the exact commands.
 
 ## Architecture
 
@@ -25,7 +28,8 @@ side populates: `oc_recognize_face_detections` and `oc_recognize_face_clusters`.
   working), but its own classifier is kept off so it doesn't fight our writes.
 - `facewright` owns detection + embedding (InsightFace `buffalo_l`, CPU, via AppAPI).
 - `facewright_bridge` owns everything Nextcloud-side: triggers, queueing, per-user fan-out,
-  clustering, settings, and the DB writes into Recognize's tables.
+  clustering, settings, the face and people data in its own tables, and the copy of it in
+  Recognize's tables that Memories reads.
 - Rejected: patching Recognize to call the ExApp. Smaller diff, but inherits clustering thresholds
   tuned for a different embedding space and means an ongoing rebase against upstream.
 
@@ -75,8 +79,9 @@ our people service, and an upstream Memories change as the end state. It replace
 
 Services (`lib/Service/`):
 - `DetectionService` — calls the ExApp via `OCA\AppAPI\PublicFunctions::exAppRequest()`, converts
-  boxes, inserts rows. Owns `SUPPORTED_MIMETYPES`, `VECTOR_PRECISION`, `VECTOR_LENGTH_FLOOR`,
-  `encodeVector()` and `ownRowsExpr()` (see invariants).
+  boxes, stores the physical face in `facewright_faces` and a pending row per user through `FaceStore`. Owns
+  `SUPPORTED_MIMETYPES` and, until Stage F, `VECTOR_PRECISION`, `VECTOR_LENGTH_FLOOR`, `encodeVector()` and
+  `ownRowsExpr()` (see invariants).
 - `ProcessedFileService` — the `facewright_processed` table (`user_id`, `file_id`,
   `processed_at`, `faces_found`). One row per (user, file) after every attempt, including
   zero-face results (`faces_found = 0`) and permanent failures (`FACES_FAILED = -1`). This — not
@@ -95,8 +100,7 @@ Services (`lib/Service/`):
   create, rename, merge, delete, detach, ignore, move, delete-empty) goes through, scoped to one
   user per call; the bulk forms (`moveFaces`, `detachFaces`, `ignoreFaces`, `mergeMany`,
   `deleteMany`) resolve every id before writing and run in one transaction. What
-  `PeopleApiController`'s OCS API and `occ facewright:people` call, and what a future DAV shim
-  (`docs/independence-implementation.md` Stage 2) would call too.
+  `PeopleApiController`'s OCS API, `occ facewright:people` and the DAV router call.
 - `SuggestionService` — "possibly the same person", **per person only** (a library-wide list costs
   named × candidates comparisons, ~7 s at 400 named people, so it was removed): cosine distance
   between cached centroids (`facewright_cluster_centroids`, the normalized mean of a person's 10
@@ -176,7 +180,7 @@ copy Memories reads; `--hydrate` is the rollback).
 - `face_vector` is a JSON **flat** array of floats, 512-dim for our rows, rounded to
   `VECTOR_PRECISION` (6) decimals — float32 data needs no more, and it keeps rows in-page
   (≈4.8 KB) instead of off-page (≈10.7 KB, one dedicated 16 KB InnoDB page per row). Must stay
-  `json_decode`-able: Recognize's `FacePhoto::delete()` (Memories' "remove this face") reads it.
+  `json_decode`-able: Recognize's `FaceDetection` maps it as a JSON field.
   **The embedding of record is `facewright_faces.embedding`**; since Stage E new rows in Recognize's table carry
   `'[]'` (valid JSON, never decoded: the DAV router makes Recognize's `FacePhoto::delete()` unreachable), and older
   rows keep the vector they were written with until Stage F blanks them. `facewright_faces` holds one row per physical
@@ -186,32 +190,27 @@ copy Memories reads; `--hydrate` is the rollback).
   = its `id`) to its physical face (`face_id`), with `user_id` denormalized for per-user cleanup
   queries. `ClusteringService` and `PeopleService` read embeddings only from `facewright_faces` —
   never `face_vector`.
-- `cluster_id`: `NULL` = pending; `-1` = `ClusteringService::UNASSIGNED`, meaning "excluded from
-  clustering until a human assigns it" — what a Memories person delete writes to its members
-  (`FaceClusterMapper::delete()`), what Memories' "unassigned faces" view lists, and what "move to
-  person" operates on. Clustering never seeds from it, never matches against it, and never assigns
-  it as a side effect; `occ facewright:cluster --reset` is the one thing that reopens it, as part
-  of a full reset. Recognize's own (now-disabled) HDBSCAN also wrote `-1` as its noise verdict,
-  including on rows it had no business judging — those legacy rows were reopened once by
-  `occ facewright:reopen-unassigned` before this meaning shipped, and that command remains safe to
-  re-run (it can only ever touch rows a human has since unassigned). `-2` = `UNCLUSTERABLE`, our
-  sentinel meaning "evaluated in a full pass, nothing matched". Rows at `-2` stay in the matching
-  pool and can still be pulled into a cluster by a later face; they are just not re-attempted as
-  seeds.
-  `-3` = `ClusteringService::IGNORED`, "not a face, or not someone to group", set only by a human
-  from the People page. `selectWantedIds()` skips it exactly like `-1` — **without that line a `-3`
-  row is loaded as a real cluster id and offered as a join target** — and `resetUser()` keeps it
-  (an ignore is a judgement about the detection, not about how it was clustered). Memories and
-  Recognize never see it. It is lost when the detection rows are rewritten (forced
-  `occ facewright:detect`, `occ facewright:reset`), a known limitation.
-  **Do not use `-1` for `UNCLUSTERABLE`**: Recognize's `sampleRejectedDetectionsByUserId()` selects
-  `cluster_id = -1` and feeds those rows into its own clustering (moot now that Recognize's
-  classifier is disabled, but still true). Recognize has no predicate matching `-2`, and Memories
-  inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
+- `cluster_id` in Recognize's table and in the API is the sentinel form of `FaceState`, the state of a row of
+  `facewright_user_faces` (`FaceState::fromSentinel()` / `toSentinel()`): `NULL` pending, `> 0` assigned, `-1` unassigned,
+  `-2` unclusterable, `-3` ignored. `js/people.js` reads the sentinels. Only `> 0` and `-1` are written to Recognize's
+  table; the others are there only on rows from before Stage E and after `project --hydrate`.
+- **Unassigned** means "excluded from clustering until a human assigns it": what deleting a person does to its members,
+  what Memories' "unassigned faces" view lists, what "move to person" operates on. Clustering never seeds from it,
+  never matches against it, and never assigns it as a side effect; `occ facewright:cluster --reset` is the one thing
+  that reopens it, as part of a full reset. Recognize's own (now-disabled) HDBSCAN also wrote `-1` as its noise verdict,
+  including on rows it had no business judging; those legacy rows were reopened once by `occ
+  facewright:reopen-unassigned`, which remains safe to re-run (it can only touch rows a human has since unassigned).
+- **Unclusterable** means "evaluated in a full pass, nothing matched". Such rows stay in the matching pool and can still
+  be pulled into a cluster by a later face; they are just not re-attempted as seeds. It is `-2`, not `-1`, because
+  Recognize's `sampleRejectedDetectionsByUserId()` feeds `-1` rows into its own clustering and has no predicate matching
+  `-2`; Memories inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
+- **Ignored** means "not a face, or not someone to group", set only by a human from the People page. Clustering skips it
+  like unassigned, and `resetUser()` keeps it (an ignore is a judgement about the detection, not about how it was
+  clustered). Memories and Recognize never see it. It is lost when the detection rows are rewritten (forced `occ
+  facewright:detect`, `occ facewright:reset`), a known limitation.
 - `facewright_cluster_centroids` (one cached centroid per person, `member_count` marks staleness)
   and `facewright_merge_dismissals` (`cluster_a < cluster_b` always) reference
-  `recognize_face_clusters` ids, which are autoincrement and never reused, so a row left behind by a
-  person removed from Memories' side is inert. Merge, delete, `resetUser()` and `ResetService`
+  person ids, which are autoincrement and never reused, so a row left behind is inert. Merge, delete, `resetUser()` and `ResetService`
   clear them; nothing else does.
 - `threshold` is left at its DB default, matching Recognize's own insert.
 
@@ -255,25 +254,22 @@ ignored) are the source of truth for people and face assignments (`docs/own-tabl
 
 ### Telling our rows from Recognize's
 
-The table may hold Recognize's legacy 128-dim rows alongside ours. **Never compute a distance
-across dimensions**, never delete by `file_id` without a dimension filter, and never sweep
-`WHERE cluster_id IS NULL` without one.
+A row of ours is a row of `facewright_user_faces`, and a row of Recognize's table is ours if it has the same id there;
+embeddings live in `facewright_faces`, so clustering cannot meet another dimension. Recognize's table may also hold its
+legacy 128-dim rows. **Never compute a distance across dimensions**, never delete from that table by `file_id` without
+a dimension filter, and never sweep `WHERE cluster_id IS NULL` there without one.
 
-`DetectionService::ownRowsExpr()` is the single definition of "ours". As of Stage 1 it is
-transitional: `id IN (SELECT detection_id FROM facewright_detection_faces) OR
-char_length(face_vector) > VECTOR_LENGTH_FLOOR` (3500). The join is the real, permanent test; the
-length half is a proxy kept only so a row written before `occ facewright:migrate-faces` finishes
-backfilling it isn't briefly mistaken for Recognize's — it works because the encodings form
-disjoint bands (legacy 128-dim ≈ 2,600 chars, ours at precision 6 ≈ 4,800, ours pre-compaction ≈
-10,700). Stage 2 drops the length term once the backfill is complete everywhere and `face_vector`
-is dropped, leaving the join alone. If the encoding ever changes before then, re-measure the bands
-*before* changing the floor; every ownership query flips at once otherwise. One known degenerate
-case: an all-zero embedding encodes short and falls below the floor (and fails
-`FaceVectorCodec::decode()`'s length check the same way).
+A row there with no row of ours is told apart by `char_length(face_vector)`, without reading any row we own. The
+encodings form disjoint bands: legacy 128-dim ≈ 2,600 chars (never touched), ours at precision 6 ≈ 4,800, ours
+pre-compaction ≈ 10,700, and `'[]'` is 2. Above `DetectionService::VECTOR_LENGTH_FLOOR` (3500) or exactly 2 it is a stale
+copy of ours, and reconcile removes it. If the encoding ever changes, re-measure the bands *before* changing the floor.
+One known degenerate case: an all-zero embedding encodes short and falls below the floor (and fails
+`FaceVectorCodec::decode()`'s length check the same way). `DetectionService::ownRowsExpr()` is what this was before
+Stage E; it has no reader and goes in Stage F.
 
 **Capping rows in PHP saves no I/O** — the rows have already been read. Restrict in the `SELECT`.
-`ClusteringService::selectWantedIds()` therefore projects `id`/`cluster_id`/`face_id` first (via
-the `facewright_detection_faces` join) and `loadDetections()` fetches embeddings from
+`ClusteringService::selectWantedIds()` therefore projects `id`/`cluster_id`/`face_id` first from
+`facewright_user_faces` and `loadDetections()` fetches embeddings from
 `facewright_faces` only for the face ids it wants, streaming with `fetch()` rather than
 `fetchAll()`.
 
@@ -298,12 +294,12 @@ the `facewright_detection_faces` join) and `loadDetections()` fetches embeddings
   adding a format later picks them up naturally.
 - `ClusterScanJob`'s stop condition is "a full pass made no assignment", not "queue empty" —
   faces below `min-faces` never cluster, so the queue is never empty. Only at that point are
-  survivors marked `-2`, by explicit id list.
-- `ClusteringService::persistAssignments()` writes only rows still `NULL`/`-2`, scoped to the user
+  survivors marked unclusterable, by explicit id list.
+- `ClusteringService::persistAssignments()` writes only rows still pending or unclusterable, scoped to the user
   and only into clusters that still exist, and deletes clusters the pass created that ended up
   empty. A pass loads the pool, matches for seconds to minutes, then writes: anything a human did to
   those rows meanwhile (a move, a remove, an ignore, a delete or merge of the person) must win.
-- Changing a user's thresholds calls `clearUnclusterableMarks()` (`-2` → `NULL`) for that user,
+- Changing a user's thresholds calls `clearUnclusterableMarks()` (unclusterable back to pending) for that user,
   or the second change would appear to do nothing. This can reopen a very large number of rows.
 
 ### Multi-user fan-out
@@ -314,7 +310,7 @@ Recognize writes one row per user *with access*, and Memories expects that. The 
 `ICachedMountFileInfo::getPath()` already gives each user's files-root-relative path.
 
 - **Copy, never re-detect.** A file processed for anyone is copied to new users
-  (`cluster_id` omitted so it lands `NULL` and their own clustering picks it up). Zero-face
+  (as pending rows of theirs, so their own clustering picks them up). Zero-face
   *markers* are copied too — more than half of a real library is zero-face, and treating "no
   rows" as "not detected" would re-infer all of it on every share.
 - **Paths gate scanning, not visibility.** A file is inferred if *any* enabled user with access
@@ -346,7 +342,7 @@ admin overview (one query, not N+1). A user with no stored preference is off.
   `IAppConfig`**, never through Recognize's `SettingsService::setSetting()`, which also schedules
   Recognize's own full classifier crawl.
 - `MaintenanceJob` / `ClusterFacesJob` are registered unconditionally, gated by no setting, and
-  crash (multi-GB, `memory_limit=-1`) on 512-dim vectors. The `-2` sentinel keeps users out of
+  crash (multi-GB, `memory_limit=-1`) on 512-dim vectors. Writing no `NULL` to their table keeps users out of
   their trigger query, but Recognize's own classifier re-arms clustering whenever it writes
   detections, so job-table hygiene alone is not a fix.
 - **The durable fix is Recognize's own ignore marker**: an empty `.noimage` at the root of each
@@ -355,18 +351,17 @@ admin overview (one query, not N+1). A user with no stored preference is off.
 - **Installing or removing that marker is a mass action, not a flag.** Recognize's
   `FileListener` reacts to the marker's cache entry appearing by queueing an `FsDeletion` for
   **every file under the parent**, executed by deleting detection rows by `file_id` with no
-  dimension filter — i.e. it deletes our rows too. Removing the marker queues the whole tree for
+  dimension filter — i.e. it deletes the copy of every face in those files. Removing the marker queues the whole tree for
   classification instead. Never let anything re-index a `.noimage` entry (including a routine
   `occ files:scan` over that tree); if unavoidable, watch `oc_recognize_fs_deletions` and clear it
-  before `ProcessFsActionsJob` drains it. Recovery without a backup is possible as long as the
-  `facewright_processed` markers survive: delete the markers for the affected files and rescan.
+  before `ProcessFsActionsJob` drains it. Our tables are not touched, so `occ facewright:project` (or the hourly job)
+  restores the copy; that is tested on dev only, and Memories shows the faces as gone until it has run.
 - Recognize's `IgnoreService` caches in APCu with no TTL, so after adding markers the web
   container needs a restart; cron (CLI) is unaffected.
-- **Never run `occ recognize:reset-face-clusters`**: it deletes every user's clusters (named people
-  included) and sets every `cluster_id` to `NULL` — `-1`, `-2` and `-3` too — with no user or
-  dimension filter. It undoes all curation instance-wide.
-- Naming/merging/deleting people from Memories works on our clusters with no code: those are DAV
-  operations against the same table.
+- **Never run `occ recognize:reset-face-clusters`**: it deletes every user's clusters and sets every `cluster_id` in
+  Recognize's table to `NULL`, with no user or dimension filter. Our tables are not touched and `occ facewright:project`
+  restores what Memories shows (tested on dev only), but until then every person is gone from Memories and the `NULL`
+  rows arm Recognize's clustering.
 - After any Recognize upgrade or re-enable, `MaintenanceJob` is back in `oc_jobs` and due at the next cron
   tick. Delete it in the same command chain as the upgrade (`occ background-job:delete` asks for
   confirmation: pipe `y`), together with any `ClusterFacesJob` it already queued, and confirm the markers
@@ -480,20 +475,14 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 3. **Admin-side threshold changes re-evaluate nothing for users who set their own**; only the
    personal page triggers `clearUnclusterableMarks()`. `occ facewright:cluster --reset` remains
    the blunt option.
-4. **Four known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
+4. **Three known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
    synchronously on the event loop (a crash reads as retryable, and `/heartbeat` stalls during
    inference); `DetectQueuedJob`'s zero-byte branch marks *every* user with access, not just
    `$pending`; `ProcessedFileService::candidateFileIds()` lacks the `SUPPORTED_MIMETYPES` filter,
-   so the "not yet processed" count can never reach zero; removing a face from a person sets it
-   `NULL`, so it rejoins (and Recognize's handler first loads the whole cluster's vectors into one
-   web request) — unfixable while Memories' writes land in Recognize's code, see
-   `docs/independence.md` Finding 2; the People page's "Remove from person" writes `-1` instead and
-   sticks. (A fifth bug — deleting a person in Memories set its faces to
-   `-1`, read by us as pending, so the next clustering pass rebuilt the person untitled — is fixed
-   by Stage 0 of `docs/independence-implementation.md`: `-1` now means unassigned, not pending.)
+   so the "not yet processed" count can never reach zero.
 5. **No tests, static analysis, or CI** — and the People page has only been exercised by hand in
    headless Chromium on the compose stack, never against a production-sized library. The pure-logic pieces (`ClusteringService`'s distance
-   math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
+   math, `AccessService::pickFetchUser`, `PathFilterService::isIncluded`) are
    unit-testable without an instance and have zero coverage. Integration checks against the compose stack live in
    `dev/` (see `dev/README.md`; `dev/run-all.sh`). They prove that writers and readers agree, not that the pure logic
    is right.
@@ -505,8 +494,7 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of
 `docs/independence-implementation.md`. The face-identity key is `(file_id, face_index)`, as
-recommended. `FacePhoto::delete()` is still Recognize's DAV code today (Stage 2 replaces it); it
-keeps working unmodified since `face_vector` is still written.
+recommended.
 
 ## Licensing note
 
