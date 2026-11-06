@@ -12,7 +12,7 @@ this plan wins; differences are listed under "Deviations from people-ui.md" at t
    touch.
 2. **Work on the compose stack, never on the production instance.** `docker compose up -d` and
    `bash dev-setup.sh` give a throwaway Nextcloud with Recognize, Memories and the ExApp. The
-   production instance (`nextcloud-app-1`, `nextcloud-db-1`, `/mnt/data/nextcloud/nc_apps/`) is
+   production instance (`<app>`, `<db>`, `<apps-dir>/`) is
    read-only reference material. The single exception is step 6's timing measurement, which is
    read-only SQL plus a read-only `occ` command and must be explicitly approved by the user first.
 3. **One commit per numbered step**, in the style of `git log` (imperative subject, a body that
@@ -268,7 +268,7 @@ Attributes: `#[NoAdminRequired]`, `#[NoCSRFRequired]`. It's a GET with no side e
 4. `$preview = $this->preview->getPreview($file, 1024, 1024, false)`. The aspect ratio is kept,
    so normalized coordinates apply directly. `NotFoundException` → 404.
 5. Crop exactly as Memories' `PeopleBackendUtils::cropFace()` does
-   (`/mnt/data/nextcloud/nc_apps/memories/lib/ClustersBackend/PeopleBackendUtils.php`, read it).
+   (`<apps-dir>/memories/lib/ClustersBackend/PeopleBackendUtils.php`, read it).
    It's a square of `max(w·W, h·H) · 1.5` around the box centre, then
    `$img->scaleDownToFit($size, $size)`. That matches the geometry Memories already proves
    correct on these rows, including EXIF-rotated photos. Do not copy the code verbatim (AGPL

@@ -4,12 +4,18 @@ A review of how far `facewright_bridge` is coupled to Recognize and Memories tod
 roadmap for reducing it. Companion to `CLAUDE.md`, which documents the current design; this file
 documents what would have to change and in which order.
 
+**Status.** Stages 0 and 1 are done. `docs/own-tables.md` replaces the rest of this roadmap: the data
+moves into tables we own, a temporary one-way push feeds Recognize's tables, and an upstream Memories
+change is the target. Stage 2's shim is no longer planned. This file stays as the coupling inventory;
+its deviations are listed in that plan.
+
 The step-by-step implementation plan for the roadmap is `docs/independence-implementation.md`;
 where the two differ, that plan wins (its "Deviations" section lists the differences and why).
 
 Verified against the app versions installed on the reference instance: Memories 8.1.0,
-Recognize 12.0.2 (both at `/mnt/data/nextcloud/nc_apps/`), and the Photos app shipped with
-Nextcloud 33. Line numbers refer to those versions.
+Recognize 12.0.2 (both at `<apps-dir>/`), and the Photos app shipped with
+Nextcloud 33. Line numbers refer to those versions. The live instance has since moved to Nextcloud 34
+and Memories 10.1.0; `docs/own-tables.md` was checked against those.
 
 ## Why
 
@@ -53,7 +59,7 @@ acceptable end state; the roadmap treats it as the target and coexistence as the
 | M4 | `PageController::__construct(private ?\OCA\Recognize\Public\ApiKeyManager $apiKeyManager)` — a dependency on a **class in Recognize's namespace**. Nullable, so DI passes `null` when the class is absent; the key reaches the frontend as the `recognizeApiKey` initial state | `Controller/PageController.php:29,48-58` |
 | M5 | Gate: `isEnabledForUser('recognize')`, version ≥ 3.8.0, and `faces.enabled === 'true'` | `Util.php:93-121` |
 | M6 | The "unassigned faces" route selects `cluster_id = -1` | `RecognizeBackend.php:100` |
-| M7 | The backend registry is pluggable **server-side** (`Manager::register()`, `Backend::register()`); the frontend is not | `ClustersBackend/Manager.php:59`, `Backend.php:177` |
+| M7 | On 8.1.0 the backend registry was pluggable **server-side** (`Manager::register()`, `Backend::register()`); the frontend was not. **Out of date:** on 10.1.0 `Manager::BACKENDS` is a constant, so neither side is pluggable | `ClustersBackend/Manager.php:59`, `Backend.php:177` (8.1.0) |
 
 ### Photos (Nextcloud's own app)
 
@@ -260,10 +266,10 @@ the place to browse photos. Requirements: `docs/people-ui.md`.
 ## Verification
 
 - Re-check every line reference above against the installed versions before acting on it:
-  `grep -n recognize /mnt/data/nextcloud/nc_apps/memories/lib/Util.php`,
-  `sed -n 136,166p /mnt/data/nextcloud/nc_apps/recognize/lib/Dav/Faces/PropFindPlugin.php`,
-  `sed -n 92,100p /mnt/data/nextcloud/nc_apps/recognize/lib/Db/FaceClusterMapper.php`,
-  `docker exec nextcloud-app-1 grep -n recognize /var/www/html/apps/photos/lib/Controller/PageController.php`.
+  `grep -n recognize <apps-dir>/memories/lib/Util.php`,
+  `sed -n 136,166p <apps-dir>/recognize/lib/Dav/Faces/PropFindPlugin.php`,
+  `sed -n 92,100p <apps-dir>/recognize/lib/Db/FaceClusterMapper.php`,
+  `docker exec <app> grep -n recognize /var/www/html/apps/photos/lib/Controller/PageController.php`.
 - Finding 1, on the compose stack (`docker compose up -d && bash dev-setup.sh`): upload photos of
   one person, `occ facewright:cluster <user>`, delete the person in Memories, run the command
   again; an untitled cluster with the same members reappears. Finding 2: remove one face from a
