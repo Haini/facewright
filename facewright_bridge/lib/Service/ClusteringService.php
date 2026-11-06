@@ -95,18 +95,19 @@ class ClusteringService {
 	) {
 	}
 
-	/** @return array{newClusters: int, joined: int, skipped: int, skippedForeign: int, markedUnclusterable: int} */
+	/** @return array{newClusters: int, joined: int, skipped: int, written: int, skippedForeign: int, markedUnclusterable: int} */
 	public function clusterUser(string $userId, float $maxDistance, int $minFaces): array {
 		['detections' => $detections, 'pendingIds' => $idsToProcess, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
 
 		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
-		$this->persistAssignments($userId, $detections, $stats['changedIds'], $stats['createdClusterIds']);
+		$written = $this->persistAndRevert($userId, $detections, $stats);
 
-		// One full pass that assigned nothing is the same proof ClusterScanJob's chain uses: with
-		// the data and thresholds unchanged, re-running it would decide identically. Everything
-		// still pending is therefore evaluated-and-unclusterable, not merely unvisited.
+		// One full pass that wrote nothing is the same proof ClusterScanJob's chain uses: with the
+		// data and thresholds unchanged, re-running it would decide identically. Everything still
+		// pending is therefore evaluated-and-unclusterable, not merely unvisited. "Wrote nothing",
+		// not "matched nothing": a match that could not be written is not progress.
 		$markedUnclusterable = 0;
-		if ($idsToProcess !== [] && ($stats['newClusters'] + $stats['joined']) === 0) {
+		if ($idsToProcess !== [] && $written === 0) {
 			$stillPending = array_values(array_filter(
 				$idsToProcess,
 				fn (int $id): bool => $detections[$id]['cluster_id'] === null,
@@ -118,6 +119,7 @@ class ClusteringService {
 			'newClusters' => $stats['newClusters'],
 			'joined' => $stats['joined'],
 			'skipped' => $stats['skipped'],
+			'written' => $written,
 			'skippedForeign' => $skippedForeign,
 			'markedUnclusterable' => $markedUnclusterable,
 		];
@@ -137,7 +139,12 @@ class ClusteringService {
 	 * a pass changed nothing. It is returned rather than recomputed there so the marking can
 	 * never drift from the dimension-filtered set this actually evaluated.
 	 *
-	 * @return array{attempted: int, newClusters: int, joined: int, skipped: int,
+	 * `written` is the number of rows actually written to the database. That, not the number of matches
+	 * found, is what ClusterScanJob counts as progress: a match that could not be written (a human
+	 * changed the row meanwhile, or the two tables disagree about it) leaves the face pending and
+	 * must not keep the chain alive.
+	 *
+	 * @return array{attempted: int, newClusters: int, joined: int, skipped: int, written: int,
 	 *     skippedForeign: int, lastId: ?int, remainingUnclustered: int,
 	 *     pendingUnassignedIds: list<int>}
 	 */
@@ -151,7 +158,7 @@ class ClusteringService {
 		$idsToProcess = array_slice($unclusteredIds, 0, $chunkSize);
 
 		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
-		$this->persistAssignments($userId, $detections, $stats['changedIds'], $stats['createdClusterIds']);
+		$written = $this->persistAndRevert($userId, $detections, $stats);
 
 		// Only rows that were pending on entry and are still unassigned - not every null in the
 		// pool, which now also includes already-evaluated UNCLUSTERABLE rows. This feeds
@@ -169,6 +176,7 @@ class ClusteringService {
 			'newClusters' => $stats['newClusters'],
 			'joined' => $stats['joined'],
 			'skipped' => $stats['skipped'],
+			'written' => $written,
 			'skippedForeign' => $skippedForeign,
 			'lastId' => $idsToProcess === [] ? null : max($idsToProcess),
 			'remainingUnclustered' => $remainingUnclustered,
@@ -618,9 +626,9 @@ class ClusteringService {
 	 *
 	 * @param list<int> $ids
 	 * @param list<int> $createdClusterIds
-	 * @return int rows actually written
+	 * @return list<int> ids of the rows actually written
 	 */
-	private function persistAssignments(string $userId, array $detections, array $ids, array $createdClusterIds): int {
+	private function persistAssignments(string $userId, array $detections, array $ids, array $createdClusterIds): array {
 		$ids = array_values(array_unique($ids));
 
 		$targets = [];
@@ -702,6 +710,26 @@ class ClusteringService {
 			);
 		}
 
-		return $written;
+		return $writtenIds;
+	}
+
+	/**
+	 * Persists a pass's assignments and undoes, in memory, every one that was not written.
+	 *
+	 * assignClusters() decides on the in-memory pool, and a decision is only an assignment once the
+	 * row has been written. A face whose write was rejected is still pending: reporting it as
+	 * assigned would hide it from the "still unclustered" count and from the unclusterable marking
+	 * at the end of a chain, and counting its match as progress would restart the chain forever.
+	 *
+	 * @param array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}> $detections
+	 * @param array{changedIds: list<int>, createdClusterIds: list<int>} $stats
+	 * @return int rows actually written
+	 */
+	private function persistAndRevert(string $userId, array &$detections, array $stats): int {
+		$writtenIds = $this->persistAssignments($userId, $detections, $stats['changedIds'], $stats['createdClusterIds']);
+		foreach (array_diff($stats['changedIds'], $writtenIds) as $id) {
+			$detections[$id]['cluster_id'] = null;
+		}
+		return count($writtenIds);
 	}
 }

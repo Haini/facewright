@@ -65,10 +65,12 @@ class ClusterScanJob extends QueuedJob {
 		$this->logger->info(
 			"facewright: clustering chunk for {$userId} (after id {$afterId}) - "
 			. "{$result['newClusters']} new, {$result['joined']} joined, {$result['skipped']} skipped, "
-			. "{$result['remainingUnclustered']} still unclustered."
+			. "{$result['written']} written, {$result['remainingUnclustered']} still unclustered."
 		);
 
-		$passProgress = $passProgress || ($result['newClusters'] + $result['joined']) > 0;
+		// Progress is rows written, not matches found: a match the database refused (a human changed
+		// the row meanwhile, or Recognize's row disagrees with ours) must not keep the chain alive.
+		$passProgress = $passProgress || $result['written'] > 0;
 
 		if ($result['attempted'] === 0) {
 			// Reached the end of this pass through the ordered unclustered set.

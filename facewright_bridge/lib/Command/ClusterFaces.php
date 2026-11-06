@@ -58,6 +58,7 @@ class ClusterFaces extends Command {
 			$result['skipped'],
 			$minFaces,
 		));
+		$output->writeln(sprintf('%d row(s) written.', $result['written']));
 		if ($result['markedUnclusterable'] > 0) {
 			$output->writeln(sprintf(
 				'Marked %d detection(s) unclusterable - this pass assigned nothing, so they are retired '
