@@ -99,11 +99,11 @@ class ResetService {
 	 * @return array{0: list<int>, 1: list<int>, 2: list<int>} [detectionIds, clusterIds, faceIds]
 	 */
 	private function findOwnRows(): array {
+		// Every row of ours, from our own table: it holds nothing of Recognize's legacy data, so no
+		// ownership test is needed, and the vector column is never touched.
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('d.id', 'd.cluster_id', 'l.face_id')
-			->from('recognize_face_detections', 'd')
-			->leftJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
-			->where(DetectionService::ownRowsExpr($qb, 'd'));
+		$qb->select('id', 'cluster_id', 'face_id')
+			->from('facewright_user_faces');
 		$result = $qb->executeQuery();
 
 		$detectionIds = [];
@@ -111,16 +111,12 @@ class ResetService {
 		$faceIds = [];
 		while ($row = $result->fetch()) {
 			$detectionIds[] = (int)$row['id'];
-			// Negative cluster ids are sentinels (ClusteringService::UNCLUSTERABLE, ::UNASSIGNED),
-			// not real recognize_face_clusters rows - collecting them would issue DELETEs for
-			// cluster ids that never exist. Harmless today, but it would quietly become wrong if
-			// anything ever allocated a cluster with a negative id.
-			if ($row['cluster_id'] !== null && (int)$row['cluster_id'] > 0) {
+			// cluster_id is only set for an assigned face, and is always a real person: the
+			// sentinels (-1, -2, -3) are states here, not ids, so there is nothing to filter out.
+			if ($row['cluster_id'] !== null) {
 				$clusterIds[(int)$row['cluster_id']] = true;
 			}
-			if ($row['face_id'] !== null) {
-				$faceIds[(int)$row['face_id']] = true;
-			}
+			$faceIds[(int)$row['face_id']] = true;
 		}
 		$result->closeCursor();
 

@@ -260,12 +260,12 @@ class AccessSyncService {
 			return null;
 		}
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('user_id')
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->in('user_id', $qb->createNamedParameter($candidates, IQueryBuilder::PARAM_STR_ARRAY)))
-			->andWhere($this->ownRowsExpr($qb))
-			->orderBy('user_id', 'ASC')
+		$qb->select('u.user_id')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->in('u.user_id', $qb->createNamedParameter($candidates, IQueryBuilder::PARAM_STR_ARRAY)))
+			->orderBy('u.user_id', 'ASC')
 			->setMaxResults(1);
 		$userId = $qb->executeQuery()->fetchOne();
 		return $userId === false ? null : (string)$userId;
@@ -282,31 +282,42 @@ class AccessSyncService {
 			return 0;
 		}
 
-		// Columns named explicitly on both sides, and that is not pedantry: the table's physical
-		// order is (x, y, height, width) while DetectionService writes (x, y, width, height), so a
-		// positional copy would silently transpose every bounding box.
+		// The donor's rows come from our own tables: whose they are, which physical face each points
+		// at, and its geometry. Columns are named explicitly on both sides of the copy below, and that
+		// is not pedantry: Recognize's table has the physical order (x, y, height, width) while
+		// DetectionService writes (x, y, width, height), so a positional copy would silently
+		// transpose every bounding box.
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('id', 'x', 'y', 'width', 'height', 'face_vector')
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($fromUser)))
-			->andWhere($this->ownRowsExpr($qb));
+		$qb->select('u.id', 'u.face_id', 'f.x', 'f.y', 'f.width', 'f.height')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('u.user_id', $qb->createNamedParameter($fromUser)))
+			->orderBy('u.id', 'ASC');
 		$rows = $qb->executeQuery()->fetchAll();
 
-		// donor detection_id => face_id, so each copy can link to the same physical face - a
-		// donor row not yet backfilled (no link) is copied without one; migrate-faces links both
-		// sides later.
+		// donor detection_id => face_id, so each copy links to the same physical face.
 		$faceIdsByDonorRow = [];
-		if ($rows !== []) {
-			$donorIds = array_map(static fn (array $row): int => (int)$row['id'], $rows);
-			$linkQb = $this->db->getQueryBuilder();
-			$linkQb->select('detection_id', 'face_id')
-				->from('facewright_detection_faces')
-				->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($donorIds, IQueryBuilder::PARAM_INT_ARRAY)));
-			foreach ($linkQb->executeQuery()->fetchAll() as $link) {
-				$faceIdsByDonorRow[(int)$link['detection_id']] = (int)$link['face_id'];
+		foreach ($rows as $row) {
+			$faceIdsByDonorRow[(int)$row['id']] = (int)$row['face_id'];
+		}
+
+		// The one thing still read from Recognize's table: the copy is still written there, together
+		// with its vector, until Stage E (docs/own-tables.md) stops writing the vector.
+		$vectors = [];
+		foreach (array_chunk(array_keys($faceIdsByDonorRow), 1000) as $chunk) {
+			$vecQb = $this->db->getQueryBuilder();
+			$vecQb->select('id', 'face_vector')
+				->from('recognize_face_detections')
+				->where($vecQb->expr()->in('id', $vecQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
+			foreach ($vecQb->executeQuery()->fetchAll() as $vec) {
+				$vectors[(int)$vec['id']] = $vec['face_vector'];
 			}
 		}
+		foreach ($rows as &$row) {
+			$row['face_vector'] = $vectors[(int)$row['id']] ?? '[]';
+		}
+		unset($row);
 
 		$written = 0;
 		foreach ($toUsers as $toUser) {
@@ -394,15 +405,15 @@ class AccessSyncService {
 		// file_id = ?)" against the rows already being deleted, which is exactly the kind of
 		// re-run-the-selecting-query trap this project's own working practices warn against.
 		$idQb = $this->db->getQueryBuilder();
-		$idQb->select('id')
-			->from('recognize_face_detections')
-			->where($idQb->expr()->eq('file_id', $idQb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			// Ours only. Recognize's own removeDetectionsForFileFromUsersNotInList() has no
-			// equivalent guard, and copying its shape here would delete this instance's legacy
-			// 128-dim rows - data this project has never claimed ownership of.
-			->andWhere($this->ownRowsExpr($idQb));
+		// Ours only, by construction: the ids come from our own table. Recognize's own
+		// removeDetectionsForFileFromUsersNotInList() has no such guard, and copying its shape here
+		// would delete this instance's legacy 128-dim rows - data this project has never claimed.
+		$idQb->select('u.id')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $idQb->expr()->eq('f.id', 'u.face_id'))
+			->where($idQb->expr()->eq('f.file_id', $idQb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)));
 		if ($keep !== []) {
-			$idQb->andWhere($idQb->expr()->notIn('user_id', $idQb->createNamedParameter($keep, IQueryBuilder::PARAM_STR_ARRAY)));
+			$idQb->andWhere($idQb->expr()->notIn('u.user_id', $idQb->createNamedParameter($keep, IQueryBuilder::PARAM_STR_ARRAY)));
 		}
 		$idsToDelete = array_map('intval', array_column($idQb->executeQuery()->fetchAll(), 'id'));
 
@@ -450,13 +461,14 @@ class AccessSyncService {
 		return $this->pruneExceptUsers($fileId, []);
 	}
 
-	/** @return list<string> every user holding any detection row for this file, ours or legacy */
+	/** @return list<string> every user holding one of our rows for this file */
 	public function usersWithRowsFor(int $fileId): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('user_id')
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->groupBy('user_id');
+		$qb->select('u.user_id')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->groupBy('u.user_id');
 		return array_column($qb->executeQuery()->fetchAll(), 'user_id');
 	}
 
@@ -471,19 +483,10 @@ class AccessSyncService {
 		}
 		$qb = $this->db->getQueryBuilder();
 		$qb->select($qb->func()->count('*', 'c'))
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->in('user_id', $qb->createNamedParameter($userIds, IQueryBuilder::PARAM_STR_ARRAY)))
-			->andWhere($this->ownRowsExpr($qb));
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->in('u.user_id', $qb->createNamedParameter($userIds, IQueryBuilder::PARAM_STR_ARRAY)));
 		return (int)$qb->executeQuery()->fetchOne();
-	}
-
-	/**
-	 * One definition, shared by every query that has to tell our rows from Recognize's.
-	 *
-	 * @see DetectionService::ownRowsExpr()
-	 */
-	private function ownRowsExpr(IQueryBuilder $qb): string {
-		return DetectionService::ownRowsExpr($qb);
 	}
 }

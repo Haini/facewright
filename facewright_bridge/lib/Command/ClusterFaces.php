@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\ClusteringService;
+use OCA\FacewrightBridge\Service\FaceState;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -69,15 +71,18 @@ class ClusterFaces extends Command {
 	}
 
 	private function printClusterSizes(OutputInterface $output, string $userId): void {
+		// Pending faces are not in any group. The others print under the value Recognize's table would
+		// hold for them: a person's id, or -1, -2, -3.
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('cluster_id', $qb->func()->count('*', 'c'))
-			->from('recognize_face_detections')
+		$qb->select('state', 'cluster_id', $qb->func()->count('*', 'c'))
+			->from('facewright_user_faces')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->isNotNull('cluster_id'))
-			->groupBy('cluster_id')
+			->andWhere($qb->expr()->neq('state', $qb->createNamedParameter(FaceState::PENDING, IQueryBuilder::PARAM_INT)))
+			->groupBy('state', 'cluster_id')
 			->orderBy('c', 'DESC');
 		foreach ($qb->executeQuery()->fetchAll() as $row) {
-			$output->writeln("  cluster {$row['cluster_id']}: {$row['c']} face(s)");
+			$cluster = FaceState::toSentinel((int)$row['state'], $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null);
+			$output->writeln("  cluster {$cluster}: {$row['c']} face(s)");
 		}
 	}
 }

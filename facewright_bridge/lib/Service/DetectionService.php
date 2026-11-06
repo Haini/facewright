@@ -287,12 +287,12 @@ class DetectionService {
 			return [];
 		}
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('user_id')
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->in('user_id', $qb->createNamedParameter($userIds, IQueryBuilder::PARAM_STR_ARRAY)))
-			->andWhere(self::ownRowsExpr($qb))
-			->groupBy('user_id');
+		$qb->select('u.user_id')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->in('u.user_id', $qb->createNamedParameter($userIds, IQueryBuilder::PARAM_STR_ARRAY)))
+			->groupBy('u.user_id');
 		return array_column($qb->executeQuery()->fetchAll(), 'user_id');
 	}
 

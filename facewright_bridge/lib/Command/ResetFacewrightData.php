@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Command;
 
-use OCA\FacewrightBridge\Service\DetectionService;
 use OCA\FacewrightBridge\Service\ResetService;
-use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -88,16 +86,14 @@ class ResetFacewrightData extends Command {
 	private function countOwnRows(): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select($qb->func()->count('*'))
-			->from('recognize_face_detections')
-			->where(DetectionService::ownRowsExpr($qb));
+			->from('facewright_user_faces');
 		$detections = (int)$qb->executeQuery()->fetchOne();
 
 		$qb = $this->db->getQueryBuilder();
 		// createFunction rather than func()->count(): IFunctionBuilder has no distinct().
 		$qb->select($qb->createFunction('COUNT(DISTINCT ' . $qb->getColumnName('cluster_id') . ')'))
-			->from('recognize_face_detections')
-			->where(DetectionService::ownRowsExpr($qb))
-			->andWhere($qb->expr()->gt('cluster_id', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+			->from('facewright_user_faces')
+			->where($qb->expr()->isNotNull('cluster_id'));
 		$clusters = (int)$qb->executeQuery()->fetchOne();
 
 		$qb = $this->db->getQueryBuilder();

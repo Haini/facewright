@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Command;
 
-use OCA\FacewrightBridge\Service\DetectionService;
+use OCA\FacewrightBridge\Service\FaceState;
 use OCA\FacewrightBridge\Service\FaceStore;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
@@ -60,9 +60,8 @@ class ReopenUnassigned extends Command {
 	private function countMatching(?string $userId): int {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select($qb->func()->count('*'))
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
-			->andWhere(DetectionService::ownRowsExpr($qb));
+			->from('facewright_user_faces')
+			->where($qb->expr()->eq('state', $qb->createNamedParameter(FaceState::UNASSIGNED, IQueryBuilder::PARAM_INT)));
 		if ($userId !== null) {
 			$qb->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
 		}
@@ -70,28 +69,28 @@ class ReopenUnassigned extends Command {
 	}
 
 	private function reopen(?string $userId): int {
-		// The ids first, so our own copy of these faces can be rewritten from the rows afterwards.
+		// The ids come from our own table; Recognize's table is then written by id, and our copy is
+		// rewritten from those rows afterwards.
 		$sel = $this->db->getQueryBuilder();
 		$sel->select('id')
-			->from('recognize_face_detections')
-			->where($sel->expr()->eq('cluster_id', $sel->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
-			->andWhere(DetectionService::ownRowsExpr($sel));
+			->from('facewright_user_faces')
+			->where($sel->expr()->eq('state', $sel->createNamedParameter(FaceState::UNASSIGNED, IQueryBuilder::PARAM_INT)));
 		if ($userId !== null) {
 			$sel->andWhere($sel->expr()->eq('user_id', $sel->createNamedParameter($userId)));
 		}
 		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
 
+		$affected = 0;
 		$this->db->beginTransaction();
 		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->update('recognize_face_detections')
-				->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-				->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
-				->andWhere(DetectionService::ownRowsExpr($qb));
-			if ($userId !== null) {
-				$qb->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			foreach (array_chunk($ids, 1000) as $batch) {
+				$qb = $this->db->getQueryBuilder();
+				$qb->update('recognize_face_detections')
+					->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
+					->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
+					->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)));
+				$affected += $qb->executeStatement();
 			}
-			$affected = $qb->executeStatement();
 			$this->faceStore->mirrorFaces($ids);
 			$this->db->commit();
 		} catch (\Throwable $e) {
