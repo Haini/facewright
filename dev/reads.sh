@@ -23,7 +23,13 @@ capture() {
   local SEARCH; SEARCH=$(one "SELECT LEFT(title,1) FROM oc_recognize_face_clusters WHERE user_id='$u' AND title<>'' ORDER BY id LIMIT 1")
   local FILES; FILES=$(csv "SELECT DISTINCT f.file_id FROM oc_facewright_faces f JOIN oc_facewright_user_faces x ON x.face_id=f.id WHERE x.user_id='$u' ORDER BY f.file_id LIMIT 6")
   local BFILES; BFILES=$(csv "SELECT DISTINCT f.file_id FROM oc_facewright_faces f JOIN oc_facewright_user_faces x ON x.face_id=f.id WHERE x.user_id='$BOB_USER' ORDER BY f.file_id LIMIT 3")
-  local CROPS; CROPS=$(csv "SELECT x.id FROM oc_facewright_user_faces x JOIN oc_facewright_faces f ON f.id=x.face_id JOIN oc_filecache fc ON fc.fileid=f.file_id WHERE x.user_id='$u' ORDER BY x.id LIMIT 3")
+  # Faces whose crop works: the lowest ids can belong to files without an image, and a capture of 404s tests nothing.
+  local CROPS=""; local cid
+  for cid in $(words "$(csv "SELECT x.id FROM oc_facewright_user_faces x JOIN oc_facewright_faces f ON f.id=x.face_id JOIN oc_filecache fc ON fc.fileid=f.file_id WHERE x.user_id='$u' ORDER BY x.id DESC LIMIT 60")"); do
+    [ "$(crop "$ADMIN_USER" "$ADMIN_PASS" "$cid")" = 200 ] && CROPS="${CROPS:+$CROPS,}$cid"
+    [ "$(wc -w <<<"$(words "$CROPS")")" -ge 3 ] && break
+  done
+  need "faces whose crop returns 200" "$(wc -w <<<"$(words "$CROPS")")" 3
   local NOFILE; NOFILE=$(csv "SELECT x.id FROM oc_facewright_user_faces x JOIN oc_facewright_faces f ON f.id=x.face_id LEFT JOIN oc_filecache fc ON fc.fileid=f.file_id WHERE x.user_id='$u' AND fc.fileid IS NULL ORDER BY x.id LIMIT 1")
   need "people to look at" "${#P[@]}" 1; need "files to look at" "$(wc -w <<<"$(words "$FILES")")" 1
   {
