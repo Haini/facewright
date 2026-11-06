@@ -209,12 +209,10 @@ class ClusteringService {
 	 * actually need a fresh ClusterScanJob rather than starting one for every seen user
 	 * regardless of whether they have anything unclustered.
 	 *
-	 * "Ours" is the same INNER JOIN loadDetections() uses (Stage 1 of
-	 * docs/independence-implementation.md) rather than the char_length proxy - a detection with no
-	 * facewright_detection_faces link is either Recognize's legacy data or not yet backfilled by
-	 * occ facewright:migrate-faces, neither of which this should count.
+	 * Reads facewright_user_faces, like loadDetections(), so Recognize's legacy rows are never
+	 * counted: they have no row there.
 	 *
-	 * Counts exactly what loadDetections() treats as pending - a NULL cluster_id - and
+	 * Counts exactly what loadDetections() treats as pending - state PENDING - and
 	 * deliberately excludes both UNASSIGNED and UNCLUSTERABLE. This answers "is there new work?",
 	 * which decides whether to start a chain at all. Counting UNCLUSTERABLE here would make the
 	 * answer permanently yes, since those rows persist by design, so every trigger check would
@@ -226,12 +224,11 @@ class ClusteringService {
 	 */
 	public function countUnclusteredByUser(): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('d.user_id')
+		$qb->select('u.user_id')
 			->selectAlias($qb->func()->count('*'), 'c')
-			->from('recognize_face_detections', 'd')
-			->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
-			->where($qb->expr()->isNull('d.cluster_id'))
-			->groupBy('d.user_id');
+			->from('facewright_user_faces', 'u')
+			->where($qb->expr()->eq('u.state', $qb->createNamedParameter(FaceState::PENDING, IQueryBuilder::PARAM_INT)))
+			->groupBy('u.user_id');
 
 		$counts = [];
 		$result = $qb->executeQuery();
@@ -294,25 +291,27 @@ class ClusteringService {
 	 * @return int rows returned to pending
 	 */
 	public function clearUnclusterableMarks(string $userId): int {
-		// The ids first: our own copy of these faces has to be rewritten too, and it is rewritten from
-		// the rows themselves, so it needs to know which ones the statement below touches.
+		// The ids come from our own table; the statement below then writes Recognize's table by id,
+		// in chunks, and our copy is rewritten from those rows afterwards.
 		$sel = $this->db->getQueryBuilder();
 		$sel->select('id')
-			->from('recognize_face_detections')
+			->from('facewright_user_faces')
 			->where($sel->expr()->eq('user_id', $sel->createNamedParameter($userId)))
-			->andWhere($sel->expr()->eq('cluster_id', $sel->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)))
-			->andWhere(DetectionService::ownRowsExpr($sel));
+			->andWhere($sel->expr()->eq('state', $sel->createNamedParameter(FaceState::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)));
 		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
 
+		$reopened = 0;
 		$this->db->beginTransaction();
 		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->update('recognize_face_detections')
-				->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)))
-				->andWhere(DetectionService::ownRowsExpr($qb));
-			$reopened = $qb->executeStatement();
+			foreach (array_chunk($ids, self::VECTOR_FETCH_BATCH) as $batch) {
+				$qb = $this->db->getQueryBuilder();
+				$qb->update('recognize_face_detections')
+					->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
+					->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
+					->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+					->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)));
+				$reopened += $qb->executeStatement();
+			}
 			$this->faceStore->mirrorFaces($ids);
 			$this->db->commit();
 		} catch (\Throwable $e) {
@@ -321,6 +320,7 @@ class ClusteringService {
 		}
 		return $reopened;
 	}
+
 
 	/**
 	 * Clears every cluster_id for $userId and deletes their clusters outright. This also reopens
@@ -512,32 +512,35 @@ class ClusteringService {
 	 * Pass 1 of loadDetections(): works out which detections are worth fetching embeddings for -
 	 * every unclustered row of $userId's, plus the first CLUSTER_REPRESENTATIVE_CAP rows of each
 	 * cluster they already have - and which physical face (facewright_faces.id) each one points
-	 * to. The INNER JOIN is this project's ownership test for Stage 1 (see
-	 * DetectionService::ownRowsExpr()'s docblock): a detection row with no link is either
-	 * Recognize's legacy data or not yet backfilled by occ facewright:migrate-faces, and either
-	 * way has no embedding here to match against.
+	 * to. Reads facewright_user_faces, whose rows are all ours by construction. Faces a human took
+	 * out of clustering (UNASSIGNED, IGNORED) are left out by the WHERE, so they are never a seed,
+	 * never a match candidate and never fetched; without that, an ignored row would be loaded as a
+	 * real cluster id and offered as a join target.
 	 *
 	 * @return array<int, array{faceId: int, clusterId: ?int}> keyed by detection id, ascending
 	 */
 	private function selectWantedIds(string $userId): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('d.id', 'd.cluster_id', 'l.face_id')
-			->from('recognize_face_detections', 'd')
-			->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
-			->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
-			->orderBy('d.id', 'ASC');
+		$qb->select('u.id', 'u.cluster_id', 'u.state', 'u.face_id')
+			->from('facewright_user_faces', 'u')
+			->where($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->in('u.state', $qb->createNamedParameter(
+				[FaceState::PENDING, FaceState::ASSIGNED, FaceState::UNCLUSTERABLE],
+				IQueryBuilder::PARAM_INT_ARRAY,
+			)))
+			->orderBy('u.id', 'ASC');
 		$result = $qb->executeQuery();
 
 		$wanted = [];
 		$representativeCounts = []; // cluster_id => representatives already taken this call
 		while ($row = $result->fetch()) {
-			$clusterId = $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
-			if ($clusterId === self::UNASSIGNED || $clusterId === self::IGNORED) {
-				// Excluded from clustering entirely - never a seed, never a match candidate, never
-				// fetched. See the constants' docblocks. Without the IGNORED half, a -3 row would
-				// be loaded as a real cluster id and offered as a join target.
-				continue;
-			}
+			// Back to the representation the rest of the pass works in: null (pending), the
+			// UNCLUSTERABLE marker, or a person's id.
+			$clusterId = match ((int)$row['state']) {
+				FaceState::ASSIGNED => (int)$row['cluster_id'],
+				FaceState::UNCLUSTERABLE => self::UNCLUSTERABLE,
+				default => null,
+			};
 			// Only real clusters (positive ids) get capped. UNCLUSTERABLE is not a cluster, and
 			// capping it would strand all but 20 of those rows outside the pool, so they could
 			// never be matched into a cluster later. It belongs with the unclustered side:
