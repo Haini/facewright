@@ -672,6 +672,15 @@ Needs the user's go-ahead: it applies a migration, which means a version bump an
 Rollback at any point: stop reading the new tables (Stage C changes nothing that reads them). To remove them,
 restore the pre-upgrade dump or drop the two tables; Recognize's tables were never modified by the backfill.
 
+**Done on live (2026-11-06), with the user's go-ahead.** Backup first: `<backups>/facewright-pre-stage-c/` (a full
+database dump and the previous bridge). Processing was paused, the files deployed and `occ upgrade` run in one
+chain: about a minute, creating the two tables (the three other pending store apps were not applied, since two are
+disabled or not applicable; no Recognize job appeared). The precheck was clean, and `--migrate` ran in about 40
+seconds, copying every linked face and every person, then verified itself: every count equal, no mismatch.
+Processing was unpaused, and `--verify` after a further minute of live traffic was still clean, with no new
+errors from our code in the log. **Still due:** a second `--verify` after a few days of normal use (concurrent
+writers, real clustering runs, shares and deletions). Stage D starts only after that passes.
+
 ---
 
 ## Stage D: Switch reads
