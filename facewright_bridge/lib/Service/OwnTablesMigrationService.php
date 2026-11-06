@@ -35,6 +35,7 @@ class OwnTablesMigrationService {
 	public function __construct(
 		private IDBConnection $db,
 		private IAppConfig $appConfig,
+		private ProjectionService $projection,
 	) {
 	}
 
@@ -157,57 +158,84 @@ class OwnTablesMigrationService {
 	 * @return array<string, array{0: int, 1: string, 2?: string}>
 	 */
 	public function verify(): array {
-		$rfd = $this->table('recognize_face_detections');
-		$rfc = $this->table('recognize_face_clusters');
 		$links = $this->table('facewright_detection_faces');
 		$uf = $this->table('facewright_user_faces');
 		$fc = $this->table('facewright_clusters');
+		$faces = $this->table('facewright_faces');
 
-		$dangling = 'd.cluster_id > 0 AND c.id IS NULL';
-		$state = self::stateExpression('d', 'c');
-
-		return [
-			'detections_linked' => [$this->count("SELECT COUNT(*) FROM {$rfd} d INNER JOIN {$links} l ON l.detection_id = d.id"), 'equal', 'user_faces'],
-			'user_faces' => [$this->count("SELECT COUNT(*) FROM {$uf}"), 'equal', 'detections_linked'],
-			// Every linked row must have a copy that says the same. A face assigned to a person that no
-			// longer exists is left out here and counted below: the backfill reopens it as pending,
-			// while a later change would copy it as assigned, and both are correct for such a row.
-			'face_row_mismatches' => [$this->count(
-				"SELECT COUNT(*) FROM {$rfd} d INNER JOIN {$links} l ON l.detection_id = d.id "
-				. "LEFT JOIN {$rfc} c ON c.id = d.cluster_id AND d.cluster_id > 0 "
-				. "LEFT JOIN {$uf} u ON u.id = d.id "
-				. "WHERE NOT ({$dangling}) AND (u.id IS NULL OR u.user_id <> COALESCE(d.user_id, l.user_id) "
-				. "OR u.face_id <> l.face_id OR u.state <> {$state} "
-				. 'OR NOT (u.cluster_id <=> IF(d.cluster_id > 0, d.cluster_id, NULL)))'
+		// Ours, internally. Since Stage E our tables are the source of truth, so what must hold is about them.
+		$checks = [
+			'state_cluster_violations' => [$this->count(
+				"SELECT COUNT(*) FROM {$uf} WHERE (state = 1) <> (cluster_id IS NOT NULL)"
 			), 'zero'],
-			'dangling_rows' => [$this->count(
-				"SELECT COUNT(*) FROM {$rfd} d INNER JOIN {$links} l ON l.detection_id = d.id "
-				. "LEFT JOIN {$rfc} c ON c.id = d.cluster_id AND d.cluster_id > 0 WHERE {$dangling}"
-			), 'info'],
-			'dangling_rows_missing' => [$this->count(
-				"SELECT COUNT(*) FROM {$rfd} d INNER JOIN {$links} l ON l.detection_id = d.id "
-				. "LEFT JOIN {$rfc} c ON c.id = d.cluster_id AND d.cluster_id > 0 LEFT JOIN {$uf} u ON u.id = d.id "
-				. "WHERE {$dangling} AND u.id IS NULL"
+			'assigned_to_missing_person' => [$this->count(
+				"SELECT COUNT(*) FROM {$uf} u LEFT JOIN {$fc} c ON c.id = u.cluster_id AND c.user_id = u.user_id "
+				. 'WHERE u.cluster_id IS NOT NULL AND c.id IS NULL'
 			), 'zero'],
-			'copies_without_detection' => [$this->count(
-				"SELECT COUNT(*) FROM {$uf} u LEFT JOIN {$rfd} d ON d.id = u.id WHERE d.id IS NULL"
+			'faces_without_physical_face' => [$this->count(
+				"SELECT COUNT(*) FROM {$uf} u LEFT JOIN {$faces} f ON f.id = u.face_id WHERE f.id IS NULL"
 			), 'zero'],
 			'copies_without_link' => [$this->count(
 				"SELECT COUNT(*) FROM {$uf} u LEFT JOIN {$links} l ON l.detection_id = u.id WHERE l.detection_id IS NULL"
 			), 'zero'],
-			'state_cluster_violations' => [$this->count(
-				"SELECT COUNT(*) FROM {$uf} WHERE (state = 1) <> (cluster_id IS NOT NULL)"
+			'links_without_copy' => [$this->count(
+				"SELECT COUNT(*) FROM {$links} l LEFT JOIN {$uf} u ON u.id = l.detection_id WHERE u.id IS NULL"
 			), 'zero'],
-			'people_in_source' => [$this->count("SELECT COUNT(*) FROM {$rfc}"), 'equal', 'people_in_store'],
-			'people_in_store' => [$this->count("SELECT COUNT(*) FROM {$fc}"), 'equal', 'people_in_source'],
-			'people_row_mismatches' => [$this->count(
-				"SELECT COUNT(*) FROM {$rfc} c LEFT JOIN {$fc} f ON f.id = c.id "
-				. 'WHERE f.id IS NULL OR f.user_id <> c.user_id OR f.title <> c.title'
+			'link_user_or_face_mismatch' => [$this->count(
+				"SELECT COUNT(*) FROM {$uf} u INNER JOIN {$links} l ON l.detection_id = u.id WHERE l.user_id <> u.user_id OR l.face_id <> u.face_id"
 			), 'zero'],
-			'people_copies_without_source' => [$this->count(
-				"SELECT COUNT(*) FROM {$fc} f LEFT JOIN {$rfc} c ON c.id = f.id WHERE c.id IS NULL"
-			), 'zero'],
+			'people_in_store' => [$this->count("SELECT COUNT(*) FROM {$fc}"), 'info'],
+			'faces_in_store' => [$this->count("SELECT COUNT(*) FROM {$uf}"), 'info'],
 		];
+
+		// Recognize's tables against ours (what Memories shows): the projection's own reconcile, read-only.
+		if (!$this->projection->available()) {
+			$checks['projection_available'] = [1, 'zero'];
+			return $checks;
+		}
+		$r = $this->projection->reconcile(true);
+		$checks['A_visible_faces_wrong'] = [$r['A'], 'zero'];
+		$checks['C_stale_copies'] = [$r['C'], 'zero'];
+		$checks['D_people_missing'] = [$r['D_missing'], 'zero'];
+		$checks['D_people_stale'] = [$r['D_stale'], 'zero'];
+		$checks['B_hidden_remnants'] = [$r['B'], 'info'];
+		$checks['legacy_rows_untouched'] = [$r['legacy'], 'info'];
+		return $checks;
+	}
+
+	/**
+	 * Raises the id counters of our two tables above Recognize's, plus a margin, so an id we allocate can never
+	 * be one Recognize's tables already hold or will hand out soon. MariaDB does not advance a counter on
+	 * explicit inserts into another table, which is why this is a step of its own. Only ever raises.
+	 *
+	 * @return array<string, array{current: int, floor: int, raised: bool}>
+	 */
+	public function seedIds(bool $dryRun, int $margin = 1000): array {
+		$out = [];
+		foreach ([['facewright_user_faces', 'recognize_face_detections'], ['facewright_clusters', 'recognize_face_clusters']] as [$ours, $theirs]) {
+			$current = $this->autoIncrement($ours);
+			$floor = max(
+				$this->autoIncrement($theirs),
+				$this->count('SELECT COALESCE(MAX(id), 0) FROM ' . $this->table($theirs)) + 1,
+				$this->count('SELECT COALESCE(MAX(id), 0) FROM ' . $this->table($ours)) + 1,
+			) + $margin;
+			$raised = $current < $floor;
+			if ($raised && !$dryRun) {
+				$this->db->executeStatement('ALTER TABLE ' . $this->table($ours) . ' AUTO_INCREMENT = ' . $floor);
+			}
+			$out[$ours] = ['current' => $current, 'floor' => $floor, 'raised' => $raised];
+		}
+		return $out;
+	}
+
+	private function autoIncrement(string $name): int {
+		// The name goes into the SQL text, not into a bound parameter: the table prefix is substituted in the text only.
+		$result = $this->db->executeQuery(
+			"SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" . trim($this->table($name), '`') . "'"
+		);
+		$value = $result->fetchOne();
+		$result->closeCursor();
+		return (int)$value;
 	}
 
 	/**

@@ -3,8 +3,10 @@
 # Recognize's table carried the id of a person that no longer exists. Clustering matched them every pass, the
 # write was rejected, and progress counted matches instead of rows written, so the chain restarted forever.
 #
-#   dev/chain-loop-test.sh dangling     the live case: the chain must END and the faces end up unclusterable.
-#                                       FAILS on code from before "Clustering progress means rows written".
+#   dev/chain-loop-test.sh dangling     the live case: the chain must END. Stage D code (read ours, guard Recognize's):
+#                                       the faces end up unclusterable, and code from before "progress means rows
+#                                       written" never ends at all. Stage E code (read and guard both ours): the
+#                                       faces are simply assigned and the projection corrects Recognize's bad value.
 #   dev/chain-loop-test.sh assignable   the normal case: pending faces that can be assigned are, and the chain ends.
 #
 # The queued jobs are run by hand, one at a time, as cron would. Changes data: restore a snapshot afterwards.
@@ -46,8 +48,8 @@ st() { one "SELECT GROUP_CONCAT(CONCAT(state,'/',IFNULL(cluster_id,'-')) ORDER B
 rf() { one "SELECT GROUP_CONCAT(IFNULL(cluster_id,'NULL') ORDER BY id) FROM oc_recognize_face_detections WHERE id IN ($IDS)"; }
 n5() { local s=$1; for _ in 1 2 3 4; do s="$s,$1"; done; echo "$s"; }
 if [ $mode = dangling ]; then
-  check "faces are unclusterable in our table (state 3)" "$(n5 3/-)" "$(st)"
-  check "   and at -2 in Recognize's" "$(n5 -2)" "$(rf)"
+  check "faces are assigned to their person in our table" "$(n5 1/$P)" "$(st)"
+  check "   and the projection replaced the dead person id in Recognize's table" "$(n5 $P)" "$(rf)"
 else
   check "faces are assigned again, to their person" "$(n5 1/$P)" "$(st)"
   check "   in Recognize's table too" "$(n5 $P)" "$(rf)"

@@ -25,7 +25,30 @@ class PeopleService {
 	public function __construct(
 		private IDBConnection $db,
 		private FaceStore $faceStore,
+		private ProjectionService $projection,
 	) {
+	}
+
+	/**
+	 * Runs $work in one transaction, then pushes what it touched to Recognize's tables (what Memories reads).
+	 * $work returns [result, face ids touched, person ids touched]. The push runs after the commit, never
+	 * inside it, and never throws: a failed push marks the projection dirty and the hourly job repairs it.
+	 *
+	 * @template T
+	 * @param callable(): array{0: T, 1: list<int>, 2: list<int>} $work
+	 * @return T
+	 */
+	private function writeAndPush(callable $work): mixed {
+		$this->db->beginTransaction();
+		try {
+			[$result, $faces, $clusters] = $work();
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+		$this->projection->push($faces, $clusters);
+		return $result;
 	}
 
 	/**
@@ -296,23 +319,10 @@ class PeopleService {
 	public function createCluster(string $userId, string $title): int {
 		$this->assertValidTitle($userId, $title, null);
 
-		$this->db->beginTransaction();
-		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->insert('recognize_face_clusters')
-				->values([
-					'title' => $qb->createNamedParameter($title),
-					'user_id' => $qb->createNamedParameter($userId),
-				]);
-			$qb->executeStatement();
-			$id = $qb->getLastInsertId();
-			$this->faceStore->mirrorClusters([$id]);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-		return $id;
+		return $this->writeAndPush(function () use ($userId, $title): array {
+			$id = $this->faceStore->allocateCluster($userId, $title);
+			return [$id, [], [$id]];
+		});
 	}
 
 	/** @throws \InvalidArgumentException if $clusterId doesn't exist for $userId, or $title is invalid */
@@ -320,20 +330,10 @@ class PeopleService {
 		$this->getCluster($userId, $clusterId); // throws if not $userId's
 		$this->assertValidTitle($userId, $title, $clusterId);
 
-		$this->db->beginTransaction();
-		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->update('recognize_face_clusters')
-				->set('title', $qb->createNamedParameter($title))
-				->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-				->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-			$qb->executeStatement();
-			$this->faceStore->mirrorClusters([$clusterId]);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
+		$this->writeAndPush(function () use ($userId, $clusterId, $title): array {
+			$this->faceStore->renameCluster($userId, $clusterId, $title);
+			return [null, [], [$clusterId]];
+		});
 	}
 
 	/**
@@ -413,33 +413,18 @@ class PeopleService {
 			return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => (int)$qb->executeQuery()->fetchOne()];
 		}
 
-		$this->db->beginTransaction();
-		try {
-			$memberIds = $this->memberIds($userId, $mergeIds);
-
-			$qb = $this->db->getQueryBuilder();
-			$qb->update('recognize_face_detections')
-				->set('cluster_id', $qb->createNamedParameter($keepId, IQueryBuilder::PARAM_INT))
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
-			$moved = $qb->executeStatement();
-
-			$qb = $this->db->getQueryBuilder();
-			$qb->delete('recognize_face_clusters')
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
-			$qb->executeStatement();
+		return $this->writeAndPush(function () use ($userId, $keepId, $mergeIds): array {
+			$members = $this->faceStore->moveMembers($userId, $mergeIds, FaceState::ASSIGNED, $keepId);
+			$legacy = $this->moveLegacyMembers($userId, $mergeIds, $keepId);
+			$this->faceStore->deleteClusters($userId, $mergeIds);
 			$this->forgetClusters($userId, $mergeIds);
 			$this->forgetCentroids($userId, [$keepId]); // its size changed
-			$this->faceStore->mirrorFaces($memberIds);
-			$this->faceStore->mirrorClusters($mergeIds);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-
-		return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => $moved];
+			return [
+				['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => count($members) + $legacy],
+				$members,
+				array_merge($mergeIds, [$keepId]),
+			];
+		});
 	}
 
 	/**
@@ -470,32 +455,13 @@ class PeopleService {
 			return 0;
 		}
 
-		$this->db->beginTransaction();
-		try {
-			$memberIds = $this->memberIds($userId, $clusterIds);
-
-			$qb = $this->db->getQueryBuilder();
-			$qb->update('recognize_face_detections')
-				->set('cluster_id', $qb->createNamedParameter(ClusteringService::UNASSIGNED, IQueryBuilder::PARAM_INT))
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
-			$unassigned = $qb->executeStatement();
-
-			$qb = $this->db->getQueryBuilder();
-			$qb->delete('recognize_face_clusters')
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
-			$qb->executeStatement();
+		return $this->writeAndPush(function () use ($userId, $clusterIds): array {
+			$members = $this->faceStore->moveMembers($userId, $clusterIds, FaceState::UNASSIGNED, null);
+			$legacy = $this->moveLegacyMembers($userId, $clusterIds, ClusteringService::UNASSIGNED);
+			$this->faceStore->deleteClusters($userId, $clusterIds);
 			$this->forgetClusters($userId, $clusterIds);
-			$this->faceStore->mirrorFaces($memberIds);
-			$this->faceStore->mirrorClusters($clusterIds);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-
-		return $unassigned;
+			return [count($members) + $legacy, $members, $clusterIds];
+		});
 	}
 
 	/** @throws \InvalidArgumentException if $detectionId doesn't belong to $userId or isn't in a real cluster */
@@ -513,7 +479,7 @@ class PeopleService {
 	 * @return int faces detached
 	 */
 	public function detachFaces(string $userId, array $detectionIds): int {
-		return $this->setFacesCluster($userId, $detectionIds, ClusteringService::UNASSIGNED, null, true);
+		return $this->setFacesCluster($userId, $detectionIds, FaceState::UNASSIGNED, null, [FaceState::ASSIGNED]);
 	}
 
 	/**
@@ -539,7 +505,7 @@ class PeopleService {
 	 */
 	public function moveFaces(string $userId, array $detectionIds, int $targetClusterId): int {
 		$this->getCluster($userId, $targetClusterId); // throws if not $userId's
-		return $this->setFacesCluster($userId, $detectionIds, $targetClusterId, null);
+		return $this->setFacesCluster($userId, $detectionIds, FaceState::ASSIGNED, $targetClusterId);
 	}
 
 	/**
@@ -550,16 +516,12 @@ class PeopleService {
 	 * @throws \InvalidArgumentException on an invalid or already-used title
 	 */
 	public function moveFacesToNewPerson(string $userId, array $detectionIds, string $title): array {
-		$this->db->beginTransaction();
-		try {
-			$clusterId = $this->createCluster($userId, $title);
-			$moved = $this->moveFaces($userId, $detectionIds, $clusterId);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-		return ['clusterId' => $clusterId, 'moved' => $moved];
+		$this->assertValidTitle($userId, $title, null);
+		return $this->writeAndPush(function () use ($userId, $detectionIds, $title): array {
+			$clusterId = $this->faceStore->allocateCluster($userId, $title);
+			[$moved, $faces, $clusters] = $this->setFacesClusterInTx($userId, $detectionIds, FaceState::ASSIGNED, $clusterId, []);
+			return [['clusterId' => $clusterId, 'moved' => $moved], $faces, array_merge($clusters, [$clusterId])];
+		});
 	}
 
 	/**
@@ -571,7 +533,7 @@ class PeopleService {
 	 * @return int faces ignored
 	 */
 	public function ignoreFaces(string $userId, array $detectionIds): int {
-		return $this->setFacesCluster($userId, $detectionIds, ClusteringService::IGNORED, null);
+		return $this->setFacesCluster($userId, $detectionIds, FaceState::IGNORED, null);
 	}
 
 	/**
@@ -581,48 +543,40 @@ class PeopleService {
 	 * @return int faces restored
 	 */
 	public function unignoreFaces(string $userId, array $detectionIds): int {
-		return $this->setFacesCluster($userId, $detectionIds, null, ClusteringService::IGNORED);
+		return $this->setFacesCluster($userId, $detectionIds, FaceState::PENDING, null, [FaceState::IGNORED]);
 	}
 
 	/**
-	 * The one set-based "change these faces' cluster_id" statement, scoped to $userId. $onlyFrom
-	 * restricts it to rows currently at that value, $onlyAssigned to rows in a real cluster. The
-	 * count is rows matched (the connection runs with FOUND_ROWS), so a face already at $to still
+	 * The one set-based "change these faces" operation, scoped to $userId. $onlyStates restricts it to faces
+	 * currently in one of those states. The count is the faces matched, so a face already at the target still
 	 * counts. Untitled people emptied by the change are deleted in the same transaction.
 	 *
 	 * @param list<int> $detectionIds
+	 * @param list<int> $onlyStates
 	 */
-	private function setFacesCluster(string $userId, array $detectionIds, ?int $to, ?int $onlyFrom, bool $onlyAssigned = false): int {
-		$changed = 0;
-		$this->db->beginTransaction();
-		try {
-			foreach (array_chunk(array_values(array_unique($detectionIds)), 1000) as $batch) {
-				$sources = $this->sourceClusters($userId, $batch);
+	private function setFacesCluster(string $userId, array $detectionIds, int $state, ?int $to, array $onlyStates = []): int {
+		return $this->writeAndPush(fn (): array => $this->setFacesClusterInTx($userId, $detectionIds, $state, $to, $onlyStates));
+	}
 
-				$qb = $this->db->getQueryBuilder();
-				$qb->update('recognize_face_detections')
-					->set('cluster_id', $qb->createNamedParameter($to, $to === null ? IQueryBuilder::PARAM_NULL : IQueryBuilder::PARAM_INT))
-					->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-					->andWhere($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
-				if ($onlyFrom !== null) {
-					$qb->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($onlyFrom, IQueryBuilder::PARAM_INT)));
-				}
-				if ($onlyAssigned) {
-					$qb->andWhere($qb->expr()->gt('cluster_id', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
-				}
-				$changed += $qb->executeStatement();
-
-				$this->deleteEmptyUntitledClusters($userId, $sources);
-				// Rewritten from the rows themselves, so a face the guard above skipped stays as it was.
-				$this->faceStore->mirrorFaces($batch);
-				$this->faceStore->mirrorClusters($sources);
-			}
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
+	/**
+	 * The body of setFacesCluster() for callers that already hold a transaction.
+	 *
+	 * @param list<int> $detectionIds
+	 * @param list<int> $onlyStates
+	 * @return array{0: int, 1: list<int>, 2: list<int>} [faces matched, face ids touched, person ids touched]
+	 */
+	private function setFacesClusterInTx(string $userId, array $detectionIds, int $state, ?int $to, array $onlyStates): array {
+		$count = 0;
+		$faces = [];
+		$clusters = $to !== null ? [$to] : [];
+		foreach (array_chunk(array_values(array_unique($detectionIds)), 1000) as $batch) {
+			$sources = $this->sourceClusters($userId, $batch);
+			$matched = $this->faceStore->setState($userId, $batch, $state, $to, $onlyStates);
+			$count += count($matched);
+			array_push($faces, ...$matched);
+			array_push($clusters, ...$this->faceStore->deleteEmptyUntitled($userId, $sources));
 		}
-		return $changed;
+		return [$count, $faces, $clusters];
 	}
 
 	/**
@@ -643,31 +597,23 @@ class PeopleService {
 	}
 
 	/**
-	 * Deletes those of $clusterIds that are untitled and have no member left. A titled person is
-	 * kept even when empty: the user may be about to move faces into it.
+	 * Recognize's own legacy rows (rows with no row of ours) that point at one of these people move with them:
+	 * to the surviving person on a merge, to -1 on a delete, which is what Recognize's own code does.
 	 *
-	 * @param list<int> $clusterIds
+	 * @param list<int> $fromClusterIds
+	 * @return int legacy rows moved
 	 */
-	private function deleteEmptyUntitledClusters(string $userId, array $clusterIds): void {
-		if ($clusterIds === []) {
-			return;
+	private function moveLegacyMembers(string $userId, array $fromClusterIds, int $to): int {
+		$ids = array_values(array_unique(array_map('intval', $fromClusterIds)));
+		if ($ids === []) {
+			return 0;
 		}
-		// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
-		// The member test still looks at Recognize's own rows, deliberately: this statement deletes from
-		// Recognize's table, and a person whose only members are Recognize's legacy rows (which have no
-		// row of ours) is not ours to delete.
-		$sub = $this->db->getQueryBuilder();
-		$sub->select($sub->expr()->literal(1))
-			->from('recognize_face_detections')
-			->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
-
-		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_clusters')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->in('id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
-			->andWhere($qb->expr()->eq('title', $qb->createNamedParameter('')))
-			->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
-		$qb->executeStatement();
+		return $this->db->executeStatement(
+			'UPDATE ' . $this->db->getQueryBuilder()->getTableName('recognize_face_detections') . ' SET cluster_id = ' . $to
+			. ' WHERE user_id = ? AND cluster_id IN (' . implode(',', $ids) . ') AND id NOT IN (SELECT id FROM '
+			. $this->db->getQueryBuilder()->getTableName('facewright_user_faces') . ')',
+			[$userId]
+		);
 	}
 
 	/**
@@ -709,52 +655,12 @@ class PeopleService {
 	 * @return int clusters deleted
 	 */
 	public function deleteEmptyClusters(string $userId): int {
-		// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
-		// The member test still looks at Recognize's own rows, deliberately: this statement deletes from
-		// Recognize's table, and a person whose only members are Recognize's legacy rows (which have no
-		// row of ours) is not ours to delete.
-		$sub = $this->db->getQueryBuilder();
-		$sub->select($sub->expr()->literal(1))
-			->from('recognize_face_detections')
-			->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
-
-		// The ids first, so our own copy of those people can be removed with them.
-		$sel = $this->db->getQueryBuilder();
-		$sel->select('id')
-			->from('recognize_face_clusters')
-			->where($sel->expr()->eq('user_id', $sel->createNamedParameter($userId)))
-			->andWhere($sel->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
-		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
-
-		$this->db->beginTransaction();
-		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->delete('recognize_face_clusters')
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
-			$deleted = $qb->executeStatement();
-			$this->faceStore->mirrorClusters($ids);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-		return $deleted;
-	}
-
-	/**
-	 * Ids of $userId's faces currently in any of these people, read before a change so the faces' own
-	 * copies can be rewritten after it.
-	 *
-	 * @param list<int> $clusterIds
-	 * @return list<int>
-	 */
-	private function memberIds(string $userId, array $clusterIds): array {
-		$qb = $this->db->getQueryBuilder();
-		$qb->select('id')
-			->from('facewright_user_faces')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
-		return array_map('intval', $qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
+		// The decision lives in FaceStore::emptyClusterIds(): no face of ours points at the person, and neither
+		// does a legacy row of Recognize's, so a person whose only members are legacy rows is never chosen.
+		$ids = $this->faceStore->emptyClusterIds($userId);
+		return $this->writeAndPush(function () use ($userId, $ids): array {
+			$deleted = $this->faceStore->deleteClusters($userId, $ids);
+			return [count($deleted), [], $deleted];
+		});
 	}
 }

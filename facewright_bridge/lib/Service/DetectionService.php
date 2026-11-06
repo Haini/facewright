@@ -210,34 +210,18 @@ class DetectionService {
 		$inserted = 0;
 		foreach ($faces as $faceIndex => $face) {
 			[$x1, $y1, $x2, $y2] = $face['bbox'];
-			// Encoded once and reused: re-encoding per user would be the most expensive thing in
-			// this loop.
-			$vector = self::encodeVector($face['embedding']);
 			$x = $x1 / $imageWidth;
 			$y = $y1 / $imageHeight;
 			$width = ($x2 - $x1) / $imageWidth;
 			$height = ($y2 - $y1) / $imageHeight;
 
-			// Rows (physical face, then per-user detection) before links, same "crash leaves
-			// something ownRowsExpr() still recognizes" ordering as the marker below - a crash
-			// between the detection insert and the link insert leaves a row the transitional OR
-			// predicate still finds by length, and `occ facewright:migrate-faces` links it later.
+			// The physical face, then the per-user row, then its link.
 			$faceId = $this->upsertFace($fileId, $faceIndex, $x, $y, $width, $height, $face['det_score'] ?? null, $face['embedding']);
 
 			foreach ($insertTargets as $userId) {
-				$qb = $this->db->getQueryBuilder();
-				$qb->insert('recognize_face_detections')
-					->values([
-						'user_id' => $qb->createNamedParameter($userId),
-						'file_id' => $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT),
-						'x' => $qb->createNamedParameter($x),
-						'y' => $qb->createNamedParameter($y),
-						'width' => $qb->createNamedParameter($width),
-						'height' => $qb->createNamedParameter($height),
-						'face_vector' => $qb->createNamedParameter($vector),
-					]);
-				$qb->executeStatement();
-				$detectionId = $qb->getLastInsertId();
+				// Pending faces are hidden from Memories, so nothing is written to Recognize's table here, and the
+				// embedding is not encoded as text any more: it lives in facewright_faces.embedding.
+				$detectionId = $this->faceStore->addPendingFace($userId, $faceId);
 
 				$link = $this->db->getQueryBuilder();
 				$link->insert('facewright_detection_faces')
@@ -247,8 +231,6 @@ class DetectionService {
 						'user_id' => $link->createNamedParameter($userId),
 					]);
 				$link->executeStatement();
-
-				$this->faceStore->addFaces($userId, [$detectionId => $faceId]);
 
 				$inserted++;
 			}

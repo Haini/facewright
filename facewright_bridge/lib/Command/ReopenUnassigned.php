@@ -6,6 +6,7 @@ namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\FaceState;
 use OCA\FacewrightBridge\Service\FaceStore;
+use OCA\FacewrightBridge\Service\ProjectionService;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use Symfony\Component\Console\Command\Command;
@@ -28,6 +29,7 @@ class ReopenUnassigned extends Command {
 	public function __construct(
 		private IDBConnection $db,
 		private FaceStore $faceStore,
+		private ProjectionService $projection,
 	) {
 		parent::__construct();
 	}
@@ -69,34 +71,33 @@ class ReopenUnassigned extends Command {
 	}
 
 	private function reopen(?string $userId): int {
-		// The ids come from our own table; Recognize's table is then written by id, and our copy is
-		// rewritten from those rows afterwards.
 		$sel = $this->db->getQueryBuilder();
-		$sel->select('id')
+		$sel->select('id', 'user_id')
 			->from('facewright_user_faces')
 			->where($sel->expr()->eq('state', $sel->createNamedParameter(FaceState::UNASSIGNED, IQueryBuilder::PARAM_INT)));
 		if ($userId !== null) {
 			$sel->andWhere($sel->expr()->eq('user_id', $sel->createNamedParameter($userId)));
 		}
-		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
+		$byUser = [];
+		$result = $sel->executeQuery();
+		while (($row = $result->fetch()) !== false) {
+			$byUser[(string)$row['user_id']][] = (int)$row['id'];
+		}
+		$result->closeCursor();
 
-		$affected = 0;
+		$reopened = [];
 		$this->db->beginTransaction();
 		try {
-			foreach (array_chunk($ids, 1000) as $batch) {
-				$qb = $this->db->getQueryBuilder();
-				$qb->update('recognize_face_detections')
-					->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-					->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
-					->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)));
-				$affected += $qb->executeStatement();
+			foreach ($byUser as $uid => $ids) {
+				array_push($reopened, ...$this->faceStore->setState($uid, $ids, FaceState::PENDING, null, [FaceState::UNASSIGNED]));
 			}
-			$this->faceStore->mirrorFaces($ids);
 			$this->db->commit();
 		} catch (\Throwable $e) {
 			$this->db->rollBack();
 			throw $e;
 		}
-		return $affected;
+		// Pending is hidden from Memories: the faces leave Recognize's table.
+		$this->projection->push($reopened);
+		return count($reopened);
 	}
 }

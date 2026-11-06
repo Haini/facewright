@@ -92,6 +92,7 @@ class ClusteringService {
 		private IUserManager $userManager,
 		private LoggerInterface $logger,
 		private FaceStore $faceStore,
+		private ProjectionService $projection,
 	) {
 	}
 
@@ -266,20 +267,14 @@ class ClusteringService {
 	public function markUnclusterable(string $userId, array $ids): int {
 		$marked = 0;
 		foreach (array_chunk($ids, self::VECTOR_FETCH_BATCH) as $batch) {
-			$this->db->beginTransaction();
-			try {
-				$qb = $this->db->getQueryBuilder();
-				$qb->update('recognize_face_detections')
-					->set('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT))
-					->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
-					->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-				$marked += $qb->executeStatement();
-				$this->faceStore->mirrorFaces($batch);
-				$this->db->commit();
-			} catch (\Throwable $e) {
-				$this->db->rollBack();
-				throw $e;
-			}
+			// Only faces still pending (or already marked): a face a human moved, removed or ignored while the pass
+			// was running keeps what the human set.
+			$matched = $this->inTransaction(fn (): array => $this->faceStore->setState(
+				$userId, $batch, FaceState::UNCLUSTERABLE, null, [FaceState::PENDING, FaceState::UNCLUSTERABLE],
+			));
+			$marked += count($matched);
+			// Hidden states are not in Recognize's table: this is what removes a remnant left there.
+			$this->projection->push($matched);
 		}
 		return $marked;
 	}
@@ -299,8 +294,6 @@ class ClusteringService {
 	 * @return int rows returned to pending
 	 */
 	public function clearUnclusterableMarks(string $userId): int {
-		// The ids come from our own table; the statement below then writes Recognize's table by id,
-		// in chunks, and our copy is rewritten from those rows afterwards.
 		$sel = $this->db->getQueryBuilder();
 		$sel->select('id')
 			->from('facewright_user_faces')
@@ -308,27 +301,12 @@ class ClusteringService {
 			->andWhere($sel->expr()->eq('state', $sel->createNamedParameter(FaceState::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)));
 		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
 
-		$reopened = 0;
-		$this->db->beginTransaction();
-		try {
-			foreach (array_chunk($ids, self::VECTOR_FETCH_BATCH) as $batch) {
-				$qb = $this->db->getQueryBuilder();
-				$qb->update('recognize_face_detections')
-					->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-					->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
-					->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-					->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)));
-				$reopened += $qb->executeStatement();
-			}
-			$this->faceStore->mirrorFaces($ids);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-		return $reopened;
+		$reopened = $this->inTransaction(fn (): array => $this->faceStore->setState(
+			$userId, $ids, FaceState::PENDING, null, [FaceState::UNCLUSTERABLE],
+		));
+		$this->projection->push($reopened);
+		return count($reopened);
 	}
-
 
 	/**
 	 * Clears every cluster_id for $userId and deletes their clusters outright. This also reopens
@@ -337,19 +315,8 @@ class ClusteringService {
 	 * along with everything else. IGNORED (-3) rows are kept.
 	 */
 	public function resetUser(string $userId): void {
-		$this->db->beginTransaction();
-		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->update('recognize_face_detections')
-				->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->neq('cluster_id', $qb->createNamedParameter(self::IGNORED, IQueryBuilder::PARAM_INT)));
-			$qb->executeStatement();
-
-			$qb = $this->db->getQueryBuilder();
-			$qb->delete('recognize_face_clusters')
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-			$qb->executeStatement();
+		$touched = $this->inTransaction(function () use ($userId): array {
+			$touched = $this->faceStore->resetUser($userId);
 
 			// The people are gone, so what SuggestionService kept about them is meaningless.
 			foreach (['facewright_cluster_centroids', 'facewright_merge_dismissals'] as $table) {
@@ -358,8 +325,25 @@ class ClusteringService {
 					->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
 				$qb->executeStatement();
 			}
-			$this->faceStore->resetUser($userId);
+			return $touched;
+		});
+		// Faces back to hidden leave Recognize's table, and the people with them.
+		$this->projection->push($touched['faces'], $touched['clusters']);
+	}
+
+	/**
+	 * Runs $work in one transaction and returns its result.
+	 *
+	 * @template T
+	 * @param callable(): T $work
+	 * @return T
+	 */
+	private function inTransaction(callable $work): mixed {
+		$this->db->beginTransaction();
+		try {
+			$result = $work();
 			$this->db->commit();
+			return $result;
 		} catch (\Throwable $e) {
 			$this->db->rollBack();
 			throw $e;
@@ -596,23 +580,9 @@ class ClusteringService {
 	}
 
 	private function createCluster(string $userId): int {
-		$this->db->beginTransaction();
-		try {
-			$qb = $this->db->getQueryBuilder();
-			$qb->insert('recognize_face_clusters')
-				->values([
-					'title' => $qb->createNamedParameter(''),
-					'user_id' => $qb->createNamedParameter($userId),
-				]);
-			$qb->executeStatement();
-			$id = $qb->getLastInsertId();
-			$this->faceStore->mirrorClusters([$id]);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
-		return $id;
+		// Not pushed here: an empty person is invisible to Memories, and the pass either fills it (and
+		// persistAssignments() pushes it with its faces) or deletes it again.
+		return $this->faceStore->allocateCluster($userId);
 	}
 
 	/**
@@ -641,7 +611,7 @@ class ClusteringService {
 		foreach (array_chunk(array_keys($targets), 1000) as $batch) {
 			$qb = $this->db->getQueryBuilder();
 			$qb->select('id')
-				->from('recognize_face_clusters')
+				->from('facewright_clusters')
 				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
 			$result = $qb->executeQuery();
@@ -651,11 +621,12 @@ class ClusteringService {
 			$result->closeCursor();
 		}
 
-		$this->db->beginTransaction();
-		try {
-			$written = 0;
-			$requested = 0;
-			$writtenIds = [];
+		$uf = $this->db->getQueryBuilder()->getTableName('facewright_user_faces');
+		$fc = $this->db->getQueryBuilder()->getTableName('facewright_clusters');
+		$written = 0;
+		$requested = 0;
+		$writtenIds = [];
+		$this->inTransaction(function () use ($userId, $detections, $ids, $createdClusterIds, $existing, $uf, $fc, &$written, &$requested, &$writtenIds): void {
 			foreach ($ids as $id) {
 				$clusterId = $detections[$id]['cluster_id'];
 				if ($clusterId === null) {
@@ -665,16 +636,13 @@ class ClusteringService {
 				if (!isset($existing[(int)$clusterId])) {
 					continue;
 				}
-				$qb = $this->db->getQueryBuilder();
-				$qb->update('recognize_face_detections')
-					->set('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT))
-					->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
-					->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-					->andWhere($qb->expr()->orX(
-						$qb->expr()->isNull('cluster_id'),
-						$qb->expr()->eq('cluster_id', $qb->createNamedParameter(self::UNCLUSTERABLE, IQueryBuilder::PARAM_INT)),
-					));
-				$changed = $qb->executeStatement();
+				// Guarded on OUR row: still pending or unclusterable, this user's, and the person still exists.
+				// The read that chose the face and this guard must test the same table.
+				$changed = $this->db->executeStatement(
+					"UPDATE {$uf} SET state = " . FaceState::ASSIGNED . ', cluster_id = ? WHERE id = ? AND user_id = ? AND state IN ('
+					. FaceState::PENDING . ',' . FaceState::UNCLUSTERABLE . ") AND EXISTS (SELECT 1 FROM {$fc} c WHERE c.id = ? AND c.user_id = ?)",
+					[(int)$clusterId, (int)$id, $userId, (int)$clusterId, $userId],
+				);
 				$written += $changed;
 				if ($changed > 0) {
 					$writtenIds[] = (int)$id;
@@ -682,26 +650,11 @@ class ClusteringService {
 			}
 
 			if ($createdClusterIds !== []) {
-				// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
-				$sub = $this->db->getQueryBuilder();
-				$sub->select($sub->expr()->literal(1))
-					->from('recognize_face_detections')
-					->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
-
-				$qb = $this->db->getQueryBuilder();
-				$qb->delete('recognize_face_clusters')
-					->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-					->andWhere($qb->expr()->in('id', $qb->createNamedParameter($createdClusterIds, IQueryBuilder::PARAM_INT_ARRAY)))
-					->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
-				$qb->executeStatement();
-				$this->faceStore->mirrorClusters($createdClusterIds);
+				$this->faceStore->deleteEmptyUntitled($userId, $createdClusterIds);
 			}
-			$this->faceStore->mirrorFaces($writtenIds);
-			$this->db->commit();
-		} catch (\Throwable $e) {
-			$this->db->rollBack();
-			throw $e;
-		}
+		});
+		// People first, then faces, then the people that did not survive: ProjectionService orders it.
+		$this->projection->push($writtenIds, $createdClusterIds);
 
 		if ($written < $requested) {
 			$this->logger->info(

@@ -20,7 +20,8 @@ use Psr\Log\LoggerInterface;
  * - One write shape: INSERT ... SELECT ... ON DUPLICATE KEY UPDATE. Delete-then-insert would race when two
  *   pushes touch the same ids and would overwrite real vectors.
  * - Order: people that exist, then faces, then deleted people. No face ever points at a person that is gone.
- * - Called after the caller's own transaction has committed (asserted), and it never throws to the caller:
+ * - Called after the caller's own transaction has committed (detected: inside one it logs, flags dirty and
+ *   leaves the copy to the repair job), and it never throws to the caller:
  *   a change in Recognize's schema must not break our own pages. A failure sets the dirty flag; the hourly
  *   job (and `occ facewright:project`) repairs.
  * - MariaDB only, like the rest of the project's deployment.
@@ -134,11 +135,14 @@ class ProjectionService {
 	 * @param list<int|string> $faceIds  facewright_user_faces.id, which is also the rfd id
 	 * @param list<int|string> $clusterIds facewright_clusters.id, which is also the rfc id
 	 * @return bool whether the copy is now current; false has set the dirty flag and logged why
-	 * @throws \LogicException when called inside a transaction (a programming error, not a runtime failure)
 	 */
 	public function push(array $faceIds, array $clusterIds = []): bool {
 		if ($this->db->inTransaction()) {
-			throw new \LogicException('ProjectionService::push() must run after the caller\'s transaction has committed.');
+			// A caller bug, but not one worth breaking the caller's write for: this runs from listeners (a file
+			// being deleted) that must not fail. Say so loudly and let the repair job do the copy.
+			$this->logger->error('facewright: ProjectionService::push() was called inside a transaction; the copy is left to the repair job', ['app' => self::APP_ID, 'exception' => new \LogicException('push inside a transaction')]);
+			$this->markDirty('push() was called inside a transaction');
+			return false;
 		}
 		$faceIds = $this->ids($faceIds);
 		$clusterIds = $this->ids($clusterIds);

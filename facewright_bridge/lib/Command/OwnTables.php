@@ -16,7 +16,9 @@ use Symfony\Component\Console\Output\OutputInterface;
  *   --precheck  read-only: count what the backfill would trip over
  *   --migrate   copy people and assignments into facewright_clusters / facewright_user_faces,
  *               resumable, and verify afterwards
- *   --verify    read-only: compare the copies with Recognize's tables, exit 1 on any mismatch
+ *   --verify    read-only: check ours internally and against Recognize's tables (via the projection's reconcile),
+ *               exit 1 on any mismatch
+ *   --seed-ids  Stage E: raise our id counters above Recognize's
  *
  * The copies are kept in step by every writer from then on (FaceStore); --verify failing after a
  * period of normal use means a writer was missed, and the fix is the writer, not another backfill.
@@ -34,7 +36,8 @@ class OwnTables extends Command {
 			->addOption('precheck', null, InputOption::VALUE_NONE, 'Read-only: count what the backfill would trip over')
 			->addOption('migrate', null, InputOption::VALUE_NONE, 'Copy people and assignments into the new tables (processing must be paused)')
 			->addOption('verify', null, InputOption::VALUE_NONE, 'Read-only: compare the new tables with Recognize\'s, exit 1 on a mismatch')
-			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --migrate: report what would be copied, write nothing')
+			->addOption('seed-ids', null, InputOption::VALUE_NONE, 'Raise our id counters above Recognize\'s (Stage E; with --dry-run reports only)')
+			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --migrate or --seed-ids: report what would happen, write nothing')
 			->addOption('chunk', null, InputOption::VALUE_REQUIRED, 'With --migrate: id range per step', '5000')
 			->addOption('reset-cursor', null, InputOption::VALUE_NONE, 'With --migrate: start again from the first row');
 	}
@@ -44,9 +47,10 @@ class OwnTables extends Command {
 			'precheck' => $input->getOption('precheck'),
 			'migrate' => $input->getOption('migrate'),
 			'verify' => $input->getOption('verify'),
+			'seed' => $input->getOption('seed-ids'),
 		]);
 		if (count($modes) !== 1) {
-			$output->writeln('<error>Pass exactly one of --precheck, --migrate, --verify.</error>');
+			$output->writeln('<error>Pass exactly one of --precheck, --migrate, --verify, --seed-ids.</error>');
 			return 1;
 		}
 
@@ -54,6 +58,7 @@ class OwnTables extends Command {
 			'precheck' => $this->precheck($output),
 			'migrate' => $this->migrate($input, $output),
 			'verify' => $this->verify($output),
+			'seed' => $this->seed($input, $output),
 		};
 	}
 
@@ -128,6 +133,18 @@ class OwnTables extends Command {
 		$this->migration->resetCursor();
 		$output->writeln('');
 		return $this->verify($output);
+	}
+
+	private function seed(InputInterface $input, OutputInterface $output): int {
+		if (!$this->usable($output)) {
+			return 1;
+		}
+		$dry = (bool)$input->getOption('dry-run');
+		foreach ($this->migration->seedIds($dry) as $table => $r) {
+			$output->writeln(sprintf('%-28s counter %9d -> floor %9d  %s', $table, $r['current'], $r['floor'],
+				$r['raised'] ? ($dry ? 'would raise' : 'raised') : 'already above'));
+		}
+		return 0;
 	}
 
 	private function verify(OutputInterface $output): int {

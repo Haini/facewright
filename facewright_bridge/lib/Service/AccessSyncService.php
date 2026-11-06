@@ -28,6 +28,7 @@ class AccessSyncService {
 		private MountFileService $mountFiles,
 		private IUserManager $userManager,
 		private FaceStore $faceStore,
+		private ProjectionService $projection,
 	) {
 	}
 
@@ -288,7 +289,7 @@ class AccessSyncService {
 		// DetectionService writes (x, y, width, height), so a positional copy would silently
 		// transpose every bounding box.
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('u.id', 'u.face_id', 'f.x', 'f.y', 'f.width', 'f.height')
+		$qb->select('u.id', 'u.face_id')
 			->from('facewright_user_faces', 'u')
 			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
 			->where($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
@@ -301,23 +302,6 @@ class AccessSyncService {
 		foreach ($rows as $row) {
 			$faceIdsByDonorRow[(int)$row['id']] = (int)$row['face_id'];
 		}
-
-		// The one thing still read from Recognize's table: the copy is still written there, together
-		// with its vector, until Stage E (docs/own-tables.md) stops writing the vector.
-		$vectors = [];
-		foreach (array_chunk(array_keys($faceIdsByDonorRow), 1000) as $chunk) {
-			$vecQb = $this->db->getQueryBuilder();
-			$vecQb->select('id', 'face_vector')
-				->from('recognize_face_detections')
-				->where($vecQb->expr()->in('id', $vecQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
-			foreach ($vecQb->executeQuery()->fetchAll() as $vec) {
-				$vectors[(int)$vec['id']] = $vec['face_vector'];
-			}
-		}
-		foreach ($rows as &$row) {
-			$row['face_vector'] = $vectors[(int)$row['id']] ?? '[]';
-		}
-		unset($row);
 
 		$written = 0;
 		foreach ($toUsers as $toUser) {
@@ -333,8 +317,8 @@ class AccessSyncService {
 	}
 
 	/**
-	 * Copies the donor's rows for one file to one user: the detection rows, their links and our own
-	 * copy of each assignment, in one transaction.
+	 * Copies the donor's faces for one file to one user: a pending row of ours and its link for each, in
+	 * one transaction.
 	 *
 	 * @param list<array<string, mixed>> $rows
 	 * @param array<int, int> $faceIdsByDonorRow donor detection id => physical face id
@@ -346,41 +330,24 @@ class AccessSyncService {
 		$this->db->beginTransaction();
 		try {
 			foreach ($rows as $row) {
-				$insert = $this->db->getQueryBuilder();
-				$insert->insert('recognize_face_detections')
-					->values([
-						'user_id' => $insert->createNamedParameter($toUser),
-						'file_id' => $insert->createNamedParameter($fileId, IQueryBuilder::PARAM_INT),
-						'x' => $insert->createNamedParameter($row['x']),
-						'y' => $insert->createNamedParameter($row['y']),
-						'width' => $insert->createNamedParameter($row['width']),
-						'height' => $insert->createNamedParameter($row['height']),
-						'face_vector' => $insert->createNamedParameter($row['face_vector']),
-						// cluster_id deliberately omitted so the column default (NULL) applies.
-						// Clusters are per-user rows in recognize_face_clusters, so the donor's
-						// cluster id means nothing in this user's namespace. NULL is what
-						// ClusteringService treats as pending, so the existing per-user
-						// ClusterScanJob chain picks these up with no extra wiring - at the cost
-						// that names don't travel with a share: the recipient's clustering
-						// rediscovers the same people under its own, untitled cluster ids.
-					]);
-				$insert->executeStatement();
-				$newRowId = $insert->getLastInsertId();
+				$faceId = $faceIdsByDonorRow[(int)$row['id']] ?? null;
+				if ($faceId === null) {
+					continue;
+				}
+				// The copy starts PENDING (no person): people are per user, so the donor's person means nothing in
+				// this user's namespace, and names do not travel with a share. The recipient's own clustering
+				// picks the face up. Pending is hidden from Memories, so nothing is written to Recognize's table.
+				$newRowId = $this->faceStore->addPendingFace($toUser, $faceId);
 				$written++;
 
-				$faceId = $faceIdsByDonorRow[(int)$row['id']] ?? null;
-				if ($faceId !== null) {
-					$link = $this->db->getQueryBuilder();
-					$link->insert('facewright_detection_faces')
-						->values([
-							'detection_id' => $link->createNamedParameter($newRowId, IQueryBuilder::PARAM_INT),
-							'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
-							'user_id' => $link->createNamedParameter($toUser),
-						]);
-					$link->executeStatement();
-
-					$this->faceStore->addFaces($toUser, [$newRowId => $faceId]);
-				}
+				$link = $this->db->getQueryBuilder();
+				$link->insert('facewright_detection_faces')
+					->values([
+						'detection_id' => $link->createNamedParameter($newRowId, IQueryBuilder::PARAM_INT),
+						'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
+						'user_id' => $link->createNamedParameter($toUser),
+					]);
+				$link->executeStatement();
 			}
 			$this->db->commit();
 		} catch (\Throwable $e) {
@@ -427,12 +394,8 @@ class AccessSyncService {
 						->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
 					$linkQb->executeStatement();
 
-					$delQb = $this->db->getQueryBuilder();
-					$delQb->delete('recognize_face_detections')
-						->where($delQb->expr()->in('id', $delQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
-					$deleted += $delQb->executeStatement();
-					// Our own copy of those assignments goes with them.
-					$this->faceStore->mirrorFaces($chunk);
+					$this->faceStore->deleteFaces($chunk);
+					$deleted += count($chunk);
 					$this->db->commit();
 				} catch (\Throwable $e) {
 					$this->db->rollBack();
@@ -440,6 +403,9 @@ class AccessSyncService {
 				}
 			}
 		}
+
+		// What Memories shows follows ours: the deleted faces leave Recognize's table too.
+		$this->projection->push($idsToDelete);
 
 		// Nobody has any path to the file left (the forgetFile() case) - the physical faces
 		// themselves are orphaned too, not just this user's detection rows.

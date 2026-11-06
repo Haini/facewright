@@ -23,6 +23,9 @@ case "${1:-}" in
     occ facewright:own-tables --migrate --chunk=100000 2>&1 | grep -E 'Total|people:'
     occ config:app:delete facewright_bridge processing_paused >/dev/null
     occ config:app:delete facewright_bridge own_tables_after_id >/dev/null 2>&1
+    occ facewright:own-tables --seed-ids >/dev/null 2>&1   # Stage E: our id counters above Recognize's (no-op on older code)
+    occ config:app:delete facewright_bridge projection_dirty_seq >/dev/null 2>&1; occ config:app:delete facewright_bridge projection_clean_seq >/dev/null 2>&1
+    occ config:app:delete facewright_bridge projection_last_error >/dev/null 2>&1
     if occ facewright:own-tables --verify >/dev/null; then echo "restored $name; verify clean"; else echo "restored $name but VERIFY FAILED"; exit 1; fi ;;
   list) ls -l "$WORK_DIR/snapshots" | awk 'NR>1 {printf "%8s  %s\n", $5, $9}' ;;
   *) sed -n '2,12p' "$0"; exit 2 ;;
