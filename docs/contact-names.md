@@ -81,8 +81,8 @@ showing a cropped contact face (the whole contact photo is shown).
 
 ## Effect on Memories
 
-Names reach Memories with no extra work: accepting a suggestion is a rename of a
-`recognize_face_clusters` row, which is what Memories reads.
+Names reach Memories with no extra work: accepting a suggestion is a rename of a person, which the
+projection copies to what Memories reads.
 
 Since Stage D of `docs/own-tables.md` the joins here should target `facewright_clusters` rather than
 `recognize_face_clusters`, and renames reach Memories through the projection. Cluster ids are the same in
