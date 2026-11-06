@@ -125,8 +125,8 @@ def main():
         s.goto(person_url(M1)); moved = s.face_ids_on_page(); need(f"faces of [{M1}] on the page", len(moved), 1)
         before_m2 = n_in(m2i); s.actions(); s.menu("Merge with different person")
         s.page.locator(".modal-container").get_by_text(M2, exact=True).first.click(force=True); s.page.wait_for_timeout(1200); s.press("Continue")
-        s.page.wait_for_timeout(5000); dav = s.take_dav()
-        check("every request Memories sent succeeded", True, bool(dav) and all(m == "MOVE" and c == 201 for m, c in dav))
+        s.page.wait_for_timeout(5000); dav = [d for d in s.take_dav() if d[0] == "MOVE"]   # the merge also PROPFINDs the list
+        check("every MOVE Memories sent succeeded", True, bool(dav) and all(c == 201 for m, c in dav))
         check("   one MOVE per face on the page", len(moved), len(dav))
         check("   the other person grew by that many", before_m2 + len(moved), n_in(m2i))
         restore.append((moved, m1i))

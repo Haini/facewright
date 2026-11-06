@@ -40,4 +40,4 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 Capture on the old code, run `stable` to prove the capture deterministic, change the code, capture again, diff.
 Planting a fault and seeing the checker fail is part of the work, not an extra.
 
-Known failure: `memories-ui/flows.py` flow 4 (merge) fails today, see `docs/own-tables.md`.
+Flow 4 (merge) is the regression for the parallel-MOVE deadlock; it fails if the router stops retrying.

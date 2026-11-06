@@ -1157,13 +1157,15 @@ From `docs/independence-implementation.md`:
 
 ---
 
-## Finding from the E.0 scripts: parallel DAV moves deadlock
+## Finding from the E.0 scripts: parallel DAV moves deadlock (fixed)
 
 Memories sends one MOVE per face, in parallel, when a person is merged. Three of eleven returned 500 on dev
 (`Deadlock found when trying to get lock` in `FaceStore::mirrorClusters`, reached from
-`RecognizeWriteRouterPlugin::moveFace` through `PeopleService::moveFaces`): all of them upsert the same cluster
-row. The faces they carried stay where they were, so the merge is silently incomplete. Nothing retries a deadlock.
-`dev/memories-ui/flows.py` flow 4 reproduces it and fails until it is fixed. Stage B code has the same shape, so
-live is exposed. Fix to consider: retry the transaction on SQLSTATE 40001 in the router (or `PeopleService`), a few
-times with a short pause; in Stage E the mirror call goes away but the projection's upsert of the same person row
-needs the same retry.
+`RecognizeWriteRouterPlugin::moveFace`): all of them write the same cluster row, and the faces they carried stayed
+where they were, so the merge was silently incomplete. Stage B code had the same shape, so live was exposed.
+
+Fixed by `RecognizeWriteRouterPlugin::retryOnDeadlock()`: the whole operation is run again (up to 6 tries, random
+pause) when the database reports a deadlock or lock-wait timeout. Safe because the plugin is the outermost caller and
+each operation is one transaction. `dev/memories-ui/flows.py` flow 4 is the regression (11 faces merged, 16 expected;
+with the retry switched off it ends at 13). **Stage E:** the projection's upsert of the same person row needs the
+same retry.

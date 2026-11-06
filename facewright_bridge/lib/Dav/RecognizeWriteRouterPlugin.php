@@ -6,6 +6,7 @@ namespace OCA\FacewrightBridge\Dav;
 
 use OCA\FacewrightBridge\Service\DuplicateTitleException;
 use OCA\FacewrightBridge\Service\PeopleService;
+use OCP\DB\Exception as DbException;
 use OCP\IAppConfig;
 use OCP\IUserSession;
 use Sabre\DAV\Exception\Forbidden;
@@ -45,6 +46,9 @@ use Sabre\HTTP\ResponseInterface;
  * handles writes itself again.
  */
 class RecognizeWriteRouterPlugin extends ServerPlugin {
+	/** Tries per request when the database rolls it back as a deadlock victim. */
+	private const MAX_ATTEMPTS = 6;
+
 	private const PATH_PREFIX = 'recognize/';
 
 	/** Methods this class turns into PeopleService calls. */
@@ -107,17 +111,41 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 			throw new Forbidden('Not allowed to change another user\'s people.');
 		}
 
-		$status = match ($op['kind']) {
+		$status = $this->retryOnDeadlock(fn () => match ($op['kind']) {
 			'create' => $this->create($userId, $op['name']),
 			'rename' => $this->rename($userId, $op['name'], $op['newName']),
 			'delete-person' => $this->deletePerson($userId, $op['name']),
 			'delete-face' => $this->deleteFace($userId, $op['name'], $op['faceId']),
 			'move-face' => $this->moveFace($userId, $op['name'], $op['faceId'], $op['target']),
-		};
+		});
 
 		$response->setHeader('Content-Length', '0');
 		$response->setStatus($status);
 		return false;
+	}
+
+	/**
+	 * Memories sends one MOVE per face, in parallel, and they all write the same person row, so InnoDB picks a
+	 * victim and rolls it back. Every operation here is one atomic transaction that this plugin starts from the
+	 * outside, so running it again is safe. The pause is random so that the requests that just collided do not
+	 * collide again in step.
+	 *
+	 * @template T
+	 * @param callable(): T $operation
+	 * @return T
+	 */
+	private function retryOnDeadlock(callable $operation): mixed {
+		for ($attempt = 1;; $attempt++) {
+			try {
+				return $operation();
+			} catch (DbException $e) {
+				$retryable = in_array($e->getReason(), [DbException::REASON_DEADLOCK, DbException::REASON_LOCK_WAIT_TIMEOUT], true);
+				if (!$retryable || $attempt >= self::MAX_ATTEMPTS) {
+					throw $e;
+				}
+				usleep(random_int(20_000, 120_000) * $attempt);
+			}
+		}
 	}
 
 	private function applies(RequestInterface $request): bool {
