@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Controller;
 
-use OCA\FacewrightBridge\Service\DetectionService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -62,11 +61,12 @@ class FacePreviewController extends Controller {
 		$size = max(self::MIN_SIZE, min(self::MAX_SIZE, $size));
 
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('d.file_id', 'd.x', 'd.y', 'd.width', 'd.height')
-			->from('recognize_face_detections', 'd')
-			->where($qb->expr()->eq('d.id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('d.user_id', $qb->createNamedParameter($this->userId)))
-			->andWhere(DetectionService::ownRowsExpr($qb, 'd'));
+		// The user_id condition is the authorization: a face id that is another user's finds nothing.
+		$qb->select('f.file_id', 'f.x', 'f.y', 'f.width', 'f.height')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('u.id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('u.user_id', $qb->createNamedParameter($this->userId)));
 		$face = $qb->executeQuery()->fetchAssociative();
 		if ($face === false) {
 			return new NotFoundResponse();

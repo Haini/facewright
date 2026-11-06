@@ -199,14 +199,13 @@ class SuggestionService {
 	private function computeCentroid(string $userId, int $clusterId): ?array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('f.embedding')
-			->from('recognize_face_detections', 'd')
-			->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
-			->innerJoin('l', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'l.face_id'))
-			->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->eq('d.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('u.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
 			->orderBy($qb->createFunction('(f.det_score IS NULL)'), 'ASC')
 			->addOrderBy('f.det_score', 'DESC')
-			->addOrderBy('d.id', 'ASC')
+			->addOrderBy('u.id', 'ASC')
 			->setMaxResults(self::REPRESENTATIVES);
 		$result = $qb->executeQuery();
 
