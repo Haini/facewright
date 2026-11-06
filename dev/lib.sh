@@ -63,6 +63,16 @@ bob_dav()   { dav "$BOB_USER" "$BOB_PASS" "$@"; }
 # A face crop: crop USER PASS FACE_ID -> HTTP status
 crop() { docker exec "$NC_CONTAINER" curl -s -o /dev/null -w '%{http_code}' -u "$1:$2" "http://localhost/apps/facewright_bridge/faces/$3/preview?size=64"; }
 
+# Restart the web server and wait until it answers. The web process revalidates its compiled PHP only every 60 s
+# (opcache.revalidate_freq), so a test that edits a source file must restart it, or it runs against the old code.
+reload_web() {
+  docker exec "$NC_CONTAINER" apache2ctl -k restart >/dev/null 2>&1
+  local i; for i in $(seq 1 30); do
+    [ "$(docker exec "$NC_CONTAINER" curl -s -o /dev/null -w '%{http_code}' http://localhost/status.php)" = 200 ] && return 0; sleep 1
+  done
+  echo "web server did not come back"; return 1
+}
+
 # --- results -----------------------------------------------------------------------------------------------
 PASS=0; FAIL=0
 check() {  # check LABEL EXPECTED ACTUAL
