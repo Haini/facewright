@@ -37,7 +37,7 @@ class PeopleService {
 	public function listClusters(string $userId, ?int $limit = null, int $offset = 0, int $minCount = 0, string $search = '', bool $withCovers = false): array {
 		$qb = $this->clusterListQuery($userId, $minCount, $search);
 		$qb->select('c.id', 'c.title')
-			->selectAlias($qb->func()->count('d.id'), 'c')
+			->selectAlias($qb->func()->count('u.id'), 'c')
 			// Named clusters first, then largest first, then stable by id - matches Recognize's
 			// own FacesHome::getChildren() ordering closely enough for Memories' list to look
 			// sane without depending on it.
@@ -79,8 +79,8 @@ class PeopleService {
 
 	private function clusterListQuery(string $userId, int $minCount, string $search): IQueryBuilder {
 		$qb = $this->db->getQueryBuilder();
-		$qb->from('recognize_face_clusters', 'c')
-			->leftJoin('c', 'recognize_face_detections', 'd', $qb->expr()->eq('d.cluster_id', 'c.id'))
+		$qb->from('facewright_clusters', 'c')
+			->leftJoin('c', 'facewright_user_faces', 'u', $qb->expr()->eq('u.cluster_id', 'c.id'))
 			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
 			->groupBy('c.id', 'c.title');
 		if ($search !== '') {
@@ -88,7 +88,7 @@ class PeopleService {
 		}
 		if ($minCount > 0) {
 			$qb->having($qb->expr()->orX(
-				$qb->expr()->gte($qb->createFunction('COUNT(d.id)'), $qb->createNamedParameter($minCount, IQueryBuilder::PARAM_INT)),
+				$qb->expr()->gte($qb->createFunction('COUNT(u.id)'), $qb->createNamedParameter($minCount, IQueryBuilder::PARAM_INT)),
 				$qb->expr()->neq('c.title', $qb->createNamedParameter('')),
 			));
 		}
@@ -106,16 +106,15 @@ class PeopleService {
 		$covers = [];
 		foreach ($clusterIds as $clusterId) {
 			$qb = $this->db->getQueryBuilder();
-			$qb->select('d.id')
-				->from('recognize_face_detections', 'd')
-				->innerJoin('d', 'facewright_detection_faces', 'l', $qb->expr()->eq('l.detection_id', 'd.id'))
-				->innerJoin('l', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'l.face_id'))
-				->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->eq('d.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
+			$qb->select('u.id')
+				->from('facewright_user_faces', 'u')
+				->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+				->where($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->eq('u.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
 				->orderBy($qb->createFunction('(f.det_score IS NULL)'), 'ASC')
 				->addOrderBy('f.det_score', 'DESC')
 				->addOrderBy($qb->createFunction('(f.width * f.height)'), 'DESC')
-				->addOrderBy('d.id', 'ASC')
+				->addOrderBy('u.id', 'ASC')
 				->setMaxResults(1);
 			$id = $qb->executeQuery()->fetchOne();
 			if ($id !== false) {
@@ -129,7 +128,7 @@ class PeopleService {
 	public function getCluster(string $userId, int $clusterId): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id', 'title')
-			->from('recognize_face_clusters')
+			->from('facewright_clusters')
 			->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
 			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
 		$row = $qb->executeQuery()->fetchAssociative();
@@ -153,7 +152,7 @@ class PeopleService {
 
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id')
-			->from('recognize_face_clusters')
+			->from('facewright_clusters')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('title', $qb->createNamedParameter($idOrTitle)));
 		$rows = $qb->executeQuery()->fetchAll();
@@ -169,26 +168,34 @@ class PeopleService {
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
 	public function listFaces(string $userId, int $clusterId, ?int $limit = null, int $offset = 0): array {
-		return $this->listFacesByClusterId($userId, $clusterId, $limit, $offset);
+		return $this->listFacesWhere($userId, FaceState::ASSIGNED, $clusterId, $limit, $offset);
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
 	public function listUnassignedFaces(string $userId, ?int $limit = null, int $offset = 0): array {
-		return $this->listFacesByClusterId($userId, ClusteringService::UNASSIGNED, $limit, $offset);
+		return $this->listFacesWhere($userId, FaceState::UNASSIGNED, null, $limit, $offset);
 	}
 
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
 	public function listIgnoredFaces(string $userId, ?int $limit = null, int $offset = 0): array {
-		return $this->listFacesByClusterId($userId, ClusteringService::IGNORED, $limit, $offset);
+		return $this->listFacesWhere($userId, FaceState::IGNORED, null, $limit, $offset);
 	}
 
 	/** Faces at $clusterId, which may be a real cluster or one of ClusteringService's sentinels. */
 	public function countFaces(string $userId, int $clusterId): int {
+		try {
+			$match = FaceState::fromSentinel($clusterId);
+		} catch (\InvalidArgumentException) {
+			return 0; // not a person and not one of the sentinels: no face is there
+		}
 		$qb = $this->db->getQueryBuilder();
 		$qb->select($qb->func()->count('*'))
-			->from('recognize_face_detections')
+			->from('facewright_user_faces')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)));
+			->andWhere($qb->expr()->eq('state', $qb->createNamedParameter($match['state'], IQueryBuilder::PARAM_INT)));
+		if ($match['cluster_id'] !== null) {
+			$qb->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($match['cluster_id'], IQueryBuilder::PARAM_INT)));
+		}
 		return (int)$qb->executeQuery()->fetchOne();
 	}
 
@@ -201,26 +208,35 @@ class PeopleService {
 	 */
 	public function faceAssignment(string $userId, int $detectionId): ?int {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('cluster_id')
-			->from('recognize_face_detections')
+		$qb->select('state', 'cluster_id')
+			->from('facewright_user_faces')
 			->where($qb->expr()->eq('id', $qb->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT)))
 			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
 		$row = $qb->executeQuery()->fetchAssociative();
 		if ($row === false) {
 			throw new \InvalidArgumentException("Face {$detectionId} does not exist for {$userId}.");
 		}
-		return $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
+		return FaceState::toSentinel((int)$row['state'], $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null);
 	}
 
-	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
-	private function listFacesByClusterId(string $userId, int $clusterId, ?int $limit, int $offset): array {
+	/**
+	 * Faces in one state, and in one person when the state is ASSIGNED. Geometry and file come from
+	 * the physical face (facewright_faces).
+	 *
+	 * @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}>
+	 */
+	private function listFacesWhere(string $userId, int $state, ?int $clusterId, ?int $limit, int $offset): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('id', 'file_id', 'x', 'y', 'width', 'height')
-			->from('recognize_face_detections')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->eq('cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-			->orderBy('id', 'ASC')
+		$qb->select('u.id', 'f.file_id', 'f.x', 'f.y', 'f.width', 'f.height')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('u.state', $qb->createNamedParameter($state, IQueryBuilder::PARAM_INT)))
+			->orderBy('u.id', 'ASC')
 			->setFirstResult($offset);
+		if ($clusterId !== null) {
+			$qb->andWhere($qb->expr()->eq('u.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)));
+		}
 		if ($limit !== null) {
 			$qb->setMaxResults($limit);
 		}
@@ -243,20 +259,20 @@ class PeopleService {
 
 	/**
 	 * Backs the `nc:face-detections` DAV property (Stage 2) - every one of $userId's own faces on
-	 * one file, with the person title if assigned. Restricted to ownRowsExpr() so a legacy
+	 * one file, with the person title if assigned. Reads facewright_user_faces, so a legacy
 	 * 128-dim row never reaches a UI through us.
 	 *
 	 * @return list<array{id: int, x: float, y: float, width: float, height: float, cluster_id: ?int, title: ?string}>
 	 */
 	public function facesForFile(string $userId, int $fileId): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->select('d.id', 'd.x', 'd.y', 'd.width', 'd.height', 'd.cluster_id', 'c.title')
-			->from('recognize_face_detections', 'd')
-			->leftJoin('d', 'recognize_face_clusters', 'c', $qb->expr()->eq('d.cluster_id', 'c.id'))
-			->where($qb->expr()->eq('d.user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->eq('d.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
-			->andWhere(DetectionService::ownRowsExpr($qb, 'd'))
-			->orderBy('d.id', 'ASC');
+		$qb->select('u.id', 'f.x', 'f.y', 'f.width', 'f.height', 'u.state', 'u.cluster_id', 'c.title')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->leftJoin('u', 'facewright_clusters', 'c', $qb->expr()->eq('u.cluster_id', 'c.id'))
+			->where($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('f.file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
+			->orderBy('u.id', 'ASC');
 
 		$faces = [];
 		$result = $qb->executeQuery();
@@ -267,7 +283,8 @@ class PeopleService {
 				'y' => (float)$row['y'],
 				'width' => (float)$row['width'],
 				'height' => (float)$row['height'],
-				'cluster_id' => $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null,
+				// The sentinel the UIs read (-1, -3, null...), not our state column.
+				'cluster_id' => FaceState::toSentinel((int)$row['state'], $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null),
 				'title' => $row['title'] !== null ? (string)$row['title'] : null,
 			];
 		}
@@ -334,7 +351,7 @@ class PeopleService {
 
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id')
-			->from('recognize_face_clusters')
+			->from('facewright_clusters')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('title', $qb->createNamedParameter($title)));
 		if ($excludingClusterId !== null) {
@@ -390,7 +407,7 @@ class PeopleService {
 		if ($dryRun) {
 			$qb = $this->db->getQueryBuilder();
 			$qb->select($qb->func()->count('*'))
-				->from('recognize_face_detections')
+				->from('facewright_user_faces')
 				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
 			return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => (int)$qb->executeQuery()->fetchOne()];
@@ -618,10 +635,10 @@ class PeopleService {
 	private function sourceClusters(string $userId, array $detectionIds): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->selectDistinct('cluster_id')
-			->from('recognize_face_detections')
+			->from('facewright_user_faces')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->in('id', $qb->createNamedParameter($detectionIds, IQueryBuilder::PARAM_INT_ARRAY)))
-			->andWhere($qb->expr()->gt('cluster_id', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+			->andWhere($qb->expr()->eq('state', $qb->createNamedParameter(FaceState::ASSIGNED, IQueryBuilder::PARAM_INT)));
 		return array_map('intval', $qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
 	}
 
@@ -636,6 +653,9 @@ class PeopleService {
 			return;
 		}
 		// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
+		// The member test still looks at Recognize's own rows, deliberately: this statement deletes from
+		// Recognize's table, and a person whose only members are Recognize's legacy rows (which have no
+		// row of ours) is not ours to delete.
 		$sub = $this->db->getQueryBuilder();
 		$sub->select($sub->expr()->literal(1))
 			->from('recognize_face_detections')
@@ -690,6 +710,9 @@ class PeopleService {
 	 */
 	public function deleteEmptyClusters(string $userId): int {
 		// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
+		// The member test still looks at Recognize's own rows, deliberately: this statement deletes from
+		// Recognize's table, and a person whose only members are Recognize's legacy rows (which have no
+		// row of ours) is not ours to delete.
 		$sub = $this->db->getQueryBuilder();
 		$sub->select($sub->expr()->literal(1))
 			->from('recognize_face_detections')
@@ -729,7 +752,7 @@ class PeopleService {
 	private function memberIds(string $userId, array $clusterIds): array {
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id')
-			->from('recognize_face_detections')
+			->from('facewright_user_faces')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
 		return array_map('intval', $qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
