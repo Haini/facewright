@@ -47,7 +47,7 @@ class ProjectionMaintenanceJob extends TimedJob {
 			$report = $this->projection->reconcile(false, null, self::LIMIT);
 			$repaired = array_sum($report['repaired']);
 			if ($repaired > 0) {
-				$this->logger->info("facewright: repaired {$repaired} difference(s) between Recognize's tables and ours (A {$report['repaired']['A']}, C {$report['repaired']['C']}, D {$report['repaired']['D_missing']}+{$report['repaired']['D_stale']})", ['app' => 'facewright_bridge']);
+				$this->logger->warning("facewright: repaired {$repaired} difference(s) between Recognize's tables and ours (A {$report['repaired']['A']}, C {$report['repaired']['C']}, D {$report['repaired']['D_missing']}+{$report['repaired']['D_stale']})", ['app' => 'facewright_bridge']);
 			}
 			$after = $this->projection->reconcile(true);
 			$left = $after['A'] + $after['C'] + $after['D_missing'] + $after['D_stale'];
