@@ -7,7 +7,6 @@ namespace OCA\FacewrightBridge\Dav;
 use OCA\FacewrightBridge\Service\DuplicateTitleException;
 use OCA\FacewrightBridge\Service\PeopleService;
 use OCP\DB\Exception as DbException;
-use OCP\IAppConfig;
 use OCP\IUserSession;
 use Sabre\DAV\Exception\Forbidden;
 use Sabre\DAV\Exception\NotFound;
@@ -42,8 +41,9 @@ use Sabre\HTTP\ResponseInterface;
  * Everything is scoped to the logged-in user: the user id in the path must be theirs, and every
  * PeopleService call takes it from the session, never from the request.
  *
- * Disabled by the appconfig switch `block_recognize_writes` = 'false' (the rollback): Recognize then
- * handles writes itself again.
+ * There is no switch to hand these writes back to Recognize (Stage E): Recognize's own handlers need real vectors
+ * and its own tables to be the source of truth, and neither is true any more. Rolling back is
+ * `occ facewright:project --hydrate` plus the Stage D files (docs/own-tables.md, Rollback).
  */
 class RecognizeWriteRouterPlugin extends ServerPlugin {
 	/** Tries per request when the database rolls it back as a deadlock victim. */
@@ -60,7 +60,6 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 	private ?Server $server = null;
 
 	public function __construct(
-		private IAppConfig $appConfig,
 		private IUserSession $userSession,
 		private PeopleService $people,
 	) {
@@ -149,8 +148,7 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 	}
 
 	private function applies(RequestInterface $request): bool {
-		return str_starts_with($request->getPath(), self::PATH_PREFIX)
-			&& $this->appConfig->getValueString('facewright_bridge', 'block_recognize_writes', 'true') === 'true';
+		return str_starts_with($request->getPath(), self::PATH_PREFIX);
 	}
 
 	/**

@@ -162,5 +162,13 @@ $users = $_['users'] ?? [];
 	<p><?php p($l->n('%n detection record written in the last hour', '%n detection records written in the last hour', $processedLastHour, [$processedLastHour])); ?></p>
 	<p><?php p($l->t('%s processed, %s not yet processed', [(string)$processedCount, (string)$unprocessedCount])); ?></p>
 	<p><?php p($l->t('%s detection records across all users (a picture several people can see is recorded once per person)', [(string)$processedRecordCount])); ?></p>
+	<p id="facewright-memories-sync"><strong><?php p($l->t('Memories sync:')); ?></strong>
+	<?php if ($memoriesSync['dirty']): ?>
+		<?php p($l->t('NOT up to date. Last error: %s (%s). It is retried every hour; `occ facewright:project` repairs it now.', [$memoriesSync['error'] !== '' ? $memoriesSync['error'] : $l->t('unknown'), $memoriesSync['errorAt'] > 0 ? date('Y-m-d H:i', $memoriesSync['errorAt']) : '-'])); ?>
+	<?php elseif ($memoriesSync['okAt'] > 0): ?>
+		<?php p($l->t('up to date (last checked %s).', [date('Y-m-d H:i', $memoriesSync['okAt'])])); ?>
+	<?php else: ?>
+		<?php p($l->t('up to date (not yet checked by the hourly job).')); ?>
+	<?php endif; ?></p>
 	<p><?php p($l->n('%n picture still needs to be clustered', '%n pictures still need to be clustered', $unclusteredCount, [$unclusteredCount])); ?></p>
 </div>

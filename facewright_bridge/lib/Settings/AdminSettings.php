@@ -17,6 +17,7 @@ use OCP\IAppConfig;
 use OCP\IUser;
 use OCP\IUserManager;
 use OCP\Settings\ISettings;
+use OCA\FacewrightBridge\Service\ProjectionService;
 use OCP\Util;
 
 class AdminSettings implements ISettings {
@@ -28,6 +29,7 @@ class AdminSettings implements ISettings {
 		private ITimeFactory $timeFactory,
 		private IJobList $jobList,
 		private IUserManager $userManager,
+		private ProjectionService $projection,
 	) {
 	}
 
@@ -66,6 +68,7 @@ class AdminSettings implements ISettings {
 			'queuedDetections' => $this->countJobs(DetectQueuedJob::class),
 			'scanActive' => $this->countJobs(BatchScanJob::class) > 0,
 			'clusteringActive' => $this->countJobs(ClusterScanJob::class) > 0,
+			'memoriesSync' => $this->projection->status(),
 			'users' => $this->userRows($candidates['perUser'], $unclusteredByUser),
 		], '');
 	}

@@ -47,9 +47,8 @@ Three hard dependencies on the app being **enabled**, not just on its tables exi
 Writes from Memories and Photos are answered by this app, not by Recognize: `RecognizeWriteRouterPlugin`
 turns the five DAV requests they send (create, rename, delete person; remove or move a face) into
 `PeopleService` calls, scoped to the logged-in user, and refuses any other change under `recognize/`.
-The appconfig key `block_recognize_writes` = `false` hands writes back to Recognize (it takes a few
-seconds to reach the web process). The coupling is the path shapes, the `Destination` header and the
-status codes; see `docs/own-tables.md`, Stage B.
+The router has no off switch (it had `block_recognize_writes` until Stage E; rollback is in `docs/own-tables.md`).
+The coupling is the path shapes, the `Destination` header and the status codes; see `docs/own-tables.md`, Stage B.
 
 Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
 Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
