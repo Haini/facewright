@@ -323,8 +323,10 @@ admin overview (one query, not N+1). A user with no stored preference is off.
   dimension filter. It undoes all curation instance-wide.
 - Naming/merging/deleting people from Memories works on our clusters with no code: those are DAV
   operations against the same table.
-- After any Recognize upgrade or re-enable, check `oc_jobs` for `MaintenanceJob` and confirm the
-  markers still take effect.
+- After any Recognize upgrade or re-enable, `MaintenanceJob` is back in `oc_jobs` and due at the next cron
+  tick. Delete it in the same command chain as the upgrade (`occ background-job:delete` asks for
+  confirmation: pipe `y`), together with any `ClusterFacesJob` it already queued, and confirm the markers
+  still take effect.
 
 ## Deployment and operations
 

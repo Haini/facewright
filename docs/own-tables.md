@@ -454,6 +454,21 @@ The web log shows about 2,400 face `MOVE`s answered 201 and one person-level `MO
 rename onto a name that already exists (refused by design, as Recognize itself did); not confirmed. No
 errors from our code in the log, and the precheck afterwards was clean (the merge removed one person).
 
+**Live upgraded (2026-11-06), with the user's go-ahead.** `occ upgrade` took about three minutes and applied the
+pending store updates: Memories 10.1.0 to 11.0.2, Recognize 12.0.2 to 12.0.3, the bridge to 0.8.1 (now identical
+to the repo, no pin) and eight others. Preflight showed live's Memories had already run the migration that
+failed on dev (dev jumped from 8.1.0), so only two small ones were pending. A full database dump from before is in
+`<backups>/facewright-pre-upgrade/`. Afterwards: data and precheck unchanged, no new log errors from our code.
+Still pending in the store: maps, files_scripts, workflow_media_converter.
+
+**Recognize's `MaintenanceJob` came back and ran before it could be removed.** The upgrade re-adds it, and it was
+due at the very next cron tick (about two minutes after the upgrade ended). With pending rows over its size
+threshold it queued Recognize's `ClusterFacesJob` for both users. Those ran at the following ticks with no
+failure logged and no change to our data; both jobs and the `MaintenanceJob` were then removed with
+`occ background-job:delete`, which asks for confirmation (`-n` answers no; pipe `y`). Remove it **in the same
+command chain as the upgrade**, not afterwards. Left over: one row in `oc_recognize_fs_moves` from before the
+upgrade, which Recognize 12.0.3 would process on the next file action (it syncs that one file's rows; low risk).
+
 ---
 
 ## Stage C: Expand
