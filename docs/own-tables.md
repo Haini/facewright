@@ -1,5 +1,36 @@
 # Owning the face data: review and implementation plan
 
+> ## Where things stand (updated 2026-11-06, evening) — read this first
+>
+> **Stages A to E are done and live.** Live (`<app>`) runs bridge 0.10.0: our tables are the source of
+> truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
+> confirmed in Memories that rename, move and remove-face edits work and show at once. Branch `docs/own-tables`
+> holds everything (not merged to `master`). Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
+>
+> **What is open, in order** (nothing below is started; each destructive one needs the user's go-ahead):
+> 1. **Day-after check (from 2026-11-07).** On live, `docker exec -u www-data <app> php occ facewright:project
+>    --dry-run` must show A = 0, C = 0, D = 0 (B stays 44,858 until faces change, legacy 40) and
+>    `occ facewright:own-tables --verify` must exit 0. The log (`grep -i facewright /var/www/html/data/nextcloud.log`,
+>    ignoring the 20:26 upgrade-window lines of 2026-11-06) must hold nothing of ours. Do this after a clustering run
+>    and after any share has happened; if neither has occurred yet, say so rather than calling it clean. Also open the
+>    admin page and confirm the "Memories sync" line says up to date (never looked at in a browser).
+> 2. **Anything non-zero in A, C or D:** do not repair blindly. Run `project` (it repairs), then find which writer
+>    left the drift (the push logs and marks the copy dirty; the hourly `ProjectionMaintenanceJob` also repairs).
+>    A repeating drift is a missed writer: fix the writer. Rollback tiers R1 to R3 are below.
+> 3. **Stage F** (delete the 44,858 hidden rows, blank vectors, drop transitional code) waits at least two weeks after
+>    the cutover, i.e. not before 2026-11-20, and needs the user's explicit go-ahead.
+> 4. **Stage G** (the Memories pull request) posts publicly: only with the user's go-ahead.
+>
+> **Verification tooling** is under `dev/` (`dev/README.md`; `dev/run-all.sh --ui` on the compose stack, which takes a
+> lock because the dev DB is shared). Last full run: 15 of 16, the remaining one (rollback drill) fixed afterwards.
+> The ground-truth clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from the Georgia Tech set, which
+> is fetched, never committed) passed 15/15.
+>
+> **Things that bit and will again:** Apache's opcache revalidates every 60 s (`reload_web` after editing source in
+> tests); `docker exec -i` is needed for piped stdin; `occ upgrade` applies every pending store update (check
+> `occ app:update --showonly`) and Recognize's `MaintenanceJob` can come back after it (delete it in the same chain,
+> pipe `y`); a rollback must keep `info.xml`'s version at the installed one.
+
 An executable plan for moving all face and people data into tables we own. Written for a model
 session that has not seen this repository before. Part 1 is the review and the design; Part 2 is the
 work, stage by stage. Where they differ, Part 2 wins. Where this plan differs from
@@ -194,9 +225,10 @@ re-projecting, instead of losing curation or forcing a rescan.
 1. **Read `CLAUDE.md` first, in full.** The "Invariants" section is not optional. Column order, job
    dedup semantics and `persistAssignments()`'s guard are all touched here.
 2. **Work on the compose stack only.** `recognaize-nextcloud-1`, `recognaize-db-1`. The production
-   instance (`<app>`, `<db>`, `<apps-dir>/`) is read-only reference
-   material. Do not run `occ` or SQL against it. The two exceptions are marked **[user runs]**: hand
-   those to the user and stop.
+   instance (`<app>`, `<db>`, `<apps-dir>/`) is reference material:
+   the stages marked **[user runs]** were handed to the user, and the live deploys of Stages C to E were done
+   with the user's go-ahead for each. Read-only checks on live (`project --dry-run`, `own-tables --verify`,
+   the log) are fine; anything that writes, deploys or upgrades needs the user's explicit go-ahead first.
 3. **One commit per numbered step**, imperative subject, a body that says why, ending with the
    attribution line the session gives you.
 4. **Stop and report rather than improvise** when a count pair does not reconcile, a `--verify` reports
@@ -1044,8 +1076,11 @@ Cut over with the runbook below, in this order, each step checked before the nex
 4. Unpaused. After the next cron tick the hourly job had run and the copy reported itself up to date; the dry run was
    unchanged and the log had no entries of ours.
 
-Still to do: the person-visible check (rename, move and remove a face in Memories and see it at once), a clean dry run
-after a day that includes a clustering run and any shares, and then at least two weeks before Stage F.
+The person-visible check passed (the user renamed, moved and removed faces in Memories; each showed at once; the dry
+run afterwards still had A = C = D = 0, `--verify` exit 0, nothing of ours in the log after the unpause).
+
+Still to do: a clean dry run after a day that includes a clustering run and any shares, the admin page's "Memories
+sync" line seen in a browser, and then at least two weeks before Stage F (not before 2026-11-20).
 
 ### Rollback
 

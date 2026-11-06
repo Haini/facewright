@@ -220,7 +220,7 @@ copy Memories reads; `--hydrate` is the rollback).
 `facewright_clusters` and `facewright_user_faces` (state `FaceState`: pending, assigned, unassigned, unclusterable,
 ignored) are the source of truth for people and face assignments (`docs/own-tables.md`, Stage E). Recognize's
 `recognize_face_clusters` / `_detections` are a **copy for Memories**, written only by `ProjectionService`.
-**Live has run Stage E since 2026-11-06 (bridge 0.10.0); the rollback to Stage D is in that document.**
+**Live has run Stage E since 2026-11-06 (bridge 0.10.0); the rollback to Stage D is in that document. What is open next (day-after checks, Stage F not before 2026-11-20, Stage G) is at the top of that document.**
 
 - **Writers write ours, commit, then push.** `FaceStore` is the only writer of the two tables; each method returns the
   ids it changed, inside the caller's transaction. After the commit the caller calls `ProjectionService::push($faceIds,
