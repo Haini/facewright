@@ -15,16 +15,18 @@ work, stage by stage. Where they differ, Part 2 wins. Where this plan differs fr
 - **End state:** Memories gains a way to read people from our tables and write through our API, via
   an upstream pull request. No push is needed then.
 - **Until then:** a temporary one-way push keeps `oc_recognize_face_detections` and
-  `oc_recognize_face_clusters` up to date for Memories. Memories' people edits are refused, so the
-  People page is the only write path. Real Recognize stays installed, its classifier off.
+  `oc_recognize_face_clusters` up to date for Memories. Memories' and Photos' people edits are
+  answered by this app (a DAV router in front of Recognize's tree), so they reach the same code as the
+  People page. Real Recognize stays installed, its classifier off.
 - If upstream refuses, the temporary design stays. It must be good enough to live with.
 
 ## Decisions (made with the user, 2026-11-06)
 
 - **Memories PR is the target.** The push is a bridge to it, not the end state.
-- **Memories is read-only for people during the bridge.** Refusing the writes needs a small Sabre
-  plugin. It depends only on the `recognize/` DAV path prefix. Its cost is that Memories' rename,
-  delete and move actions show errors.
+- **Memories' people edits are routed, not refused** (changed 2026-11-06, after the first version of
+  Stage B refused them). A Sabre plugin turns the five requests Memories sends into `PeopleService`
+  calls. The cost is a deeper coupling than a refusal has: the path shapes, the `Destination` header and
+  the status codes. Anything it does not recognise is still refused, never passed to Recognize.
 - **The Stage 2 shim is not planned.** Real Recognize stays passive.
 
 Conventions: `rfd` = `oc_recognize_face_detections`, `rfc` = `oc_recognize_face_clusters`. Paths are
@@ -173,10 +175,14 @@ re-projecting, instead of losing curation or forcing a rescan.
 
 ## Known limits of this design
 
-- Memories' people actions show errors for as long as the bridge lasts, and that has no date.
+- The router depends on the path shapes, the `Destination` header and the status codes of Memories'
+  and Recognize's DAV calls. A release that changes them makes requests stop matching, and they are
+  refused with an error. That lasts as long as the bridge, which has no date.
+- Memories 11.0.2 offers no way to create a person from its UI, so the create route (`MKCOL`) is only
+  exercised by other clients.
 - Recognize can still queue `ClusterFacesJob` directly from its `FsActionService` handlers. Reconcile
   removes the rows afterwards but cannot stop the job running.
-- Photos' People view depends on Recognize's tree. It keeps reading and its writes are refused too.
+- Photos' People view uses the same tree, so its edits go through the router too. Not tested.
 - Upstream's reaction to the PR is unknown.
 
 ---
@@ -321,18 +327,24 @@ exact numbers are in the commit message that records this step. **Stage B can st
 
 ---
 
-## Stage B: Refuse Memories' writes
+## Stage B: Take over Memories' writes
 
 **Goal.** One write path. Without this, dual-write in Stage C would miss every Memories edit.
-Useful alone: "remove face" can no longer be undone by clustering, because it can only be done from
-the People page, which writes `-1`.
+Useful alone: "remove face" can no longer be undone by clustering, because it now writes `-1` through
+`PeopleService`, the same as the People page, instead of Recognize's `NULL`.
 
-### B.1 `RecognizeWriteGuardPlugin`
+**What changed during the work.** The first version only refused the writes (a 403 guard). Testing it
+through Memories' UI showed what that costs: every edit fails, and a merge shows one error toast per
+face. So the plugin became a router: the same hook, but the five requests are applied through
+`PeopleService`. The guard remains as the fallback for every shape it does not recognise. B.1 below is
+the original guard design, kept for its rationale; "As built" further down is what exists.
 
-New `lib/Dav/RecognizeWriteGuardPlugin.php`:
+### B.1 `RecognizeWriteGuardPlugin` (superseded by the router, see "As built")
+
+New `lib/Dav/RecognizeWriteRouterPlugin.php`:
 
 ```php
-class RecognizeWriteGuardPlugin extends \Sabre\DAV\ServerPlugin {
+class RecognizeWriteRouterPlugin extends \Sabre\DAV\ServerPlugin {
 	private const REFUSED = ['MOVE', 'DELETE', 'MKCOL', 'COPY', 'PUT', 'PROPPATCH'];
 	public function __construct(private IAppConfig $appConfig) {}
 	public function initialize(Server $server): void {
@@ -374,38 +386,58 @@ If any action leaves Memories broken rather than showing an error, stop and repo
 
 ### B.3 Say so in the UI
 
-- `templates/admin.php`: one line under the Memories toggle saying people are edited on the People page,
-  and that Memories' people actions are disabled.
-- CLAUDE.md: note in "Why Recognize cannot simply be uninstalled" that writes are refused.
+- `templates/admin.php`: one line under the Memories toggle saying edits made in Memories are applied
+  through this app.
+- CLAUDE.md: note in "Why Recognize cannot simply be uninstalled" that writes are routed.
 
-**Done on dev (2026-11-06).** As built: `lib/Dav/RecognizeWriteGuardPlugin.php`,
-`lib/Listener/SabrePluginListener.php`, registered in `Application::register()`. Two deviations from the
-plan: `<version>` was **not** bumped (nothing in `info.xml`, JS or the schema changed, and a bump forces an
-`occ upgrade` on live with its store updates), and `LOCK` is refused as well as the six listed methods.
+**As built (2026-11-06, dev only).** `lib/Dav/RecognizeWriteRouterPlugin.php`,
+`lib/Listener/SabrePluginListener.php` (adds it while Sabre is being set up), registered in
+`Application::register()`, plus `PeopleService::faceAssignment()`. Deviations from the plan above:
+`<version>` was **not** bumped (nothing in `info.xml`, JS or the schema changed, and a bump forces an
+`occ upgrade` on live with its store updates); the plugin routes instead of refusing; `LOCK` is refused
+along with `COPY`, `PUT` and `PROPPATCH`.
 
-Checked against the dev DAV tree: `PROPFIND` 207; `MKCOL`, `DELETE`, `MOVE`, `PUT` under `recognize/`
-403 with the tables unchanged; the face-level `DELETE` and `MOVE` 403; the normal Files DAV unaffected;
-an unauthenticated request still 401 (authentication runs first). With the switch off the same `MKCOL`
-created a person (201). The switch reaches the web process within about five seconds, not instantly:
-`occ config:app:set` writes from another process, so a test run straight after it can see the old value.
+How it works: `beforeMethod:*` (priority 20, after authentication) refuses `COPY`, `PUT`, `PROPPATCH`,
+`LOCK`, and any `MKCOL`/`MOVE`/`DELETE` whose shape it does not know. For the shapes it knows, a
+`method:*` handler (priority 90, ahead of Sabre's own at 100) calls `PeopleService`, sets the status and
+returns false so Recognize's code never runs. The user id in the path must equal the logged-in user.
 
-**B.2, driven through Memories' real UI** (Chromium on the dev stack, Memories 11.0.2). In every case
-the data was unchanged afterwards and Memories stayed usable:
-
-| Memories action | Request | What the user sees |
+| Request | Becomes | Status |
 |---|---|---|
-| Rename person | `MOVE faces/{p}` 403 | toast "Failed to rename P2 to ...", dialog stays open |
-| Remove person | `DELETE faces/{p}` 403 | toast "Failed to delete P2.", dialog stays open |
-| Merge with different person | one `MOVE` per face, all 403 | **one toast per face** ("Error while moving 200014-fw_rot.jpg"), dialog stays open |
-| Remove from person | `DELETE faces/{p}/{id}-{name}` 403 | toast "Failed to remove fw_modal.jpg from face." |
-| Move to person, create person | not driven in the UI | needs the viewer preference "Mark person in preview", which is not in the Settings dialog; the same requests were refused at DAV level (merge sends the identical face `MOVE`) |
+| `MKCOL faces/{name}` | create person; a duplicate or a purely numeric name is 403 | 201 |
+| `MOVE faces/{p}` to `faces/{new}` | rename; onto an existing name 403, unknown person 404 | 201 |
+| `DELETE faces/{p}` | delete person, faces become unassigned | 204 |
+| `DELETE faces/{p}/{id}-{file}` | take the face out of the person (unassigned, and it stays) | 204 |
+| `MOVE faces/{p}/{id}-{file}` or `unassigned-faces/{id}-{file}` to `faces/{q}/{id}-{file}` | move the face; 404 if it is not where the path says | 201 |
+| `DELETE unassigned-faces/{id}-{file}` | refused, as Recognize itself does | 403 |
 
-The merge result is the notable cost: a person with hundreds of faces produces hundreds of failed
-requests and toasts. Nothing server-side can shorten that, since Memories ignores the response body. If
-it turns out to be too disruptive, the fallback in "Known limits" (route the requests into our own code
-instead of refusing them) is the answer.
+**Verified on dev.** A 33-check battery against the DAV tree (every operation, each error case, the
+database state after each step) passed, and so did cross-user checks with a second account: naming
+another user's tree in the path is 403 for `MKCOL`, `DELETE` and `MOVE`, while the account's own tree
+works. The normal Files DAV is unaffected, an unauthenticated request is still 401, and with the API key
+required and none sent the request is 403 and creates nothing.
 
-**Stage B rollback:** the appconfig switch above.
+**Driven through Memories' real UI** (Chromium on the dev stack, Memories 11.0.2, API key required):
+
+| Memories action | Result |
+|---|---|
+| Rename person | `MOVE` 201, the page moved to the new name |
+| Remove from person | `DELETE` 204, the photo left the person and shows under Unassigned |
+| Merge with different person | five face `MOVE`s, all 201; the people merged, no error toasts |
+| Remove person | `DELETE` 204 |
+| Move to person (from Unassigned faces) | `MOVE` 201, the person grew by one, Unassigned shrank by one |
+| Create person | not offered by this Memories version's UI; the route is tested at DAV level only |
+
+Differences from Recognize's own behaviour, all intended: removing a face writes `-1` (unassigned)
+instead of `NULL`, so clustering no longer puts it back; a person emptied by a merge stays as an empty
+named person, which Memories hides (it only lists people with photos) and the People page lists, as it
+always lists named people (`occ facewright:people <user> --delete-empty` removes them).
+
+The setting `block_recognize_writes` is the switch: `false` hands writes back to Recognize. It reaches
+the web process within about five seconds, not instantly, because `occ config:app:set` writes from
+another process.
+
+**Stage B rollback:** set `block_recognize_writes` to `false`; Recognize handles writes itself again.
 
 ---
 
@@ -751,7 +783,7 @@ keeping the `FaceStore` call:
   This is the one remaining direct `rfd` write, because a full reset must not depend on the projection.
 - **`Command/ReopenUnassigned`:** state update, `pushFaces(ids)`.
 
-Then remove the appconfig switch `block_recognize_writes` from `RecognizeWriteGuardPlugin`. From here on,
+Then remove the appconfig switch `block_recognize_writes` from `RecognizeWriteRouterPlugin`. From here on,
 allowing Recognize's writes would lose them and would reach `FacePhoto::delete()` with an empty vector.
 
 ### E.6 Admin status
@@ -819,7 +851,7 @@ inside a rolled-back transaction, delete by that list, and print `before − lis
   the projection; sentinels move to `FaceState`; "Coexisting with Recognize" keeps only what still applies,
   and states that a wipe is now recoverable with `occ facewright:project`; `occ` list; `.noimage` handling; Open
   items 4 and 6 updated.
-- `README.md`: "Current limitations" gains the read-only Memories note.
+- `README.md`: no Memories note is needed; editing keeps working.
 - `docs/independence.md`: mark what is done.
 
 ---
@@ -862,7 +894,7 @@ because of "One id space", so `memories_covers` keeps working once `clustertype`
 Only after G.3 runs on production.
 
 1. Stop calling `ProjectionService`; remove it, `ProjectionReconcileService`, the job, the command and
-   `RecognizeWriteGuardPlugin`.
+   `RecognizeWriteRouterPlugin`.
 2. Decide with the user whether Recognize can be uninstalled. Photos' People view stops working if it is.
    If yes: `.noimage` markers become irrelevant, CLAUDE.md's coexistence section goes, and `rfd`/`rfc` can be
    dropped only after a dump.

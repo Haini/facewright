@@ -44,15 +44,19 @@ Three hard dependencies on the app being **enabled**, not just on its tables exi
    against Recognize's `OCA\Recognize\Dav\RootCollection` at `/remote.php/dav/recognize/...`.
 3. Memories' frontend hardcodes `recognize` and `facerecognition` as the only people backends.
 
-Writes from Memories and Photos are refused: `RecognizeWriteGuardPlugin` answers 403 to any change under
-`recognize/` in the DAV tree (people are edited on the People page), switchable with the appconfig key
-`block_recognize_writes` (it takes a few seconds to reach the web process). Memories shows one error
-toast per face it tried to move, so a merge of a big person is noisy. Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
+Writes from Memories and Photos are answered by this app, not by Recognize: `RecognizeWriteRouterPlugin`
+turns the five DAV requests they send (create, rename, delete person; remove or move a face) into
+`PeopleService` calls, scoped to the logged-in user, and refuses any other change under `recognize/`.
+The appconfig key `block_recognize_writes` = `false` hands writes back to Recognize (it takes a few
+seconds to reach the web process). The coupling is the path shapes, the `Destination` header and the
+status codes; see `docs/own-tables.md`, Stage B.
+
+Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
 Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
 causes, and the stages already done are in `docs/independence.md` and
 `docs/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
-data in tables we own, a temporary one-way push to Recognize's tables with Memories read-only for
-people, and an upstream Memories change as the end state. It replaces the `recognize`-contract shim.
+data in tables we own, a temporary one-way push to Recognize's tables with Memories' edits routed through
+our people service, and an upstream Memories change as the end state. It replaces the `recognize`-contract shim.
 
 ## Components
 

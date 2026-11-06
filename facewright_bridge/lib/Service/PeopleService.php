@@ -191,6 +191,26 @@ class PeopleService {
 		return (int)$qb->executeQuery()->fetchOne();
 	}
 
+	/**
+	 * Where one of $userId's faces currently sits: a person's id, or one of ClusteringService's
+	 * sentinels, or null while it is still pending. The DAV router needs it to refuse a request
+	 * whose path names the wrong person.
+	 *
+	 * @throws \InvalidArgumentException if $detectionId isn't $userId's
+	 */
+	public function faceAssignment(string $userId, int $detectionId): ?int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('cluster_id')
+			->from('recognize_face_detections')
+			->where($qb->expr()->eq('id', $qb->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+		$row = $qb->executeQuery()->fetchAssociative();
+		if ($row === false) {
+			throw new \InvalidArgumentException("Face {$detectionId} does not exist for {$userId}.");
+		}
+		return $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null;
+	}
+
 	/** @return list<array{id: int, file_id: int, x: float, y: float, width: float, height: float}> */
 	private function listFacesByClusterId(string $userId, int $clusterId, ?int $limit, int $offset): array {
 		$qb = $this->db->getQueryBuilder();
