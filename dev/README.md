@@ -27,6 +27,7 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `battery.sh` | the DAV write router: what is applied, refused, left alone | restores itself |
 | `writers-people.sh` | every People API write | yes (restore) |
 | `writers-cluster.sh` | reopen, assign, mark unclusterable, clear marks, resets | yes (restore) |
+| `persist-guard.sh` (+ `persist_guard.php`) | a clustering pass writing after a human changed the rows: the human wins, and a person the pass left empty goes | yes (restore) |
 | `writers-files.sh` | detection with a real face, copy, prune, a real share, delete | cleans up |
 | `chain-loop-test.sh dangling\|assignable` | the clustering chain ends; fails on code from before "progress means rows written" | yes (restore) |
 | `clustering-sets.sh save\|compare` (+ `members.py`) | who ends up with whom, independent of numbering | yes (restore) |

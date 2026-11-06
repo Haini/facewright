@@ -595,66 +595,40 @@ class ClusteringService {
 	 * @return list<int> ids of the rows actually written
 	 */
 	private function persistAssignments(string $userId, array $detections, array $ids, array $createdClusterIds): array {
-		$ids = array_values(array_unique($ids));
-
-		$targets = [];
-		foreach ($ids as $id) {
-			if ($detections[$id]['cluster_id'] !== null) {
-				$targets[(int)$detections[$id]['cluster_id']] = true;
-			}
-		}
-		$existing = [];
-		foreach (array_chunk(array_keys($targets), 1000) as $batch) {
-			$qb = $this->db->getQueryBuilder();
-			$qb->select('id')
-				->from('facewright_clusters')
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
-			$result = $qb->executeQuery();
-			while (($clusterId = $result->fetchOne()) !== false) {
-				$existing[(int)$clusterId] = true;
-			}
-			$result->closeCursor();
-		}
-
-		$uf = $this->db->getQueryBuilder()->getTableName('facewright_user_faces');
-		$fc = $this->db->getQueryBuilder()->getTableName('facewright_clusters');
-		$written = 0;
+		$byPerson = [];
 		$requested = 0;
-		$writtenIds = [];
-		$this->inTransaction(function () use ($userId, $detections, $ids, $createdClusterIds, $existing, $uf, $fc, &$written, &$requested, &$writtenIds): void {
-			foreach ($ids as $id) {
-				$clusterId = $detections[$id]['cluster_id'];
-				if ($clusterId === null) {
-					continue;
-				}
+		foreach (array_values(array_unique($ids)) as $id) {
+			$clusterId = $detections[$id]['cluster_id'];
+			if ($clusterId !== null) {
+				$byPerson[(int)$clusterId][] = (int)$id;
 				$requested++;
-				if (!isset($existing[(int)$clusterId])) {
-					continue;
-				}
-				// Guarded on OUR row: still pending or unclusterable, this user's, and the person still exists.
-				// The read that chose the face and this guard must test the same table.
-				$changed = $this->db->executeStatement(
-					"UPDATE {$uf} SET state = " . FaceState::ASSIGNED . ', cluster_id = ? WHERE id = ? AND user_id = ? AND state IN ('
-					. FaceState::PENDING . ',' . FaceState::UNCLUSTERABLE . ") AND EXISTS (SELECT 1 FROM {$fc} c WHERE c.id = ? AND c.user_id = ?)",
-					[(int)$clusterId, (int)$id, $userId, (int)$clusterId, $userId],
-				);
-				$written += $changed;
-				if ($changed > 0) {
-					$writtenIds[] = (int)$id;
+			}
+		}
+
+		$writtenIds = $this->inTransaction(function () use ($userId, $byPerson, $createdClusterIds): array {
+			$written = [];
+			foreach ($byPerson as $clusterId => $faceIds) {
+				// Only faces still pending or unclusterable, into a person that still exists: whatever a human did
+				// meanwhile wins. The read that chose the face and this guard test the same table.
+				try {
+					array_push($written, ...$this->faceStore->setState(
+						$userId, $faceIds, FaceState::ASSIGNED, $clusterId, [FaceState::PENDING, FaceState::UNCLUSTERABLE],
+					));
+				} catch (\InvalidArgumentException) {
+					continue; // the person was deleted during the pass
 				}
 			}
-
 			if ($createdClusterIds !== []) {
 				$this->faceStore->deleteEmptyUntitled($userId, $createdClusterIds);
 			}
+			return $written;
 		});
 		// People first, then faces, then the people that did not survive: ProjectionService orders it.
 		$this->projection->push($writtenIds, $createdClusterIds);
 
-		if ($written < $requested) {
+		if (count($writtenIds) < $requested) {
 			$this->logger->info(
-				'facewright: ' . ($requested - $written) . " cluster assignment(s) for {$userId} skipped, rows changed during the pass",
+				'facewright: ' . ($requested - count($writtenIds)) . " cluster assignment(s) for {$userId} skipped, rows changed during the pass",
 				['app' => 'facewright_bridge'],
 			);
 		}

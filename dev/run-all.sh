@@ -22,6 +22,7 @@ run reads-direct-stable    "$DEV_DIR/reads-direct.sh" stable
 run dav-battery            "$DEV_DIR/battery.sh"
 run writers-people         "$DEV_DIR/writers-people.sh"
 run writers-cluster        "$DEV_DIR/writers-cluster.sh"
+run persist-guard          "$DEV_DIR/persist-guard.sh"
 run writers-files          "$DEV_DIR/writers-files.sh"
 run chain-dangling         "$DEV_DIR/chain-loop-test.sh" dangling
 run chain-assignable       "$DEV_DIR/chain-loop-test.sh" assignable
