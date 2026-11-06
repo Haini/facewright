@@ -110,6 +110,8 @@ class ProjectionService {
 	public function markClean(int $seenSeq): void {
 		if ($this->dirtySeq() === $seenSeq) {
 			$this->appConfig->setValueInt(self::APP_ID, self::KEY_CLEAN, $seenSeq);
+			$this->appConfig->deleteKey(self::APP_ID, self::KEY_ERROR);
+			$this->appConfig->deleteKey(self::APP_ID, self::KEY_ERROR_AT);
 		}
 		$this->appConfig->setValueInt(self::APP_ID, self::KEY_OK_AT, time());
 	}
@@ -224,11 +226,10 @@ class ProjectionService {
 	 * Concurrent writers contend for the same person row; InnoDB rolls one back. Run it again, with a random
 	 * pause so the colliding statements do not collide again in step.
 	 */
-	private function withRetry(callable $statement): void {
+	private function withRetry(callable $statement): mixed {
 		for ($attempt = 1;; $attempt++) {
 			try {
-				$statement();
-				return;
+				return $statement();
 			} catch (DbException $e) {
 				$retryable = in_array($e->getReason(), [DbException::REASON_DEADLOCK, DbException::REASON_LOCK_WAIT_TIMEOUT], true);
 				if (!$retryable || $attempt >= self::MAX_TRIES) {
@@ -428,17 +429,15 @@ class ProjectionService {
 			// Re-checked in the statement: only a row with no visible face of ours behind it. (A hidden face of
 			// ours has no claim on a row in Recognize's table, and a row with no face of ours at all is a stale copy.)
 			$visible = FaceState::ASSIGNED . ',' . FaceState::UNASSIGNED;
-			$this->withRetry(fn () => $this->db->executeStatement(
+			$report['repaired']['C'] += $this->withRetry(fn () => $this->db->executeStatement(
 				"DELETE FROM {$rfd} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$uf} WHERE state IN ({$visible}))"
 			));
-			$report['repaired']['C'] += count($chunk);
 		}
 		foreach (array_chunk($fixDs, self::CHUNK) as $chunk) {
-			$this->withRetry(fn () => $this->db->executeStatement(
+			$report['repaired']['D_stale'] += $this->withRetry(fn () => $this->db->executeStatement(
 				"DELETE FROM {$rfc} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$fc}) "
 				. "AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = {$rfc}.id)"
 			));
-			$report['repaired']['D_stale'] += count($chunk);
 		}
 	}
 
