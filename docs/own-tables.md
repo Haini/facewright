@@ -304,6 +304,21 @@ dump of the face tables (`<backups>/` holds the previous ones). Record the numbe
 follows. If duplicates exist, stop and report them with their row details: which row wins is the user's
 decision.
 
+**Done (2026-11-06).** Backup in `<backups>/facewright-pre-own-tables/`: `face-tables.sql.gz` (the eight
+face-related tables, `--single-transaction`) and `bridge-0.8.0.tgz`. The bridge files were copied to live
+**without running `occ upgrade`**: `occ app:update --showonly` on live lists a dozen pending store updates,
+among them Memories 11.0.2 and Recognize 12.0.3, and `occ upgrade` applies them. So the live copy's
+`info.xml` was set back to 0.8.0, which leaves no pending upgrade and registers the command. The next real
+deploy (any stage with a migration, C.1 first) needs a version bump and therefore an upgrade: decide then,
+with the user, whether to hold the store updates back (`appstoreenabled=false` for the duration is the
+thing to try on dev first; it is untested).
+
+The precheck ran in about five seconds and every must-be-zero count was zero, confirmed by independent
+SQL: no unbackfilled rows, no user mismatches, no duplicate (user, face) pairs, no links to missing faces.
+Informational: a few dozen unlinked rows (Recognize's legacy rows and the degenerate all-zero one) and
+fifteen rows assigned to one person who no longer exists; the backfill reopens those as pending. The
+exact numbers are in the commit message that records this step. **Stage B can start.**
+
 ---
 
 ## Stage B: Refuse Memories' writes

@@ -348,6 +348,9 @@ that are easy to get wrong:
   a `<version>` bump
   plus `occ upgrade`.** `occ migrations:*` commands are not available; the version bump is what
   makes Nextcloud run the app's pending migrations, exactly as an app-store update would.
+- **`occ upgrade` also applies every pending App Store update** (Recognize and Memories included), and
+  a Recognize update can change its write paths. Check `occ app:update --showonly` first. For a
+  command-only change, copy the files without bumping `<version>` and nothing needs upgrading.
 - **JS changes need a version bump too**: the `?v=` cache-buster is `substr(md5($appVersion),0,8)`,
   so browsers keep the old `admin.js` until the version changes. PHP templates and services do
   not need this (opcache revalidates on a timer).
