@@ -30,6 +30,7 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `writers-files.sh` | detection with a real face, copy, prune, a real share, delete | cleans up |
 | `chain-loop-test.sh dangling\|assignable` | the clustering chain ends; fails on code from before "progress means rows written" | yes (restore) |
 | `clustering-sets.sh save\|compare` (+ `members.py`) | who ends up with whom, independent of numbering | yes (restore) |
+| `clustering-truth.sh` (+ `truth.py`, `fetch-dataset.sh`) | clustering against labelled identities (Georgia Tech set, downloaded into `.work/`, never committed: no stated licence); the oracle `truth.py USER` checks pure / complete / same in Recognize's table and is proven able to fail | yes (restore) |
 | `memories-ui/flows.py` | Memories' own UI: rename, remove face, move face, merge, remove person; requests and database | yes (restore) |
 | `live-capture.sh OUT users` | read-only capture for another instance (`NC_CONTAINER=…`); pause processing first | no |
 | `make-shared-fixture.sh`, `check-fixture.sh` | shared-file fixture and the preconditions the suites need | fixture only |
