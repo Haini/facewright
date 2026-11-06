@@ -31,6 +31,7 @@ QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\FacewrightBridge\Command\People</command>
 		<command>OCA\FacewrightBridge\Command\MigrateFaces</command>
 		<command>OCA\FacewrightBridge\Command\OwnTables</command>
+		<command>OCA\FacewrightBridge\Command\Project</command>
 	</commands>
 	<!-- app-info.xsd declares <settings> as an xs:sequence: admin, admin-section, personal,
 	     personal-section. Reordering these makes the app info fail to parse. -->

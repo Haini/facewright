@@ -21,6 +21,7 @@ run writers-cluster        "$DEV_DIR/writers-cluster.sh"
 run writers-files          "$DEV_DIR/writers-files.sh"
 run chain-dangling         "$DEV_DIR/chain-loop-test.sh" dangling
 run chain-assignable       "$DEV_DIR/chain-loop-test.sh" assignable
+run project-drift          "$DEV_DIR/project-drift.sh"
 run clustering-truth       "$DEV_DIR/clustering-truth.sh"      # downloads the dataset on first use
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
