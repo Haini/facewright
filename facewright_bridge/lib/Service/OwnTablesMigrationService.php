@@ -40,7 +40,7 @@ class OwnTablesMigrationService {
 		$rfc = $this->table('recognize_face_clusters');
 		$links = $this->table('facewright_detection_faces');
 		$faces = $this->table('facewright_faces');
-		$floor = DetectionService::VECTOR_LENGTH_FLOOR;
+		$unlinked = $this->unlinkedRows($rfd, $links);
 
 		return [
 			'detections_total' => $this->count("SELECT COUNT(*) FROM {$rfd}"),
@@ -49,15 +49,9 @@ class OwnTablesMigrationService {
 			),
 			// Long enough to be ours by the old proxy but with no link: not yet backfilled by
 			// occ facewright:migrate-faces. The own-tables backfill would silently skip them.
-			'unlinked_long_rows' => $this->count(
-				"SELECT COUNT(*) FROM {$rfd} d LEFT JOIN {$links} l ON l.detection_id = d.id "
-				. "WHERE l.detection_id IS NULL AND CHAR_LENGTH(d.face_vector) > {$floor}"
-			),
+			'unlinked_long_rows' => $unlinked['long'],
 			// Not ours: Recognize's legacy rows and the degenerate all-zero embedding.
-			'unlinked_other_rows' => $this->count(
-				"SELECT COUNT(*) FROM {$rfd} d LEFT JOIN {$links} l ON l.detection_id = d.id "
-				. "WHERE l.detection_id IS NULL AND CHAR_LENGTH(d.face_vector) <= {$floor}"
-			),
+			'unlinked_other_rows' => $unlinked['other'],
 			'link_user_mismatch' => $this->count(
 				"SELECT COUNT(*) FROM {$rfd} d INNER JOIN {$links} l ON l.detection_id = d.id "
 				. 'WHERE l.user_id <> d.user_id'
@@ -92,6 +86,41 @@ class OwnTablesMigrationService {
 			'people_without_members_titled' => $this->count($this->emptyPeople($rfc, $rfd, $links) . " AND c.title <> ''"),
 			'people_without_members_untitled' => $this->count($this->emptyPeople($rfc, $rfd, $links) . " AND c.title = ''"),
 		];
+	}
+
+	/**
+	 * Splits the detection rows that have no link by whether their vector is long enough to be ours.
+	 *
+	 * Two steps on purpose. CHAR_LENGTH(face_vector) in the same statement as the join leaves the
+	 * order of evaluation to the optimizer, and a plan that measures every row reads every off-page
+	 * vector of the table: about a gigabyte on a real library, evicting everyone else's cache. The
+	 * ids come from the index-only join first, and only those rows are measured.
+	 *
+	 * @return array{long: int, other: int}
+	 */
+	private function unlinkedRows(string $rfd, string $links): array {
+		$floor = DetectionService::VECTOR_LENGTH_FLOOR;
+		$long = 0;
+		$other = 0;
+
+		$result = $this->db->executeQuery(
+			"SELECT d.id FROM {$rfd} d LEFT JOIN {$links} l ON l.detection_id = d.id WHERE l.detection_id IS NULL ORDER BY d.id"
+		);
+		$ids = [];
+		while (($id = $result->fetchOne()) !== false) {
+			$ids[] = (int)$id;
+		}
+		$result->closeCursor();
+
+		foreach (array_chunk($ids, 1000) as $chunk) {
+			$list = implode(',', $chunk); // integers only
+			$row = $this->db->executeQuery(
+				"SELECT COALESCE(SUM(CHAR_LENGTH(face_vector) > {$floor}), 0) AS long_rows, COUNT(*) AS total FROM {$rfd} WHERE id IN ({$list})"
+			)->fetchAssociative();
+			$long += (int)$row['long_rows'];
+			$other += (int)$row['total'] - (int)$row['long_rows'];
+		}
+		return ['long' => $long, 'other' => $other];
 	}
 
 	private function emptyPeople(string $rfc, string $rfd, string $links): string {
