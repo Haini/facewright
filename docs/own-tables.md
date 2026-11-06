@@ -449,6 +449,11 @@ while all router testing was on 11.0.2 and 12.0.3; the request shapes were read 
 match, but a real rename in the live Memories UI is the test. Rollback: the switch above, or restore the
 tarball.
 
+**Confirmed on live by the user (2026-11-06):** a merge and several renames through Memories 10.1.0 worked.
+The web log shows about 2,400 face `MOVE`s answered 201 and one person-level `MOVE` answered 403, probably a
+rename onto a name that already exists (refused by design, as Recognize itself did); not confirmed. No
+errors from our code in the log, and the precheck afterwards was clean (the merge removed one person).
+
 ---
 
 ## Stage C: Expand
