@@ -1,30 +1,40 @@
 # Owning the face data: review and implementation plan
 
-> ## Where things stand (updated 2026-11-06, evening) — read this first
+> ## Where things stand (updated 2026-11-07) — read this first
 >
 > **Stages A to E are done and live.** Live (`<app>`) runs bridge 0.10.0: our tables are the source of
 > truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
-> confirmed in Memories that rename, move and remove-face edits work and show at once. Merged to `master`
-> (fast-forward, 2026-11-06; the branch `docs/own-tables` was then deleted, nothing pushed). Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
+> confirmed in Memories that rename, move and remove-face edits work and show at once. The work is on `master`, not
+> pushed. Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
 >
-> **What is open, in order** (nothing below is started; each destructive one needs the user's go-ahead):
-> 1. **Day-after check (from 2026-11-07).** On live, `docker exec -u www-data <app> php occ facewright:project
->    --dry-run` must show A = 0, C = 0, D = 0 (B stays 44,858 until faces change, legacy 40) and
->    `occ facewright:own-tables --verify` must exit 0. The log (`grep -i facewright /var/www/html/data/nextcloud.log`,
->    ignoring the 20:26 upgrade-window lines of 2026-11-06) must hold nothing of ours. Do this after a clustering run
->    and after any share has happened; if neither has occurred yet, say so rather than calling it clean. Also open the
->    admin page and confirm the "Memories sync" line says up to date (never looked at in a browser).
-> 2. **Anything non-zero in A, C or D:** do not repair blindly. Run `project` (it repairs), then find which writer
->    left the drift (the push logs and marks the copy dirty; the hourly `ProjectionMaintenanceJob` also repairs).
->    A repeating drift is a missed writer: fix the writer. Rollback tiers R1 to R3 are below.
-> 3. **Stage F** (delete the 44,858 hidden rows, blank vectors, drop transitional code) waits at least two weeks after
->    the cutover, i.e. not before 2026-11-20, and needs the user's explicit go-ahead.
+> **What is open, in order** (nothing below is started; each destructive step needs the user's go-ahead):
+> 1. **Day-after check (from 2026-11-07).** A clean dry run alone proves little, because the hourly
+>    `ProjectionMaintenanceJob` repairs drift before anyone looks. The evidence is what the job logged. On live:
+>    ```
+>    docker exec -u www-data <app> php occ facewright:project --dry-run
+>    docker exec -u www-data <app> php occ facewright:own-tables --verify
+>    docker exec -u www-data <app> php occ config:app:get facewright_bridge projection_last_error
+>    docker exec <app> grep '"app":"facewright_bridge"' /var/www/html/data/nextcloud.log
+>    ```
+>    Expected: A = C = D = 0, `--verify` exits 0, B 44,858 or lower (it falls as faces change, it never rises), legacy
+>    40, and no `projection_last_error` value (the command exits 1 when the key is unset). In the log, read every
+>    `repaired N difference(s) ... (A x, C y, D z)` line and any error. C after a share is expected: Recognize's own
+>    access sync writes rows, and that is what reconcile removes. A or D needs an explanation: a failed push logs an
+>    error, Recognize's handlers can delete rows; with neither, a writer is missing its push. Do this after a clustering
+>    run and a share have happened; if either has not, say so rather than calling it clean. Also open the admin page
+>    and confirm the "Memories sync" line says up to date (never looked at in a browser).
+> 2. **If A, C or D is not 0:** save the dry-run output first, then find the cause, and only then run `occ
+>    facewright:project` (the hourly job may repair it first, so check the log too). Drift that comes back is a missed
+>    writer: fix the writer. Rollback tiers are under "Rollback".
+> 3. **Stage F** (delete the hidden rows, blank vectors, drop transitional code) waits at least two weeks after the
+>    cutover, so not before 2026-11-20, and needs the user's explicit go-ahead.
 > 4. **Stage G** (the Memories pull request) posts publicly: only with the user's go-ahead.
 >
 > **Verification tooling** is under `dev/` (`dev/README.md`; `dev/run-all.sh --ui` on the compose stack, which takes a
-> lock because the dev DB is shared). Last full run: 15 of 16, the remaining one (rollback drill) fixed afterwards.
-> The ground-truth clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from the Georgia Tech set, which
-> is fetched, never committed) passed 15/15.
+> lock because the dev DB is shared). The last full run passed 15 of 16 suites. The one failure was the rollback drill,
+> which was then fixed and passed 23 of 23 on its own; there has been no full 16-of-16 run since. The ground-truth
+> clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from the Georgia Tech set, which is fetched, never
+> committed) passed 15 of 15.
 >
 > **Things that bit and will again:** Apache's opcache revalidates every 60 s (`reload_web` after editing source in
 > tests); `docker exec -i` is needed for piped stdin; `occ upgrade` applies every pending store update (check
@@ -65,7 +75,7 @@ relative to `facewright_bridge/` unless they start with `docs/` or `/mnt/`.
 
 ## Current table usage
 
-Verified against the working tree at `1ef8cc6`.
+As it stood before this work (`1ef8cc6`); the last column is where each table ended up or will.
 
 | Table | Holds | Owner | Fate |
 |---|---|---|---|
@@ -73,28 +83,22 @@ Verified against the working tree at `1ef8cc6`.
 | `facewright_processed` | per-user idempotency marker | us | keep |
 | `facewright_cluster_centroids` | cached centroid per person | us | keep, ids stay valid |
 | `facewright_merge_dismissals` | dismissed merge pairs | us | keep, ids stay valid |
-| `facewright_detection_faces` | `rfd.id` to `facewright_faces.id` link | us | replaced |
-| `rfd` | per-user row, `cluster_id` state, duplicated geometry, `face_vector`, `threshold` | Recognize | becomes a projection |
-| `rfc` | people, titles | Recognize | becomes a projection |
+| `facewright_detection_faces` | `rfd.id` to `facewright_faces.id` link | us | still written, dropped in F.2 |
+| `rfd` | per-user row, `cluster_id` state, duplicated geometry, `face_vector`, `threshold` | Recognize | a copy since Stage E |
+| `rfc` | people, titles | Recognize | a copy since Stage E |
 | `memories_covers` | a detection id per cluster | Memories | read only by Memories; our ids must stay stable |
 | `filecache`, mounts | enumeration and access | core | read-only, stays |
 | appconfig `recognize/faces.enabled` | Memories' gate | Recognize | stays until the PR ships |
 
-References to `recognize_face_*` by file (`grep -c`, comments included): `PeopleService` 25,
-`ClusteringService` 16, `DetectionService` 8, `AccessSyncService` 8, `ResetService` 4,
-`FaceMigrationService` 4, `VectorCompactionService` 3, `Command/ResetFacewrightData` 2,
-`Command/ReopenUnassigned` 2, and 1 each in `SuggestionService`, `FacePreviewController` and
-`Command/ClusterFaces`. There are none in `js/` or `templates/`. However, `js/people.js:566-661`
-reads the sentinels from `face.cluster_id`, so the API must keep emitting them.
+`js/people.js` reads the sentinels from `face.cluster_id`, so the API must keep emitting them.
 
 ## What else writes to `rfd` and `rfc`
 
-Code read from Recognize 12.0.2 and Memories 10.1.0 (the live versions, under
-`<apps-dir>/`). Behaviour observed on the dev stack, which runs Recognize 12.0.3 and
-Memories 11.0.2 (Stage A.2). **The two Recognize versions differ**, so what live does after a Recognize
-update changes:
+Code read from Recognize 12.0.2 and Memories 10.1.0, what live ran at the time (under
+`<apps-dir>/`). Behaviour observed on the dev stack on Recognize 12.0.3 and Memories 11.0.2
+(Stage A.2), which live has run since the upgrade recorded under Stage B. The two Recognize versions differ:
 
-| | 12.0.2 (live) | 12.0.3 (dev, observed) |
+| | 12.0.2 (read, gone from live) | 12.0.3 (live and dev, observed on dev) |
 |---|---|---|
 | Move | `FsMove` carries owner, added users, target users; `onMove` copies to added users and deletes for everyone else | `FsMove` carries only the node id (a migration drops the three columns); a move on its own changed nothing |
 | Access update | uses the mount root's user list for every file in the mount, so a sub-shared folder can lose its rows | resolves access per file (`syncDetectionsForFile`) |
@@ -177,8 +181,9 @@ No foreign keys, like every other table of ours.
 Own ids equal projected ids. So `facewright_cluster_centroids`, `facewright_merge_dismissals`,
 `memories_covers`, the OCS API and the People page URLs all stay valid, and no mapping table exists.
 Backfilled rows keep their ids. Stage E seeds the own autoincrement counters above `max(rfd.id)` and
-`max(rfc.id)`. A foreign row that later occupies an id we allocate is overwritten; by the projection's
-rule, unknown rows have no claim on those tables. This is MariaDB-only: PostgreSQL does not advance a
+`max(rfc.id)`. Pushing an explicit id moves Recognize's counter past it, so the two still meet: a foreign
+row on an id we allocate is overwritten if that face is visible and removed by reconcile if it is hidden (Stage E,
+"squatters"). By the projection's rule, unknown rows have no claim on those tables. This is MariaDB-only: PostgreSQL does not advance a
 sequence on explicit inserts. Record that as a limitation, consistent with the rest of the project
 targeting MariaDB.
 
@@ -187,13 +192,14 @@ targeting MariaDB.
 `ProjectionService` makes `rfd` and `rfc` match our tables:
 
 - **Sparse.** Only `ASSIGNED` and `UNASSIGNED` faces are projected. We then never write a NULL
-  `cluster_id`, which removes our part in arming `MaintenanceJob`, and the sentinels `-2` and `-3` never
-  appear in Recognize's table.
-- **`face_vector` is `'[]'`.** Valid JSON, never decoded by Memories. It is safe only because the write
-  guard makes `FacePhoto::delete()`, the one reader that needs a real vector, unreachable.
-- **One write shape.** In a transaction per chunk: delete by id list, then `INSERT ... SELECT` from our
-  tables for those ids, restricted to visible states. That covers insert, update and removal with one
-  code path. A row that left the visible set simply is not re-inserted.
+  `cluster_id`, which removes our part in arming `MaintenanceJob`, and never write the sentinels `-2` and `-3`. Rows
+  already there from before the cutover stay until F.1; `--hydrate`, the rollback, writes all of them back.
+- **`face_vector`.** `'[]'` on rows the projection creates, never touched on rows that exist (F.1 blanks those).
+  Valid JSON, never decoded by Memories. Safe only because the DAV router makes `FacePhoto::delete()`, the one reader
+  that needs a real vector, unreachable.
+- **One write shape.** Per chunk, `INSERT ... SELECT ... ON DUPLICATE KEY UPDATE` for the visible ids and a delete for
+  ids no longer visible; people that exist first, deleted people last. The first design, delete-then-insert, was
+  dropped: it races between two pushes and would wipe real vectors.
 - **In-process, after commit.** Same database, so no queue or outbox is needed. The caller commits
   its own transaction first, then pushes.
 - **Failure isolation.** A push failure is logged and must not fail the caller's write: a Recognize
@@ -234,8 +240,8 @@ re-projecting, instead of losing curation or forcing a rescan.
 4. **Stop and report rather than improvise** when a count pair does not reconcile, a `--verify` reports
    a mismatch, or a construct in this plan does not exist in `OCP\DB` on the running version.
 5. **Deploy mechanics** (from CLAUDE.md, repeated because every stage needs them):
-   - Migrations, new commands and new background jobs need `<version>` bumped in `appinfo/info.xml` plus
-     `occ upgrade`.
+   - Migrations and new background jobs need `<version>` bumped in `appinfo/info.xml` plus `occ upgrade`. A new
+     command does not (it is read from `info.xml` at run time; Stage A.4 shipped one that way).
    - Any `js/*.js` change needs the same bump (the cache-buster is `md5($appVersion)`).
    - A new `appinfo/routes.php` entry needs the web container restarted.
 6. **Do not touch** `ex_app/`, `Dockerfile`, `Makefile`, `start.sh` or `requirements.txt`. Do not add a
@@ -474,11 +480,8 @@ instead of `NULL`, so clustering no longer puts it back; a person emptied by a m
 named person, which Memories hides (it only lists people with photos) and the People page lists, as it
 always lists named people (`occ facewright:people <user> --delete-empty` removes them).
 
-The setting `block_recognize_writes` is the switch: `false` hands writes back to Recognize. It reaches
-the web process within about five seconds, not instantly, because `occ config:app:set` writes from
-another process.
-
-**Stage B rollback:** set `block_recognize_writes` to `false`; Recognize handles writes itself again.
+The setting `block_recognize_writes` was the switch until Stage E removed it (see "As built" there): `false` handed
+writes back to Recognize.
 
 **Deployed to live (2026-11-06).** Copied with the version left at 0.8.0 and no `occ upgrade`: the router
 has no migration and no `info.xml` change, and an upgrade would also apply the pending App Store updates
@@ -487,8 +490,7 @@ has no migration and no `info.xml` change, and an upgrade would also apply the p
 errors, `occ` loads, and an unauthenticated DAV request is 401 (a 500 would mean the plugin failed to
 build). **Not checked on live:** an authenticated edit. Live runs Memories 10.1.0 and Recognize 12.0.2,
 while all router testing was on 11.0.2 and 12.0.3; the request shapes were read from the 10.1.0 bundle and
-match, but a real rename in the live Memories UI is the test. Rollback: the switch above, or restore the
-tarball.
+match, but a real rename in the live Memories UI is the test. Rollback at the time: the switch, or restore the tarball.
 
 **Confirmed on live by the user (2026-11-06):** a merge and several renames through Memories 10.1.0 worked.
 The web log shows about 2,400 face `MOVE`s answered 201 and one person-level `MOVE` answered 403, probably a
@@ -884,7 +886,7 @@ Fixed (E.0): those rows were reopened to `NULL` in Recognize's table (id list du
 
 ## Stage E: Push instead of mirror
 
-**Status: built and verified on dev (2026-11-06); NOT deployed to live. Live still runs Stage D until the cutover below, which needs the user's go-ahead and a quiet window.** See "As built" at the end of this stage for what differs from the plan.
+**Status: live since 2026-11-06.** See "As built" for what differs from the plan and "Stage E on live" for the cutover.
 
 **Goal.** Our tables are the source of truth; Recognize's `rfd` and `rfc` become a copy that a projection writes.
 **This is the point of no easy return:** after it, an older bridge would read stale data, so it has its own
@@ -933,8 +935,7 @@ rollback design (below) and a cutover that is gated before processing resumes.
   count rows written (`persistAssignments()` already returns the count; `clusterUser()`, `clusterUserChunk()` and
   `ClusterScanJob` must use it). Dev regression: faces pending in ours that carry a dead person id in Recognize's;
   before the fix the chain must loop (assert it passes more than a bound), after it it must stop.
-- **`dev/`**: done. The scripts and `dev/README.md` are committed; `dev/run-all.sh --ui` runs every suite.
-  Still to add for Stage E: the projection and reconcile checks.
+- **`dev/`**: done, including the projection and reconcile checks; `dev/run-all.sh --ui` runs every suite.
 - Stage D running on live for a few days with `--verify` clean.
 
 ### E.1 `ProjectionService`
@@ -1031,7 +1032,7 @@ Compose stack; every test asserts its precondition and is run by the `dev/` scri
 9. **Clustering regression:** the dangling-face fixture from E.0.
 10. **Rollback drill** (below).
 
-### As built (2026-11-06, dev only)
+### As built (2026-11-06)
 
 Commits `4dcb839` (E.1 and E.2), `b8093d8` (E.3 and E.4), `1deda14` (job, status, no router switch), `e790c0d`
 (squatters), plus the `dev/` suites. Differences from the text above, each found by a test:
@@ -1056,9 +1057,9 @@ Verified on dev (all suites in `dev/run-all.sh`): reads (49 outputs), the direct
 identical to the Stage D baselines on unchanged data; People (40 checks), clustering writers (16), DAV battery (44),
 file writers (21), Memories UI flows (16), drift repair (24), failure isolation (15), concurrency (96 requests, copy
 agrees; fails when the upsert is degraded), Recognize's destructive actions (21), Recognize's copies and squatters
-(26), rollback drill (25), and clustering against ground truth (50 people, 750 faces, pure and complete).
+(26), rollback drill (23, on its own after the fix; see the top of this document), and clustering against ground truth (50 people, 750 faces, pure and complete).
 
-Not yet done: the live cutover itself, and the admin page's new line has been rendered but not looked at in a browser.
+The admin page's new line has been rendered but not looked at in a browser.
 
 ### Stage E on live (2026-11-06)
 
@@ -1067,6 +1068,8 @@ Cut over with the runbook below, in this order, each step checked before the nex
 1. Processing paused; nothing running. A full dump of the one database, a tarball of the live bridge files, and the
    counts and checksums of Recognize's two tables were saved to `<backups>/facewright-pre-stage-e/` (live files were
    byte-identical to the Stage D tip `d620eff`, so the tarball is the R2 rollback source). Stage D's `--verify` was clean.
+   **One precondition was not met as written:** the runbook asks for Stage D on live for a few days, and it ran for
+   hours; the user chose to go ahead. Share and unshare have therefore still not been seen on live, under Stage D or E.
 2. Files deployed from `git archive HEAD`, version 0.10.0, `occ upgrade`. It updated only the bridge: the three pending
    store updates (none of them Recognize, Memories or AppAPI) were not applied, and Recognize's `MaintenanceJob` did not
    come back. `--seed-ids` raised both counters.
@@ -1079,21 +1082,22 @@ Cut over with the runbook below, in this order, each step checked before the nex
 The person-visible check passed (the user renamed, moved and removed faces in Memories; each showed at once; the dry
 run afterwards still had A = C = D = 0, `--verify` exit 0, nothing of ours in the log after the unpause).
 
-Still to do: a clean dry run after a day that includes a clustering run and any shares, the admin page's "Memories
-sync" line seen in a browser, and then at least two weeks before Stage F (not before 2026-11-20).
+Still to do: the day-after check at the top of this document, and then at least two weeks before Stage F.
 
 ### Rollback
 
-- **R1, before unpausing at the cutover:** restore the previous files. Nothing ran under the new code and no data
-  changed.
-- **R2, after use:** `occ facewright:project --hydrate` writes every state back into Recognize's table; restore the
-  Stage D files **with `info.xml`'s `<version>` set to the installed one** (`occ config:app:get facewright_bridge
-  installed_version`); run the Stage D checks; unpause. Nothing is lost. Hidden rows come back as `NULL`, `-2` and `-3`
-  with `'[]'` vectors, which Stage D code tolerates. Two things the dev drill found: the restored files' own version is
-  the OLD one, and a mismatch makes Nextcloud demand an upgrade (no `occ` commands, web 503), while `occ upgrade`
-  would apply every pending store update; and Nextcloud may drop the hourly job from `oc_jobs` while its class is
-  missing (when cron walks the job list), so **rolling forward again** needs `occ app:disable facewright_bridge && occ app:enable facewright_bridge`
-  (and Recognize's `MaintenanceJob` deleted in the same chain, as after any enable).
+- **R1, before unpausing at the cutover:** restore the previous files. Expired at the unpause on 2026-11-06.
+- **R2, after use:** pause processing and wait for running jobs. Check `occ facewright:project --dry-run` is clean and
+  run `occ facewright:project` if not, because hydrate deletes nothing and a stale row would stay. Then `occ
+  facewright:project --hydrate` writes every state back into Recognize's table. Restore the Stage D files **with
+  `info.xml`'s `<version>` set to the installed one** (`occ config:app:get facewright_bridge installed_version`), run
+  the Stage D checks, unpause. Nothing is lost. Rows hydrate creates carry `'[]'` vectors, which Stage D code tolerates;
+  rows that exist keep theirs, and pending rows come back as `NULL`, so make sure `MaintenanceJob` is not in `oc_jobs`.
+  Two things the dev drill found: the restored files' own version is the OLD one, and a mismatch makes Nextcloud demand
+  an upgrade (no `occ` commands, web 503), while `occ upgrade` would apply every pending store update; and Nextcloud may
+  drop the hourly job from `oc_jobs` while its class is missing (when cron walks the job list), so **rolling forward
+  again** needs `occ app:disable facewright_bridge && occ app:enable facewright_bridge` (and Recognize's
+  `MaintenanceJob` deleted in the same chain, as after any enable). R2 stops being possible at F.2.
 - **R3:** restore the full database dump taken before the cutover. Loses edits made since; last resort.
 
 Drill on dev: cut over, use it, hydrate, revert, then run the Stage C and D suites and the Stage C `--verify`.
@@ -1117,26 +1121,26 @@ means `occ upgrade` applies whatever is pending).
 
 ### The `dev/` scripts
 
-Committed with a README that says what each checks and how to run it on the compose stack: the read capture, the
-direct-call harness over the access-sync readers, the 33-check DAV battery, the People, clustering, file and direct
-writer suites, the member-set comparison, and the Playwright driver for Memories' UI. Two fragile spots found while
-using them are fixed on the way in (ids are taken from SQL and split explicitly, because the shell does not split
-variables; and counts are printed, not just pass or fail). They use only the dev stack's existing passwords. The
-Stage E checks above are added to the same set.
+`dev/README.md` says what each script checks and how to run it on the compose stack.
 
 ---
 
 ## Stage F: Contract
 
 **Goal.** Remove what is no longer needed. Destructive, so everything here waits until Stage E has run on
-production for at least two weeks with `project --dry-run` clean. Ask the user before starting.
+production for at least two weeks (not before 2026-11-20) with the dry run clean and every repair the job logged in that
+time explained (see the day-after check at the top). Ask the user before starting, and take a fresh full dump first:
+the pre-cutover one will be too old to restore.
+
+**Order: F.1, F.3, F.2, F.4.** F.3's numbers need the link table that F.2 drops.
 
 ### F.1 Empty the hidden rows, blank the vectors
 
 Stage E leaves the hidden-state rows (pending, unclusterable, ignored) in Recognize's table; reconcile reports them
 as category B and tolerates them. Here they are removed in bulk: dump the id list to a file, delete by that list in
-chunks, and print `before - listed = after`, which must reconcile exactly. Never do this while any mirror-era code
-is deployed (E, item 1).
+chunks, and print `before - listed = after`, which must reconcile exactly. No command exists for this yet: add one to
+`OwnTablesMigrationService`, using the same selection as reconcile's B. Never do this while any mirror-era code is
+deployed (E, item 1).
 
 New option `occ facewright:own-tables --blank-vectors [--dry-run] [--chunk=<n>]`: resumable by keyset on
 `id`; `UPDATE rfd SET face_vector = '[]' WHERE id IN (...)`, selecting ids with a matching row in
@@ -1149,29 +1153,33 @@ is an `ALTER TABLE ... FORCE` in a maintenance window. Leave that to the user.
 
 ### F.2 Delete the transitional code
 
-Delete `DetectionService::ownRowsExpr()`, `encodeVector()`, `VECTOR_PRECISION`; move `VECTOR_LENGTH_FLOOR`
-to `ProjectionReconcileService` as a private constant with its reason. Delete `VectorCompactionService`,
-`Command/CompactVectors`, `FaceMigrationService`, `Command/MigrateFaces`, `Command/ReopenUnassigned` and
-their `info.xml` entries. Delete `ClusteringService::UNASSIGNED`, `IGNORED` and their docblocks where
-`FaceState` now says it; keep the in-memory `UNCLUSTERABLE` marker only if D.1 still needs it.
+Ends rollback tier R2: Stage D code needs the links table.
+
+Delete `DetectionService::ownRowsExpr()`, `encodeVector()`, `VECTOR_PRECISION`. Move `VECTOR_LENGTH_FLOOR` to
+`ProjectionService` as a private constant with its reason, once `OwnTablesMigrationService` no longer uses it. Delete
+`VectorCompactionService`, `Command/CompactVectors`, `FaceMigrationService`, `Command/MigrateFaces`,
+`Command/ReopenUnassigned` and their `info.xml` entries. Move the sentinel values from `ClusteringService` into
+`FaceState` (`ClusteringService::UNASSIGNED`, `UNCLUSTERABLE`, `IGNORED`; `FaceState` and `ProjectionService` use them
+today), keeping an in-memory `UNCLUSTERABLE` marker only if clustering still needs it. Reduce
+`OwnTablesMigrationService` and `Command/OwnTables` to what is still used: `--verify` without the link checks, and
+`--precheck`, `--migrate` and `--seed-ids` removed. Remove `project --hydrate`, which has no use once rollback is gone.
 
 New migration: drop `facewright_detection_faces`, only after `grep -rn detection_faces lib/` is empty apart
-from that migration. Update `ResetService` first. The links table is kept until here on purpose: rollback to
-Stage D code needs it (E.3).
+from that migration. Stop the writes in `DetectionService` and `AccessSyncService` and the reads and deletes in
+`ResetService` first. The links table is kept until here on purpose: rollback to Stage D code needs it (E.3).
 
 ### F.3 Legacy rows: **user decision**
 
-Report `--precheck`'s numbers for legacy rows and for clusters with no own member, split titled and untitled.
-Do not delete anything without an explicit answer. If the user approves: dump the id list to a file, rehearse
-inside a rolled-back transaction, delete by that list, and print `before − listed = after`. The member tests that
-the two delete-empty statements in `PeopleService` make against Recognize's rows go away with this decision.
+Before F.2. Report the legacy count from `project --dry-run` and `--precheck`'s numbers for clusters with no own member,
+split titled and untitled. Do not delete anything without an explicit answer. If the user approves: dump the id list to
+a file, rehearse inside a rolled-back transaction, delete by that list, and print `before − listed = after`. Then the
+one read of Recognize's table goes too: the legacy test in `FaceStore::emptyClusterIds()` (which `deleteEmptyUntitled()`
+uses) and `PeopleService::moveLegacyMembers()`.
 
 ### F.4 Docs
 
-- `CLAUDE.md`: "Schema mapping" and "Telling our rows from Recognize's" are rewritten around the two tables and
-  the projection; sentinels move to `FaceState`; "Coexisting with Recognize" keeps only what still applies,
-  and states that a wipe is now recoverable with `occ facewright:project`; `occ` list; `.noimage` handling; Open
-  items 4 and 6 updated.
+- `CLAUDE.md`: drop `ownRowsExpr()`, the vector bands, `face_vector`'s remaining rules and the commands F.2 removes;
+  the `occ` list; Open item 6.
 - `README.md`: no Memories note is needed; editing keeps working.
 - `docs/independence.md`: mark what is done.
 
@@ -1186,7 +1194,7 @@ conversation. Writing code or posting anything publicly needs the user's explici
 
 A new `docs/memories-people-backend.md` in this repo:
 
-- **Today's blockers, verified on 10.1.0:** `lib/ClustersBackend/Manager.php` holds a constant `BACKENDS`
+- **Today's blockers, verified on 10.1.0 and, for `BACKENDS`, on 11.0.2; recheck the rest on the current release:** `lib/ClustersBackend/Manager.php` holds a constant `BACKENDS`
   map, with no way to add one at runtime. `OtherController` and `SystemConfig` expose `recognize_enabled` and
   `facerecognition_enabled`. The frontend has separate routes and hardcoded write calls per backend.
 - **Precedent:** `FaceRecognitionBackend` already has a plain HTTP write API rather than DAV, so a
@@ -1214,7 +1222,7 @@ because of "One id space", so `memories_covers` keeps working once `clustertype`
 
 Only after G.3 runs on production.
 
-1. Stop calling `ProjectionService`; remove it, `ProjectionReconcileService`, the job, the command and
+1. Stop calling `ProjectionService`; remove it, the job, the command and
    `RecognizeWriteRouterPlugin`.
 2. Decide with the user whether Recognize can be uninstalled. Photos' People view stops working if it is.
    If yes: `.noimage` markers become irrelevant, CLAUDE.md's coexistence section goes, and `rfd`/`rfc` can be
@@ -1227,12 +1235,12 @@ Only after G.3 runs on production.
 
 From `docs/independence.md`:
 
-1. **Stage 2's shim is not planned.** Recognize stays installed and passive, and its DAV tree serves reads only.
-2. **M7 is out of date.** The server side is not pluggable in 10.1.0: `Manager::BACKENDS` is a constant.
+1. **Stage 2's shim is not planned.** Recognize stays installed and passive; our router answers writes on its DAV tree.
+2. **M7 is out of date.** The server side is not pluggable: `Manager::BACKENDS` is a constant (10.1.0 and 11.0.2).
 3. **`-1` semantics are kept for Memories only.** Internally this is a state.
 4. **Stage 3(a) becomes the primary target**, not an optional offer.
-5. **The doc's Finding 2 (remove face does not stick)** is fixed by refusing Memories' path, not by a shim.
-6. **Its version references** (Memories 8.1.0, `ClusterMergeService`) are stale: live is 10.1.0, and
+5. **The doc's Finding 2 (remove face does not stick)** is fixed by the DAV router, not by a shim.
+6. **Its version references** (Memories 8.1.0, `ClusterMergeService`) are stale: live is 11.0.2, and
    that service was deleted. Stage 0's `ClusterMergeService` references are historical.
 
 From `docs/independence-implementation.md`:
@@ -1240,7 +1248,7 @@ From `docs/independence-implementation.md`:
 1. **Deviation 2 is reversed.** Assignment state moves out of `rfd`, and the `state`-column idea returns,
    without `rejected_cluster_id`, which is still not needed.
 2. **Deviation 3 changes.** `face_vector` is blanked to `'[]'`, not dropped: the column belongs to real
-   Recognize, which stays. That doc rejected `'[]'` because of `FacePhoto::delete()`; the write guard makes
+   Recognize, which stays. That doc rejected `'[]'` because of `FacePhoto::delete()`; the DAV router makes
    that path unreachable.
 
 ---
@@ -1255,5 +1263,5 @@ where they were, so the merge was silently incomplete. Stage B code had the same
 Fixed by `RecognizeWriteRouterPlugin::retryOnDeadlock()`: the whole operation is run again (up to 6 tries, random
 pause) when the database reports a deadlock or lock-wait timeout. Safe because the plugin is the outermost caller and
 each operation is one transaction. `dev/memories-ui/flows.py` flow 4 is the regression (11 faces merged, 16 expected;
-with the retry switched off it ends at 13). **Stage E:** the projection's upsert of the same person row needs the
-same retry.
+with the retry switched off it ends at 13). The projection's upsert of the same person row got the same retry in
+Stage E (`ProjectionService::withRetry()`).
