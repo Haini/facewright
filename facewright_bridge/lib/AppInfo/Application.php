@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\AppInfo;
 
+use OCA\DAV\Events\SabrePluginAddEvent;
 use OCA\FacewrightBridge\Listener\FileAccessListener;
 use OCA\FacewrightBridge\Listener\FileCreatedListener;
+use OCA\FacewrightBridge\Listener\SabrePluginListener;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
@@ -41,6 +43,9 @@ class Application extends App implements IBootstrap {
 		$context->registerEventListener(NodeRemovedFromCache::class, FileAccessListener::class);
 		$context->registerEventListener(BeforeNodeRenamedEvent::class, FileAccessListener::class);
 		$context->registerEventListener(NodeRenamedEvent::class, FileAccessListener::class);
+
+		// Refuses writes to Recognize's DAV tree - see RecognizeWriteGuardPlugin.
+		$context->registerEventListener(SabrePluginAddEvent::class, SabrePluginListener::class);
 	}
 
 	public function boot(IBootContext $context): void {

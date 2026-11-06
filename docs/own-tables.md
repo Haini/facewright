@@ -378,6 +378,33 @@ If any action leaves Memories broken rather than showing an error, stop and repo
   and that Memories' people actions are disabled.
 - CLAUDE.md: note in "Why Recognize cannot simply be uninstalled" that writes are refused.
 
+**Done on dev (2026-11-06).** As built: `lib/Dav/RecognizeWriteGuardPlugin.php`,
+`lib/Listener/SabrePluginListener.php`, registered in `Application::register()`. Two deviations from the
+plan: `<version>` was **not** bumped (nothing in `info.xml`, JS or the schema changed, and a bump forces an
+`occ upgrade` on live with its store updates), and `LOCK` is refused as well as the six listed methods.
+
+Checked against the dev DAV tree: `PROPFIND` 207; `MKCOL`, `DELETE`, `MOVE`, `PUT` under `recognize/`
+403 with the tables unchanged; the face-level `DELETE` and `MOVE` 403; the normal Files DAV unaffected;
+an unauthenticated request still 401 (authentication runs first). With the switch off the same `MKCOL`
+created a person (201). The switch reaches the web process within about five seconds, not instantly:
+`occ config:app:set` writes from another process, so a test run straight after it can see the old value.
+
+**B.2, driven through Memories' real UI** (Chromium on the dev stack, Memories 11.0.2). In every case
+the data was unchanged afterwards and Memories stayed usable:
+
+| Memories action | Request | What the user sees |
+|---|---|---|
+| Rename person | `MOVE faces/{p}` 403 | toast "Failed to rename P2 to ...", dialog stays open |
+| Remove person | `DELETE faces/{p}` 403 | toast "Failed to delete P2.", dialog stays open |
+| Merge with different person | one `MOVE` per face, all 403 | **one toast per face** ("Error while moving 200014-fw_rot.jpg"), dialog stays open |
+| Remove from person | `DELETE faces/{p}/{id}-{name}` 403 | toast "Failed to remove fw_modal.jpg from face." |
+| Move to person, create person | not driven in the UI | needs the viewer preference "Mark person in preview", which is not in the Settings dialog; the same requests were refused at DAV level (merge sends the identical face `MOVE`) |
+
+The merge result is the notable cost: a person with hundreds of faces produces hundreds of failed
+requests and toasts. Nothing server-side can shorten that, since Memories ignores the response body. If
+it turns out to be too disruptive, the fallback in "Known limits" (route the requests into our own code
+instead of refusing them) is the answer.
+
 **Stage B rollback:** the appconfig switch above.
 
 ---

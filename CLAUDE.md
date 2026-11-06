@@ -44,7 +44,10 @@ Three hard dependencies on the app being **enabled**, not just on its tables exi
    against Recognize's `OCA\Recognize\Dav\RootCollection` at `/remote.php/dav/recognize/...`.
 3. Memories' frontend hardcodes `recognize` and `facerecognition` as the only people backends.
 
-Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
+Writes from Memories and Photos are refused: `RecognizeWriteGuardPlugin` answers 403 to any change under
+`recognize/` in the DAV tree (people are edited on the People page), switchable with the appconfig key
+`block_recognize_writes` (it takes a few seconds to reach the web process). Memories shows one error
+toast per face it tried to move, so a merge of a big person is noisy. Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
 Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
 causes, and the stages already done are in `docs/independence.md` and
 `docs/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
