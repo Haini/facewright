@@ -1,0 +1,2 @@
+# snapshots, captures and the Playwright virtualenv are local to one machine
+.work/

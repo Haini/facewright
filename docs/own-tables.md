@@ -844,8 +844,9 @@ no ids were burned; the cost was a job at about 300 MB every five minutes. Dev h
 it, and the live precheck had listed them as informational. Two lessons: a read and the guard on the write that
 follows it must test the same table, and a chain's progress must mean rows *written*, not matches found.
 
-Fix, to be made before Stage E (E.0): reopen those rows in Recognize's table to `NULL` (dump the id list first, update
-by that list), and change `passProgress` to count written rows.
+Fixed (E.0): those rows were reopened to `NULL` in Recognize's table (id list dumped first, restore point kept) and
+`passProgress` now counts rows written. The chain ended on live and `--verify` is clean. The regression is
+`dev/chain-loop-test.sh dangling`; it fails on the code from before the fix (the chain still loops after 12 runs).
 
 ---
 
@@ -896,11 +897,12 @@ rollback design (below) and a cutover that is gated before processing resumes.
 
 ### E.0 Preconditions
 
-- **The clustering fix** (Stage D record): reopen the stranded rows in Recognize's table, and make `passProgress`
+- **The clustering fix** (Stage D record; done): reopen the stranded rows in Recognize's table, and make `passProgress`
   count rows written (`persistAssignments()` already returns the count; `clusterUser()`, `clusterUserChunk()` and
   `ClusterScanJob` must use it). Dev regression: faces pending in ours that carry a dead person id in Recognize's;
   before the fix the chain must loop (assert it passes more than a bound), after it it must stop.
-- **`dev/`**: commit the verification scripts with a README (see "The `dev/` scripts" below).
+- **`dev/`**: done. The scripts and `dev/README.md` are committed; `dev/run-all.sh --ui` runs every suite.
+  Still to add for Stage E: the projection and reconcile checks.
 - Stage D running on live for a few days with `--verify` clean.
 
 ### E.1 `ProjectionService`
@@ -1152,3 +1154,16 @@ From `docs/independence-implementation.md`:
 2. **Deviation 3 changes.** `face_vector` is blanked to `'[]'`, not dropped: the column belongs to real
    Recognize, which stays. That doc rejected `'[]'` because of `FacePhoto::delete()`; the write guard makes
    that path unreachable.
+
+---
+
+## Finding from the E.0 scripts: parallel DAV moves deadlock
+
+Memories sends one MOVE per face, in parallel, when a person is merged. Three of eleven returned 500 on dev
+(`Deadlock found when trying to get lock` in `FaceStore::mirrorClusters`, reached from
+`RecognizeWriteRouterPlugin::moveFace` through `PeopleService::moveFaces`): all of them upsert the same cluster
+row. The faces they carried stay where they were, so the merge is silently incomplete. Nothing retries a deadlock.
+`dev/memories-ui/flows.py` flow 4 reproduces it and fails until it is fixed. Stage B code has the same shape, so
+live is exposed. Fix to consider: retry the transaction on SQLSTATE 40001 in the router (or `PeopleService`), a few
+times with a short pause; in Stage E the mirror call goes away but the projection's upsert of the same person row
+needs the same retry.

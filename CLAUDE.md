@@ -474,8 +474,9 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 5. **No tests, static analysis, or CI** — and the People page has only been exercised by hand in
    headless Chromium on the compose stack, never against a production-sized library. The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `ownRowsExpr`, `PathFilterService::isIncluded`) are
-   unit-testable without an instance and have zero coverage. Stages A to D were verified with scripts that
-   live outside the repo; committing them under `dev/` is step E.0 of `docs/own-tables.md`.
+   unit-testable without an instance and have zero coverage. Integration checks against the compose stack live in
+   `dev/` (see `dev/README.md`; `dev/run-all.sh`). They prove that writers and readers agree, not that the pure logic
+   is right.
 6. **Row-at-a-time SQL** in `DetectionService::detect()`'s insert loop (now two inserts per user
    per face, plus a per-face read-back query for `facewright_faces.id` — `IDBConnection::
    setValues()` has no id-returning mode), `AccessSyncService::copyToUsers()` and
