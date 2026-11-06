@@ -1028,6 +1028,25 @@ agrees; fails when the upsert is degraded), Recognize's destructive actions (21)
 
 Not yet done: the live cutover itself, and the admin page's new line has been rendered but not looked at in a browser.
 
+### Stage E on live (2026-11-06)
+
+Cut over with the runbook below, in this order, each step checked before the next:
+
+1. Processing paused; nothing running. A full dump of the one database, a tarball of the live bridge files, and the
+   counts and checksums of Recognize's two tables were saved to `<backups>/facewright-pre-stage-e/` (live files were
+   byte-identical to the Stage D tip `d620eff`, so the tarball is the R2 rollback source). Stage D's `--verify` was clean.
+2. Files deployed from `git archive HEAD`, version 0.10.0, `occ upgrade`. It updated only the bridge: the three pending
+   store updates (none of them Recognize, Memories or AppAPI) were not applied, and Recognize's `MaintenanceJob` did not
+   come back. `--seed-ids` raised both counters.
+3. **Go/no-go, still paused:** `project --dry-run` showed A, C and D at 0, B equal to the number of hidden-state rows
+   recorded in step 1, the legacy rows untouched and exit 0; the new `--verify` exited 0; and the checksums of Recognize's
+   tables (without the vector column) were identical to those recorded before the deploy.
+4. Unpaused. After the next cron tick the hourly job had run and the copy reported itself up to date; the dry run was
+   unchanged and the log had no entries of ours.
+
+Still to do: the person-visible check (rename, move and remove a face in Memories and see it at once), a clean dry run
+after a day that includes a clustering run and any shares, and then at least two weeks before Stage F.
+
 ### Rollback
 
 - **R1, before unpausing at the cutover:** restore the previous files. Nothing ran under the new code and no data
