@@ -11,8 +11,8 @@ use OCP\IDBConnection;
 
 /**
  * Core detection logic shared by the manual occ command, the automatic file-event job, and the
- * batch trigger. Calls the facewright ExApp and stores results in Recognize's own
- * oc_recognize_face_detections table - see CLAUDE.md for the column mapping this mirrors.
+ * batch trigger. Calls the facewright ExApp and stores the physical face in facewright_faces and, through
+ * FaceStore, a pending row per user with access. Recognize's table is a copy, written by ProjectionService.
  */
 class DetectionService {
 	/**
@@ -49,15 +49,9 @@ class DetectionService {
 	public const VECTOR_PRECISION = 6;
 
 	/**
-	 * Transitional half of ownRowsExpr() during Stage 1 of
-	 * docs/independence-implementation.md - char_length(face_vector) above which a row is one of
-	 * ours (512-dim InsightFace) rather than Recognize's legacy 128-dim face-api.js data. Used
-	 * instead of decoding the JSON because it keeps the "is this ours" test set-based - touching
-	 * face_vector costs a page read per row for any row still in the pre-VECTOR_PRECISION encoding
-	 * (the lesson from clustering's 1023 MB -> 340 MB fix).
-	 *
-	 * Deleted once Stage 2 drops face_vector and ownRowsExpr() becomes the join alone - see that
-	 * method's docblock.
+	 * char_length(face_vector) above which a row of Recognize's table that has no row of ours is a stale
+	 * copy of ours (512-dim InsightFace) rather than Recognize's legacy 128-dim face-api.js data; see
+	 * ProjectionService::reconcile(). Used instead of decoding the JSON because it keeps the test set-based.
 	 *
 	 * Measured on the live table, there are three bands, not two, because re-encoding is
 	 * incremental and old and new rows coexist while it runs:
@@ -77,10 +71,6 @@ class DetectionService {
 	 * so the misclassification costs nothing beyond reset never collecting it. Worth knowing
 	 * because the 1,292 lower bound previously recorded for the legacy band was in fact this row;
 	 * the real legacy floor is 2,621.
-	 *
-	 * The authoritative definition of "ours" is now the facewright_detection_faces join (see
-	 * ownRowsExpr()); this is the cheap proxy the join is OR'd with until Stage 2's backfill is
-	 * complete, valid only while those bands stay disjoint.
 	 */
 	public const VECTOR_LENGTH_FLOOR = 3500;
 
@@ -310,27 +300,9 @@ class DetectionService {
 	}
 
 	/**
-	 * "This row is Facewright's, not Recognize's legacy classifier's."
-	 *
-	 * During Stage 1 of docs/independence-implementation.md this is `join OR length`: a row
-	 * counts as ours either because it has a facewright_detection_faces link, or because its
-	 * face_vector is long enough (VECTOR_LENGTH_FLOOR's proxy). The OR closes the window between
-	 * deploying this code and finishing `occ facewright:migrate-faces` - during that window a
-	 * join-only predicate would call every pre-existing row "not ours", and
-	 * AccessSyncService::copyExisting() would then copy processed markers without any detection
-	 * rows on a share, silently and permanently. Stage 2 removes the length term once the backfill
-	 * is complete everywhere and face_vector is dropped, leaving the join alone.
-	 *
-	 * Lives here, next to VECTOR_LENGTH_FLOOR, because every query that has to tell the two apps'
-	 * rows apart needs the identical predicate - a second copy is exactly how the two drift.
-	 *
-	 * Static with no $db of its own (existing call sites depend on that signature), so the link
-	 * subquery is built from the query builder's own connection.
-	 *
-	 * $alias: every existing call site queries recognize_face_detections unaliased, so bare `id`
-	 * and `face_vector` resolve on their own. PeopleService::facesForFile() joins it against
-	 * recognize_face_clusters (which also has an `id` column) under alias `d`, so it passes
-	 * $alias = 'd' to keep both column references unambiguous.
+	 * What told our rows from Recognize's legacy ones in Recognize's table, while that table was the source of
+	 * truth: a facewright_detection_faces link, or a face_vector longer than VECTOR_LENGTH_FLOOR. It has no reader
+	 * since Stage E (a row of ours is a row of facewright_user_faces) and goes in Stage F of docs/own-tables.md.
 	 */
 	public static function ownRowsExpr(IQueryBuilder $qb, string $alias = ''): string {
 		$prefix = $alias === '' ? '' : $alias . '.';

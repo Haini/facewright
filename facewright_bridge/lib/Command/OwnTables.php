@@ -35,7 +35,7 @@ class OwnTables extends Command {
 			->setDescription('Move people and face assignments into tables owned by Facewright (docs/own-tables.md)')
 			->addOption('precheck', null, InputOption::VALUE_NONE, 'Read-only: count what the backfill would trip over')
 			->addOption('migrate', null, InputOption::VALUE_NONE, 'Copy people and assignments into the new tables (processing must be paused)')
-			->addOption('verify', null, InputOption::VALUE_NONE, 'Read-only: compare the new tables with Recognize\'s, exit 1 on a mismatch')
+			->addOption('verify', null, InputOption::VALUE_NONE, 'Read-only: check our tables and that Recognize\'s copy matches them, exit 1 on a mismatch')
 			->addOption('seed-ids', null, InputOption::VALUE_NONE, 'Raise our id counters above Recognize\'s (Stage E; with --dry-run reports only)')
 			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --migrate or --seed-ids: report what would happen, write nothing')
 			->addOption('chunk', null, InputOption::VALUE_REQUIRED, 'With --migrate: id range per step', '5000')

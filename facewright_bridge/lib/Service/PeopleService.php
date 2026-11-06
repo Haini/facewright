@@ -9,10 +9,8 @@ use OCP\IDBConnection;
 
 /**
  * The one service that owns every people-level operation on our clusters: list, create, rename,
- * merge, delete a person; list, move, detach a face. Written as the seam Stage 0 of
- * docs/independence-implementation.md exists to create - the OCS controller in this stage and the
- * DAV shim in Stage 2 are both thin callers of this, so there is exactly one place that knows the
- * table shape.
+ * merge, delete a person; list, move, detach a face. The OCS controller, occ facewright:people and the DAV
+ * router are thin callers of this, so there is exactly one place that knows how those work.
  *
  * Every method takes $userId first and scopes every query to it - there is no method here that
  * can read or write another user's clusters. Bad input (an id/title that doesn't resolve, or is
@@ -281,7 +279,7 @@ class PeopleService {
 	}
 
 	/**
-	 * Backs the `nc:face-detections` DAV property (Stage 2) - every one of $userId's own faces on
+	 * Every one of $userId's own faces on
 	 * one file, with the person title if assigned. Reads facewright_user_faces, so a legacy
 	 * 128-dim row never reaches a UI through us.
 	 *
@@ -428,9 +426,8 @@ class PeopleService {
 	}
 
 	/**
-	 * Unassigns every member (cluster_id = -1) and deletes the cluster - byte-for-byte what
-	 * Recognize's own FaceClusterMapper::delete() does, on purpose: both write paths must agree
-	 * until Stage 2 removes one of them.
+	 * Unassigns every member and deletes the cluster: the same result as Recognize's own
+	 * FaceClusterMapper::delete(), which is what Memories expects from deleting a person.
 	 *
 	 * @return int members unassigned
 	 * @throws \InvalidArgumentException if $clusterId doesn't exist for $userId

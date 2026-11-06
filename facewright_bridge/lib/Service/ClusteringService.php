@@ -254,12 +254,8 @@ class ClusteringService {
 	 * assigned nothing - see UNCLUSTERABLE's docblock for why leaving rows NULL is what keeps
 	 * Recognize's MaintenanceJob re-arming its 3.2 GB ClusterFacesJob.
 	 *
-	 * Takes an explicit id list rather than a "WHERE cluster_id IS NULL" sweep on purpose. Such
-	 * a sweep also catches this user's legacy 128-dim rows, which Facewright never evaluated and
-	 * has no business relabelling - the facewright_detection_faces join is this project's whole
-	 * definition of "our data" (see DetectionService::ownRowsExpr()), and a bulk UPDATE would
-	 * quietly cross it. The caller passes exactly the ids it loaded, dimension-filtered, and found
-	 * no cluster for.
+	 * Takes an explicit id list rather than a sweep of everything pending on purpose: the caller passes exactly
+	 * the ids it loaded and found no cluster for, so a face that arrived meanwhile has not been judged.
 	 *
 	 * @param list<int> $ids
 	 * @return int rows marked
