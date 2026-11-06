@@ -60,14 +60,16 @@ check "People API writes work under Stage D code" 200 "$(admin_ocs POST /faces/m
 check "   and Stage D's --verify still holds after them" 0 "$(occ facewright:own-tables --verify >/dev/null 2>&1; echo $?)"
 check "the DAV router works under Stage D code (a rename through Memories' path)" 1 "$(./battery.sh 2>&1 | grep -c 'failed 0')"
 check "the Stage E job row left in the job list does not break cron" 0 "$(occ background-job:list >/dev/null 2>&1; echo $?)"
-check "while Stage D runs, the Stage E job row has been dropped by Nextcloud (its class is missing)" 0 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%ProjectionMaintenanceJob'")"
+# Nextcloud drops a job whose class is missing when cron walks the job list: whether that happened inside this short
+# window is chance, so it is reported, not asserted. What must hold is the state after rolling forward (below).
+DROPPED=$(( 1 - $(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%ProjectionMaintenanceJob'") ))
+echo "  (info) the Stage E job row was dropped by Nextcloud while Stage D ran: $([ "$DROPPED" = 1 ] && echo yes || echo no, not yet)"
 
 echo "== and forward again"
 restore_e; trap - EXIT
 check "the Stage E files are back" 1 "$(ls "$BR/lib/Service/ProjectionService.php" 2>/dev/null | wc -l)"
-check "   but the hourly job is NOT registered any more (nothing re-adds it by itself)" 0 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%ProjectionMaintenanceJob'")"
 occ app:disable facewright_bridge >/dev/null 2>&1; occ app:enable facewright_bridge >/dev/null 2>&1
-check "   an app:disable / app:enable cycle registers it again" 1 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%ProjectionMaintenanceJob'")"
+check "   after an app:disable / app:enable cycle the hourly job is registered exactly once" 1 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%ProjectionMaintenanceJob'")"
 check "   and the app is enabled at the same version" "0.10.0" "$(occ config:app:get facewright_bridge installed_version)"
 for id in $(sql "SELECT id FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'"); do echo y | docker exec -i -u www-data "$NC_CONTAINER" php occ background-job:delete "$id" >/dev/null 2>&1; done
 check "   and after deleting Recognize's MaintenanceJob (re-added by the cycle, same chain) none remain" 0 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'")"

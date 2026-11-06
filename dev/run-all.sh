@@ -6,6 +6,10 @@
 #   dev/run-all.sh --ui     also the Memories UI flows (needs dev/setup-venv.sh)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 ui=no; [ "${1:-}" = "--ui" ] && ui=yes
+# The suites share one database and restore snapshots into it: two runs at once corrupt each other's results (this
+# happened: eleven suites failed that passed alone). One run at a time; do not start a suite by hand while this runs.
+exec 9>"$WORK_DIR/run-all.lock"
+flock -n 9 || { echo "another dev run is active (lock: $WORK_DIR/run-all.lock); wait for it"; exit 2; }
 ls "$WORK_DIR/snapshots/original"* >/dev/null 2>&1 || { echo "no snapshot 'original': run dev/snapshot.sh save original"; exit 2; }
 declare -a names results
 run() { local name=$1; shift

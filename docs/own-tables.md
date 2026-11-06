@@ -1037,8 +1037,8 @@ Not yet done: the live cutover itself, and the admin page's new line has been re
   installed_version`); run the Stage D checks; unpause. Nothing is lost. Hidden rows come back as `NULL`, `-2` and `-3`
   with `'[]'` vectors, which Stage D code tolerates. Two things the dev drill found: the restored files' own version is
   the OLD one, and a mismatch makes Nextcloud demand an upgrade (no `occ` commands, web 503), while `occ upgrade`
-  would apply every pending store update; and Nextcloud drops the hourly job from `oc_jobs` while its class is
-  missing, so **rolling forward again** needs `occ app:disable facewright_bridge && occ app:enable facewright_bridge`
+  would apply every pending store update; and Nextcloud may drop the hourly job from `oc_jobs` while its class is
+  missing (when cron walks the job list), so **rolling forward again** needs `occ app:disable facewright_bridge && occ app:enable facewright_bridge`
   (and Recognize's `MaintenanceJob` deleted in the same chain, as after any enable).
 - **R3:** restore the full database dump taken before the cutover. Loses edits made since; last resort.
 
