@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Service;
 
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
 /**
@@ -44,9 +45,9 @@ class FaceStore {
 		$qb->insert('facewright_user_faces')
 			->values([
 				'user_id' => $qb->createNamedParameter($userId),
-				'face_id' => $qb->createNamedParameter($faceId, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT),
-				'cluster_id' => $qb->createNamedParameter(null, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_NULL),
-				'state' => $qb->createNamedParameter(FaceState::PENDING, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT),
+				'face_id' => $qb->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
+				'cluster_id' => $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL),
+				'state' => $qb->createNamedParameter(FaceState::PENDING, IQueryBuilder::PARAM_INT),
 			]);
 		$qb->executeStatement();
 		return (int)$qb->getLastInsertId();
@@ -178,7 +179,7 @@ class FaceStore {
 		$qb = $this->db->getQueryBuilder();
 		$qb->update('facewright_clusters')
 			->set('title', $qb->createNamedParameter($title))
-			->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT)))
+			->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
 			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
 		return $qb->executeStatement() > 0;
 	}

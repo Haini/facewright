@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Service;
 
-use OCP\DB\Exception as DbException;
 use OCP\IAppConfig;
 use OCP\IDBConnection;
 use Psr\Log\LoggerInterface;
@@ -34,7 +33,6 @@ class ProjectionService {
 	private const CHUNK = 500;
 	/** Rows of Recognize's table inspected per reconcile step. */
 	private const PAGE = 5000;
-	private const MAX_TRIES = 6;
 	/** Vector lengths that mark a row as a copy of ours: '[]' and anything longer than the 128-dim legacy band. */
 	private const STALE_EMPTY_LENGTH = 2;
 
@@ -157,13 +155,13 @@ class ProjectionService {
 		}
 		try {
 			foreach (array_chunk($clusterIds, self::CHUNK) as $chunk) {
-				$this->withRetry(fn () => $this->upsertPeople($chunk));
+				DeadlockRetry::run(fn () => $this->upsertPeople($chunk));
 			}
 			foreach (array_chunk($faceIds, self::CHUNK) as $chunk) {
-				$this->withRetry(fn () => $this->upsertFaces($chunk));
+				DeadlockRetry::run(fn () => $this->upsertFaces($chunk));
 			}
 			foreach (array_chunk($clusterIds, self::CHUNK) as $chunk) {
-				$this->withRetry(fn () => $this->deleteGonePeople($chunk));
+				DeadlockRetry::run(fn () => $this->deleteGonePeople($chunk));
 			}
 			return true;
 		} catch (\Throwable $e) {
@@ -197,7 +195,7 @@ class ProjectionService {
 		$uf = $this->table('facewright_user_faces');
 		$faces = $this->table('facewright_faces');
 		$list = implode(',', $ids);
-		$visible = FaceState::ASSIGNED . ',' . FaceState::UNASSIGNED;
+		$visible = implode(',', FaceState::VISIBLE);
 		$this->db->beginTransaction();
 		try {
 			$this->db->executeStatement(
@@ -220,24 +218,6 @@ class ProjectionService {
 	/** What Recognize's cluster_id is for a visible face: the person, or -1 for unassigned. */
 	private function visibleClusterExpr(string $alias): string {
 		return "CASE WHEN {$alias}.state = " . FaceState::ASSIGNED . " THEN {$alias}.cluster_id ELSE " . ClusteringService::UNASSIGNED . ' END';
-	}
-
-	/**
-	 * Concurrent writers contend for the same person row; InnoDB rolls one back. Run it again, with a random
-	 * pause so the colliding statements do not collide again in step.
-	 */
-	private function withRetry(callable $statement): mixed {
-		for ($attempt = 1;; $attempt++) {
-			try {
-				return $statement();
-			} catch (DbException $e) {
-				$retryable = in_array($e->getReason(), [DbException::REASON_DEADLOCK, DbException::REASON_LOCK_WAIT_TIMEOUT], true);
-				if (!$retryable || $attempt >= self::MAX_TRIES) {
-					throw $e;
-				}
-				usleep(random_int(20_000, 120_000) * $attempt);
-			}
-		}
 	}
 
 	// ---------------------------------------------------------------------------------------------------
@@ -270,7 +250,7 @@ class ProjectionService {
 			$range = "c.id > {$after} AND c.id <= {$upper}{$peopleUserSql}";
 			$nPeople += $this->count("SELECT COUNT(*) FROM {$fc} c WHERE {$range}");
 			if (!$dryRun) {
-				$this->withRetry(fn () => $this->db->executeStatement(
+				DeadlockRetry::run(fn () => $this->db->executeStatement(
 					"INSERT INTO {$rfc} (id, user_id, title) SELECT c.id, c.user_id, c.title FROM {$fc} c WHERE {$range} ORDER BY c.id "
 					. 'ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), title = VALUES(title)'
 				));
@@ -282,7 +262,7 @@ class ProjectionService {
 			$range = "u.id > {$after} AND u.id <= {$upper}{$userSql}";
 			$nFaces += $this->count("SELECT COUNT(*) FROM {$uf} u WHERE {$range}");
 			if (!$dryRun) {
-				$this->withRetry(fn () => $this->db->executeStatement(
+				DeadlockRetry::run(fn () => $this->db->executeStatement(
 					"INSERT INTO {$rfd} (id, user_id, file_id, x, y, width, height, face_vector, cluster_id, threshold) "
 					. "SELECT u.id, u.user_id, f.file_id, f.x, f.y, f.width, f.height, '[]', {$sentinel}, 0 "
 					. "FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id WHERE {$range} ORDER BY u.id "
@@ -312,55 +292,76 @@ class ProjectionService {
 	 * @return array{A: int, B: int, C: int, legacy: int, D_missing: int, D_stale: int, repaired: array<string,int>, truncated: bool}
 	 */
 	public function reconcile(bool $dryRun, ?string $userId = null, int $limit = 0): array {
-		$rfd = $this->table('recognize_face_detections');
-		$rfc = $this->table('recognize_face_clusters');
-		$uf = $this->table('facewright_user_faces');
-		$fc = $this->table('facewright_clusters');
-		$faces = $this->table('facewright_faces');
-		$q = fn (string $s) => $this->quote($s);
-		$visible = FaceState::ASSIGNED . ',' . FaceState::UNASSIGNED;
-		$expected = $this->visibleClusterExpr('u');
 		$report = ['A' => 0, 'B' => 0, 'C' => 0, 'legacy' => 0, 'D_missing' => 0, 'D_stale' => 0, 'repaired' => ['A' => 0, 'C' => 0, 'D_missing' => 0, 'D_stale' => 0], 'truncated' => false];
-		$fixA = $fixC = $fixDm = $fixDs = [];
-		$room = function (array $list) use ($limit): bool {
-			return $limit === 0 || count($list) < $limit;
+		$fix = ['A' => [], 'C' => [], 'D_missing' => [], 'D_stale' => []];
+		$found = function (string $category, int $id) use (&$report, &$fix, $limit): void {
+			$report[$category]++;
+			if ($limit === 0 || count($fix[$category]) < $limit) {
+				$fix[$category][] = $id;
+			} else {
+				$report['truncated'] = true;
+			}
 		};
 
-		// D first, because the faces in A need their people to exist.
-		$maxP = max($this->count("SELECT COALESCE(MAX(id), 0) FROM {$fc}"), $this->count("SELECT COALESCE(MAX(id), 0) FROM {$rfc}"));
-		for ($after = 0; $after < $maxP; $after += self::PAGE) {
+		// People first, because the faces in A need theirs to exist.
+		$this->findPeopleDrift($userId, $found);
+		$this->findFaceDrift($userId, $found, $report);
+		$this->findStrayRows($userId, $found, $report);
+
+		if (!$dryRun) {
+			$this->repair($report, $fix['D_missing'], $fix['A'], $fix['C'], $fix['D_stale']);
+		}
+		return $report;
+	}
+
+	/** @param callable(string, int): void $found */
+	private function findPeopleDrift(?string $userId, callable $found): void {
+		$rfd = $this->table('recognize_face_detections');
+		$rfc = $this->table('recognize_face_clusters');
+		$fc = $this->table('facewright_clusters');
+		$cu = $this->userFilter('c', $userId);
+		$ru = $this->userFilter('r', $userId);
+		$max = max($this->count("SELECT COALESCE(MAX(id), 0) FROM {$fc}"), $this->count("SELECT COALESCE(MAX(id), 0) FROM {$rfc}"));
+		for ($after = 0; $after < $max; $after += self::PAGE) {
 			$upper = $after + self::PAGE;
-			$cu = $userId === null ? '' : ' AND c.user_id = ' . $q($userId);
-			$ru = $userId === null ? '' : ' AND r.user_id = ' . $q($userId);
 			foreach ($this->column(
 				"SELECT c.id FROM {$fc} c LEFT JOIN {$rfc} r ON r.id = c.id WHERE c.id > {$after} AND c.id <= {$upper}{$cu} "
 				. 'AND (r.id IS NULL OR NOT (r.user_id <=> c.user_id AND r.title <=> c.title)) ORDER BY c.id'
 			) as $id) {
-				$report['D_missing']++;
-				$room($fixDm) ? $fixDm[] = $id : $report['truncated'] = true;
+				$found('D_missing', $id);
 			}
 			foreach ($this->column(
 				"SELECT r.id FROM {$rfc} r LEFT JOIN {$fc} c ON c.id = r.id WHERE r.id > {$after} AND r.id <= {$upper}{$ru} "
 				. "AND c.id IS NULL AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = r.id) ORDER BY r.id"
 			) as $id) {
-				$report['D_stale']++;
-				$room($fixDs) ? $fixDs[] = $id : $report['truncated'] = true;
+				$found('D_stale', $id);
 			}
 		}
+	}
 
-		// A and B: walk our faces by id.
-		$maxF = $this->count("SELECT COALESCE(MAX(id), 0) FROM {$uf}");
-		for ($after = 0; $after < $maxF; $after += self::PAGE) {
+	/**
+	 * Walks our faces by id: A, B, and the squatters of C.
+	 *
+	 * @param callable(string, int): void $found
+	 * @param array<string, mixed> $report
+	 */
+	private function findFaceDrift(?string $userId, callable $found, array &$report): void {
+		$rfd = $this->table('recognize_face_detections');
+		$uf = $this->table('facewright_user_faces');
+		$faces = $this->table('facewright_faces');
+		$visible = implode(',', FaceState::VISIBLE);
+		$expected = $this->visibleClusterExpr('u');
+		$uu = $this->userFilter('u', $userId);
+		$max = $this->count("SELECT COALESCE(MAX(id), 0) FROM {$uf}");
+		for ($after = 0; $after < $max; $after += self::PAGE) {
 			$upper = $after + self::PAGE;
-			$uu = $userId === null ? '' : ' AND u.user_id = ' . $q($userId);
 			foreach ($this->column(
 				"SELECT u.id FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id LEFT JOIN {$rfd} d ON d.id = u.id "
 				. "WHERE u.id > {$after} AND u.id <= {$upper}{$uu} AND u.state IN ({$visible}) AND (d.id IS NULL OR NOT ("
 				. "d.user_id <=> u.user_id AND d.file_id <=> f.file_id AND d.cluster_id <=> ({$expected}) "
 				. 'AND d.x <=> f.x AND d.y <=> f.y AND d.width <=> f.width AND d.height <=> f.height)) ORDER BY u.id'
 			) as $id) {
-				$report['A']++;
-				$room($fixA) ? $fixA[] = $id : $report['truncated'] = true;
+				$found('A', $id);
 			}
 			// B: a hidden face of ours whose row in Recognize's table is the same face (a Stage D remnant).
 			$report['B'] += $this->count(
@@ -374,16 +375,24 @@ class ProjectionService {
 				"SELECT u.id FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id INNER JOIN {$rfd} d ON d.id = u.id "
 				. "WHERE u.id > {$after} AND u.id <= {$upper}{$uu} AND u.state NOT IN ({$visible}) AND NOT (d.user_id <=> u.user_id AND d.file_id <=> f.file_id) ORDER BY u.id"
 			) as $id) {
-				$report['C']++;
-				$room($fixC) ? $fixC[] = $id : $report['truncated'] = true;
+				$found('C', $id);
 			}
 		}
+	}
 
-		// C: rows of Recognize's table that have no row of ours. The vector length is read only for these.
-		$maxR = $this->count("SELECT COALESCE(MAX(id), 0) FROM {$rfd}");
-		for ($after = 0; $after < $maxR; $after += self::PAGE) {
+	/**
+	 * C: rows of Recognize's table that have no row of ours. The vector length is read only for these.
+	 *
+	 * @param callable(string, int): void $found
+	 * @param array<string, mixed> $report
+	 */
+	private function findStrayRows(?string $userId, callable $found, array &$report): void {
+		$rfd = $this->table('recognize_face_detections');
+		$uf = $this->table('facewright_user_faces');
+		$du = $this->userFilter('d', $userId);
+		$max = $this->count("SELECT COALESCE(MAX(id), 0) FROM {$rfd}");
+		for ($after = 0; $after < $max; $after += self::PAGE) {
 			$upper = $after + self::PAGE;
-			$du = $userId === null ? '' : ' AND d.user_id = ' . $q($userId);
 			$result = $this->db->executeQuery(
 				"SELECT d.id, CHAR_LENGTH(d.face_vector) AS len FROM {$rfd} d LEFT JOIN {$uf} u ON u.id = d.id "
 				. "WHERE d.id > {$after} AND d.id <= {$upper}{$du} AND u.id IS NULL ORDER BY d.id"
@@ -391,19 +400,17 @@ class ProjectionService {
 			while (($row = $result->fetch()) !== false) {
 				$len = (int)$row['len'];
 				if ($len === self::STALE_EMPTY_LENGTH || $len > DetectionService::VECTOR_LENGTH_FLOOR) {
-					$report['C']++;
-					$room($fixC) ? $fixC[] = (int)$row['id'] : $report['truncated'] = true;
+					$found('C', (int)$row['id']);
 				} else {
 					$report['legacy']++;
 				}
 			}
 			$result->closeCursor();
 		}
+	}
 
-		if (!$dryRun) {
-			$this->repair($report, $fixDm, $fixA, $fixC, $fixDs);
-		}
-		return $report;
+	private function userFilter(string $alias, ?string $userId): string {
+		return $userId === null ? '' : " AND {$alias}.user_id = " . $this->quote($userId);
 	}
 
 	/**
@@ -428,13 +435,13 @@ class ProjectionService {
 		foreach (array_chunk($fixC, self::CHUNK) as $chunk) {
 			// Re-checked in the statement: only a row with no visible face of ours behind it. (A hidden face of
 			// ours has no claim on a row in Recognize's table, and a row with no face of ours at all is a stale copy.)
-			$visible = FaceState::ASSIGNED . ',' . FaceState::UNASSIGNED;
-			$report['repaired']['C'] += $this->withRetry(fn () => $this->db->executeStatement(
+			$visible = implode(',', FaceState::VISIBLE);
+			$report['repaired']['C'] += DeadlockRetry::run(fn () => $this->db->executeStatement(
 				"DELETE FROM {$rfd} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$uf} WHERE state IN ({$visible}))"
 			));
 		}
 		foreach (array_chunk($fixDs, self::CHUNK) as $chunk) {
-			$report['repaired']['D_stale'] += $this->withRetry(fn () => $this->db->executeStatement(
+			$report['repaired']['D_stale'] += DeadlockRetry::run(fn () => $this->db->executeStatement(
 				"DELETE FROM {$rfc} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$fc}) "
 				. "AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = {$rfc}.id)"
 			));

@@ -26,6 +26,9 @@ final class FaceState {
 	/** Marked "not a face" by a human: cluster_id -3. */
 	public const IGNORED = 4;
 
+	/** What Memories sees: the states copied to Recognize's tables. */
+	public const VISIBLE = [self::ASSIGNED, self::UNASSIGNED];
+
 	/**
 	 * @return array{state: int, cluster_id: ?int} cluster_id is only non-null for ASSIGNED
 	 * @throws \InvalidArgumentException for a cluster_id that is none of the above (0, or below -3)
