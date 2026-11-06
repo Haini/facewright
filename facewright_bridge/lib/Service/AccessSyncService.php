@@ -27,6 +27,7 @@ class AccessSyncService {
 		private ProcessedFileService $processedFiles,
 		private MountFileService $mountFiles,
 		private IUserManager $userManager,
+		private FaceStore $faceStore,
 	) {
 	}
 
@@ -312,6 +313,27 @@ class AccessSyncService {
 			if (!$this->userManager->userExists($toUser)) {
 				continue;
 			}
+			$written += $this->copyRowsToUser($fileId, $toUser, $rows, $faceIdsByDonorRow);
+			// Rows before marker, same invariant as DetectionService::detect().
+			$this->processedFiles->copyMarker($fileId, $fromUser, $toUser, count($rows));
+		}
+
+		return $written;
+	}
+
+	/**
+	 * Copies the donor's rows for one file to one user: the detection rows, their links and our own
+	 * copy of each assignment, in one transaction.
+	 *
+	 * @param list<array<string, mixed>> $rows
+	 * @param array<int, int> $faceIdsByDonorRow donor detection id => physical face id
+	 *
+	 * @return int rows written
+	 */
+	private function copyRowsToUser(int $fileId, string $toUser, array $rows, array $faceIdsByDonorRow): int {
+		$written = 0;
+		$this->db->beginTransaction();
+		try {
 			foreach ($rows as $row) {
 				$insert = $this->db->getQueryBuilder();
 				$insert->insert('recognize_face_detections')
@@ -332,6 +354,7 @@ class AccessSyncService {
 						// rediscovers the same people under its own, untitled cluster ids.
 					]);
 				$insert->executeStatement();
+				$newRowId = $insert->getLastInsertId();
 				$written++;
 
 				$faceId = $faceIdsByDonorRow[(int)$row['id']] ?? null;
@@ -339,17 +362,20 @@ class AccessSyncService {
 					$link = $this->db->getQueryBuilder();
 					$link->insert('facewright_detection_faces')
 						->values([
-							'detection_id' => $link->createNamedParameter($insert->getLastInsertId(), IQueryBuilder::PARAM_INT),
+							'detection_id' => $link->createNamedParameter($newRowId, IQueryBuilder::PARAM_INT),
 							'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
 							'user_id' => $link->createNamedParameter($toUser),
 						]);
 					$link->executeStatement();
+
+					$this->faceStore->addFaces($toUser, [$newRowId => $faceId]);
 				}
 			}
-			// Rows before marker, same invariant as DetectionService::detect().
-			$this->processedFiles->copyMarker($fileId, $fromUser, $toUser, count($rows));
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
 		}
-
 		return $written;
 	}
 
@@ -383,15 +409,24 @@ class AccessSyncService {
 		$deleted = 0;
 		if ($idsToDelete !== []) {
 			foreach (array_chunk($idsToDelete, 1000) as $chunk) {
-				$linkQb = $this->db->getQueryBuilder();
-				$linkQb->delete('facewright_detection_faces')
-					->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
-				$linkQb->executeStatement();
+				$this->db->beginTransaction();
+				try {
+					$linkQb = $this->db->getQueryBuilder();
+					$linkQb->delete('facewright_detection_faces')
+						->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
+					$linkQb->executeStatement();
 
-				$delQb = $this->db->getQueryBuilder();
-				$delQb->delete('recognize_face_detections')
-					->where($delQb->expr()->in('id', $delQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
-				$deleted += $delQb->executeStatement();
+					$delQb = $this->db->getQueryBuilder();
+					$delQb->delete('recognize_face_detections')
+						->where($delQb->expr()->in('id', $delQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
+					$deleted += $delQb->executeStatement();
+					// Our own copy of those assignments goes with them.
+					$this->faceStore->mirrorFaces($chunk);
+					$this->db->commit();
+				} catch (\Throwable $e) {
+					$this->db->rollBack();
+					throw $e;
+				}
 			}
 		}
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\DetectionService;
+use OCA\FacewrightBridge\Service\FaceStore;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use Symfony\Component\Console\Command\Command;
@@ -26,6 +27,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 class ReopenUnassigned extends Command {
 	public function __construct(
 		private IDBConnection $db,
+		private FaceStore $faceStore,
 	) {
 		parent::__construct();
 	}
@@ -68,14 +70,34 @@ class ReopenUnassigned extends Command {
 	}
 
 	private function reopen(?string $userId): int {
-		$qb = $this->db->getQueryBuilder();
-		$qb->update('recognize_face_detections')
-			->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
-			->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
-			->andWhere(DetectionService::ownRowsExpr($qb));
+		// The ids first, so our own copy of these faces can be rewritten from the rows afterwards.
+		$sel = $this->db->getQueryBuilder();
+		$sel->select('id')
+			->from('recognize_face_detections')
+			->where($sel->expr()->eq('cluster_id', $sel->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+			->andWhere(DetectionService::ownRowsExpr($sel));
 		if ($userId !== null) {
-			$qb->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			$sel->andWhere($sel->expr()->eq('user_id', $sel->createNamedParameter($userId)));
 		}
-		return $qb->executeStatement();
+		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
+
+		$this->db->beginTransaction();
+		try {
+			$qb = $this->db->getQueryBuilder();
+			$qb->update('recognize_face_detections')
+				->set('cluster_id', $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL))
+				->where($qb->expr()->eq('cluster_id', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->andWhere(DetectionService::ownRowsExpr($qb));
+			if ($userId !== null) {
+				$qb->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			}
+			$affected = $qb->executeStatement();
+			$this->faceStore->mirrorFaces($ids);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+		return $affected;
 	}
 }

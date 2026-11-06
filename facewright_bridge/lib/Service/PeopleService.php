@@ -24,6 +24,7 @@ use OCP\IDBConnection;
 class PeopleService {
 	public function __construct(
 		private IDBConnection $db,
+		private FaceStore $faceStore,
 	) {
 	}
 
@@ -278,14 +279,23 @@ class PeopleService {
 	public function createCluster(string $userId, string $title): int {
 		$this->assertValidTitle($userId, $title, null);
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->insert('recognize_face_clusters')
-			->values([
-				'title' => $qb->createNamedParameter($title),
-				'user_id' => $qb->createNamedParameter($userId),
-			]);
-		$qb->executeStatement();
-		return $qb->getLastInsertId();
+		$this->db->beginTransaction();
+		try {
+			$qb = $this->db->getQueryBuilder();
+			$qb->insert('recognize_face_clusters')
+				->values([
+					'title' => $qb->createNamedParameter($title),
+					'user_id' => $qb->createNamedParameter($userId),
+				]);
+			$qb->executeStatement();
+			$id = $qb->getLastInsertId();
+			$this->faceStore->mirrorClusters([$id]);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+		return $id;
 	}
 
 	/** @throws \InvalidArgumentException if $clusterId doesn't exist for $userId, or $title is invalid */
@@ -293,12 +303,20 @@ class PeopleService {
 		$this->getCluster($userId, $clusterId); // throws if not $userId's
 		$this->assertValidTitle($userId, $title, $clusterId);
 
-		$qb = $this->db->getQueryBuilder();
-		$qb->update('recognize_face_clusters')
-			->set('title', $qb->createNamedParameter($title))
-			->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-			->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
-		$qb->executeStatement();
+		$this->db->beginTransaction();
+		try {
+			$qb = $this->db->getQueryBuilder();
+			$qb->update('recognize_face_clusters')
+				->set('title', $qb->createNamedParameter($title))
+				->where($qb->expr()->eq('id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
+				->andWhere($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+			$qb->executeStatement();
+			$this->faceStore->mirrorClusters([$clusterId]);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
 	}
 
 	/**
@@ -380,6 +398,8 @@ class PeopleService {
 
 		$this->db->beginTransaction();
 		try {
+			$memberIds = $this->memberIds($userId, $mergeIds);
+
 			$qb = $this->db->getQueryBuilder();
 			$qb->update('recognize_face_detections')
 				->set('cluster_id', $qb->createNamedParameter($keepId, IQueryBuilder::PARAM_INT))
@@ -394,6 +414,8 @@ class PeopleService {
 			$qb->executeStatement();
 			$this->forgetClusters($userId, $mergeIds);
 			$this->forgetCentroids($userId, [$keepId]); // its size changed
+			$this->faceStore->mirrorFaces($memberIds);
+			$this->faceStore->mirrorClusters($mergeIds);
 			$this->db->commit();
 		} catch (\Throwable $e) {
 			$this->db->rollBack();
@@ -433,6 +455,8 @@ class PeopleService {
 
 		$this->db->beginTransaction();
 		try {
+			$memberIds = $this->memberIds($userId, $clusterIds);
+
 			$qb = $this->db->getQueryBuilder();
 			$qb->update('recognize_face_detections')
 				->set('cluster_id', $qb->createNamedParameter(ClusteringService::UNASSIGNED, IQueryBuilder::PARAM_INT))
@@ -446,6 +470,8 @@ class PeopleService {
 				->andWhere($qb->expr()->in('id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
 			$qb->executeStatement();
 			$this->forgetClusters($userId, $clusterIds);
+			$this->faceStore->mirrorFaces($memberIds);
+			$this->faceStore->mirrorClusters($clusterIds);
 			$this->db->commit();
 		} catch (\Throwable $e) {
 			$this->db->rollBack();
@@ -570,6 +596,9 @@ class PeopleService {
 				$changed += $qb->executeStatement();
 
 				$this->deleteEmptyUntitledClusters($userId, $sources);
+				// Rewritten from the rows themselves, so a face the guard above skipped stays as it was.
+				$this->faceStore->mirrorFaces($batch);
+				$this->faceStore->mirrorClusters($sources);
 			}
 			$this->db->commit();
 		} catch (\Throwable $e) {
@@ -666,10 +695,43 @@ class PeopleService {
 			->from('recognize_face_detections')
 			->where($sub->expr()->eq('cluster_id', $sub->createFunction($sub->getTableName('recognize_face_clusters') . '.id')));
 
+		// The ids first, so our own copy of those people can be removed with them.
+		$sel = $this->db->getQueryBuilder();
+		$sel->select('id')
+			->from('recognize_face_clusters')
+			->where($sel->expr()->eq('user_id', $sel->createNamedParameter($userId)))
+			->andWhere($sel->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
+		$ids = array_map('intval', $sel->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
+
+		$this->db->beginTransaction();
+		try {
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete('recognize_face_clusters')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
+			$deleted = $qb->executeStatement();
+			$this->faceStore->mirrorClusters($ids);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+		return $deleted;
+	}
+
+	/**
+	 * Ids of $userId's faces currently in any of these people, read before a change so the faces' own
+	 * copies can be rewritten after it.
+	 *
+	 * @param list<int> $clusterIds
+	 * @return list<int>
+	 */
+	private function memberIds(string $userId, array $clusterIds): array {
 		$qb = $this->db->getQueryBuilder();
-		$qb->delete('recognize_face_clusters')
+		$qb->select('id')
+			->from('recognize_face_detections')
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->createFunction('NOT EXISTS (' . $sub->getSQL() . ')'));
-		return $qb->executeStatement();
+			->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
+		return array_map('intval', $qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
 	}
 }

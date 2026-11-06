@@ -156,8 +156,8 @@ writes nothing, for measuring against a database that must not change), `facewri
 [--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below),
 `facewright:migrate-faces [--dry-run] [--chunk=<files>] [--reset-cursor]` (Stage 1 backfill,
 see "Schema mapping").
-`facewright:own-tables --precheck` (read-only counts that decide whether the move into our own tables
-can start; `docs/own-tables.md`).
+`facewright:own-tables --precheck | --migrate | --verify` (the move into our own tables; `--migrate` needs
+processing paused; `docs/own-tables.md`).
 
 ## Invariants — read before touching the tables
 
@@ -208,6 +208,17 @@ can start; `docs/own-tables.md`).
   person removed from Memories' side is inert. Merge, delete, `resetUser()` and `ResetService`
   clear them; nothing else does.
 - `threshold` is left at its DB default, matching Recognize's own insert.
+
+### Our own copies of people and assignments
+
+`facewright_clusters` and `facewright_user_faces` (state `FaceState`: pending, assigned, unassigned,
+unclusterable, ignored) are kept as an exact mirror of `recognize_face_clusters` / `_detections` for the move
+to tables we own (`docs/own-tables.md`). Recognize's tables are still the source of truth; **every writer to
+them must tell `FaceStore` which ids it touched** (`mirrorFaces`, `mirrorClusters`, `addFaces`, `deleteFaces`)
+inside the same transaction, after its own statement. The copy is rewritten from the Recognize rows, never
+computed from what the caller meant to do. A new writer that skips this makes `occ facewright:own-tables
+--verify` fail; fix the writer, do not re-run the backfill to hide it. Ids are shared: a copy has the same id as
+the row it mirrors.
 
 ### Telling our rows from Recognize's
 

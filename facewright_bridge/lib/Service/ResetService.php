@@ -32,6 +32,7 @@ class ResetService {
 
 	public function __construct(
 		private IDBConnection $db,
+		private FaceStore $faceStore,
 	) {
 	}
 
@@ -46,6 +47,10 @@ class ResetService {
 		$this->deleteByIds('facewright_detection_faces', 'detection_id', $detectionIds);
 		$deletedDetections = $this->deleteByIds('recognize_face_detections', 'id', $detectionIds);
 		$deletedClusters = $this->deleteByIds('recognize_face_clusters', 'id', $clusterIds);
+		// Our own copies of exactly those rows and people. Not "everything": the people table also holds
+		// copies of Recognize's own legacy people, which this reset deliberately leaves alone.
+		$this->faceStore->deleteFaces($detectionIds);
+		$this->faceStore->mirrorClusters($clusterIds);
 		$deletedFaces = $this->deleteOrphanedFaces($faceIds);
 
 		$qb = $this->db->getQueryBuilder();

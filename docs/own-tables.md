@@ -603,11 +603,74 @@ Build raw SQL with `$qb->getTableName()` and `IDBConnection::executeQuery`, as
 is what is being proven here, so exercise every row of the C.3 table. A `--verify` failure after use
 means a write path was missed: find it, do not re-run the backfill to hide it.
 
-### C.6 **[user runs]** Stage C on production
+### As built (2026-11-06, dev only)
 
-Hand the user: deploy; pause processing on the admin page; `occ facewright:own-tables --migrate`;
-`--verify`; unpause; `--verify` again a few days later. Stage D starts only once the second `--verify`
-passes: production use is the real test of dual-write.
+Files: `lib/Migration/Version000007000Date20261106120000.php`, `lib/Service/FaceState.php`,
+`lib/Service/FaceStore.php`, `OwnTablesMigrationService` and `Command/OwnTables` extended with `--migrate`,
+`--verify`, `--dry-run`, `--chunk`, `--reset-cursor`; the writers listed in C.3 changed. Bridge version 0.9.0.
+The tables match the spec above (`SHOW CREATE TABLE` checked).
+
+Deviations from the plan, and why:
+
+1. **`FaceStore` mirrors from the Recognize rows instead of taking `setState(ids, state, cluster)`.** A writer
+   says which ids it touched (`mirrorFaces`, `mirrorClusters`); the copy is rewritten from what the Recognize
+   row says after the change. That makes a guard that skipped a row, or a concurrent edit that won, decide for
+   both tables at once, so no writer reasons about its own `WHERE` twice, and `persistAssignments()`'s guard
+   stays untouched (it only records which rows it really updated). It also covers deletions: a row gone from
+   Recognize's table is removed from ours. Mirroring updates existing rows only, so a face the backfill has not
+   reached yet, or one of Recognize's legacy rows, stays absent. `FaceStore::resetUser()` is the one statement
+   form, because a reset can cover a hundred thousand faces.
+2. **One transaction around each logical write, not "where one is missing".** `DetectionService::detect()`
+   writes a whole file's rows inside one (the ExApp call stays outside; the processed marker stays after),
+   `AccessSyncService` copies per user and prunes per chunk in one, `ClusteringService` wraps the write phase
+   of `persistAssignments()` as a whole.
+3. **`ResetService` removes exactly the rows and people it deleted** (`deleteFaces`, `mirrorClusters`) rather
+   than calling `deleteAll()`: the people table also holds copies of Recognize's own legacy people, which a
+   reset leaves alone.
+4. **The backfill is set-based SQL** (`INSERT ... SELECT ... ON DUPLICATE KEY UPDATE` per id range), not
+   `setValues()` per row: two orders of magnitude fewer statements on a real library. It reads only id, user,
+   cluster and the link, never the vector. **MySQL/MariaDB only**; the command says so on another platform.
+5. **A new must-be-zero count in the precheck, `unknown_sentinel_rows`** (a `cluster_id` of 0 or below -3 has no
+   state to map to). `--migrate` refuses to start unless processing is paused and every must-be-zero count is 0.
+6. **`--verify` reports dangling rows separately.** A face assigned to a person that no longer exists is copied as
+   pending by the backfill and as assigned by a later change; both are right, so such rows are excluded from the
+   mismatch count and must merely exist.
+7. If `occ facewright:migrate-faces` links more rows after the backfill, run `--migrate` again (it is safe to
+   repeat): the new links make those rows "ours", and the copy does not have them.
+
+**How it was verified on dev.** After the backfill (2,797 faces, 311 people) `--verify` exits 0. The checker itself
+was broken four ways (a wrong state, a deleted copy, a tampered name, a stray copy) and caught all four.
+`--verify` was then run after every writer: the People API (create, rename, move faces to a person and to a new
+person, detach, ignore, unignore, move or detach one face, merge, delete person, delete empty people), the
+clustering writers (`occ facewright:cluster` assigning and creating people, a second pass marking faces
+unclusterable, `clearUnclusterableMarks()`, `--reset` for a small and a large user), `reopen-unassigned`,
+detection of a new file with a real face, `copyToUsers` and `pruneExceptUsers` called directly (a share cycle
+alone did not reach them, because the recipient's mount stays cached until their next request), deleting the
+file, and `occ facewright:reset`. The 33-check DAV battery from Stage B also passed with dual-write active, then
+a restore of the original data and a fresh backfill left dev clean. Every step exited 0.
+
+Not covered: concurrency (two writers on the same rows) and a library of production size. Both are what the
+second `--verify` a few days after the live migration is for.
+
+### C.6 Stage C on production
+
+Needs the user's go-ahead: it applies a migration, which means a version bump and `occ upgrade`.
+
+1. Deploy the files; run `occ app:update --showonly` and decide what else `occ upgrade` will apply (live is
+   current apart from maps, files_scripts and workflow_media_converter). No Recognize update is pending, so
+   the `MaintenanceJob` problem from the last upgrade does not apply, but check `oc_jobs` afterwards anyway.
+2. `occ upgrade`: creates the two tables. Dual-write starts at that moment, into empty tables; that is
+   harmless (mirroring updates existing rows only, creating and deleting people works).
+3. `occ facewright:own-tables --precheck`: the must-be-zero counts, now including `unknown_sentinel_rows`.
+4. Pause processing on the admin page, then `occ facewright:own-tables --migrate`. It copies in id ranges and
+   verifies at the end. On a library of about 200,000 faces expect a few minutes; it is resumable (the cursor is
+   kept in appconfig `own_tables_after_id`) and safe to repeat.
+5. `--verify` must exit 0. Then unpause.
+6. `--verify` again a few days later, after normal use. Stage D starts only once that passes: production use,
+   with concurrent writers, is the real test of dual-write.
+
+Rollback at any point: stop reading the new tables (Stage C changes nothing that reads them). To remove them,
+restore the pre-upgrade dump or drop the two tables; Recognize's tables were never modified by the backfill.
 
 ---
 

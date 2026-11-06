@@ -101,6 +101,7 @@ class DetectionService {
 		private IDBConnection $db,
 		private PublicFunctions $appAPI,
 		private ProcessedFileService $processedFiles,
+		private FaceStore $faceStore,
 	) {
 	}
 
@@ -165,6 +166,47 @@ class DetectionService {
 		// every pass forever.
 		$insertTargets = array_values(array_diff($targets, $this->usersWithRowsFor($fileId, $targets)));
 
+		// One transaction for the whole file: Recognize's rows, the links and our own copy of each
+		// assignment are written together or not at all, so a crash cannot leave them disagreeing.
+		// The processed marker stays outside and after it - see the invariant below.
+		$this->db->beginTransaction();
+		try {
+			$inserted = $this->storeFaces($fileId, $faces, $insertTargets, $imageWidth, $imageHeight);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+
+		// Recorded even for zero-face results - recognize_face_detections never gets a row then,
+		// which used to mean such files were reprocessed on every subsequent trigger run.
+		//
+		// Rows first, marker second, and that order is an invariant rather than a style choice: a
+		// crash in between leaves rows without a marker, which the next scan heals (it finds the
+		// rows, skips the insert, writes the marker). Marker-first would strand the file as
+		// processed-but-empty forever.
+		$this->processedFiles->markManyProcessed($targets, $fileId, count($faces));
+
+		return [
+			'success' => true,
+			'faces' => count($faces),
+			'inserted' => $inserted,
+			'users' => count($targets),
+			'error' => null,
+			'permanent' => false,
+		];
+	}
+
+	/**
+	 * Writes one file's faces: the physical face, then one detection row, link and own-table row per
+	 * target user. Runs inside the caller's transaction.
+	 *
+	 * @param array<int, array<string, mixed>> $faces
+	 * @param list<string> $insertTargets
+	 *
+	 * @return int detection rows inserted
+	 */
+	private function storeFaces(int $fileId, array $faces, array $insertTargets, int|float $imageWidth, int|float $imageHeight): int {
 		$inserted = 0;
 		foreach ($faces as $faceIndex => $face) {
 			[$x1, $y1, $x2, $y2] = $face['bbox'];
@@ -206,27 +248,13 @@ class DetectionService {
 					]);
 				$link->executeStatement();
 
+				$this->faceStore->addFaces($userId, [$detectionId => $faceId]);
+
 				$inserted++;
 			}
 		}
 
-		// Recorded even for zero-face results - recognize_face_detections never gets a row then,
-		// which used to mean such files were reprocessed on every subsequent trigger run.
-		//
-		// Rows first, marker second, and that order is an invariant rather than a style choice: a
-		// crash in between leaves rows without a marker, which the next scan heals (it finds the
-		// rows, skips the insert, writes the marker). Marker-first would strand the file as
-		// processed-but-empty forever.
-		$this->processedFiles->markManyProcessed($targets, $fileId, count($faces));
-
-		return [
-			'success' => true,
-			'faces' => count($faces),
-			'inserted' => $inserted,
-			'users' => count($targets),
-			'error' => null,
-			'permanent' => false,
-		];
+		return $inserted;
 	}
 
 	/** @return array{success: bool, faces: int, inserted: int, users: int, error: ?string, permanent: bool} */
