@@ -56,22 +56,40 @@ reads the sentinels from `face.cluster_id`, so the API must keep emitting them.
 
 ## What else writes to `rfd` and `rfc`
 
-Read from Recognize 12.0.2 and Memories 10.1.0 (the live versions, under `<apps-dir>/`).
-Not reproduced at runtime; Stage A does that.
+Code read from Recognize 12.0.2 and Memories 10.1.0 (the live versions, under
+`<apps-dir>/`). Behaviour observed on the dev stack, which runs Recognize 12.0.3 and
+Memories 11.0.2 (Stage A.2). **The two Recognize versions differ**, so what live does after a Recognize
+update changes:
+
+| | 12.0.2 (live) | 12.0.3 (dev, observed) |
+|---|---|---|
+| Move | `FsMove` carries owner, added users, target users; `onMove` copies to added users and deletes for everyone else | `FsMove` carries only the node id (a migration drops the three columns); a move on its own changed nothing |
+| Access update | uses the mount root's user list for every file in the mount, so a sub-shared folder can lose its rows | resolves access per file (`syncDetectionsForFile`) |
+| Copy | `copyDetectionsForFileFromUserToUser` | same, from whichever user already holds rows |
+| Delete | `removeDetectionsForFileFromUsersNotInList`, by `file_id`, no ownership filter | same |
+| DAV nodes | not scoped to the calling user | scoped; `findByFileIdWithTitle` takes a user id |
 
 | Writer | Effect | Stopped by `.noimage`? |
 |---|---|---|
 | `Dav/Faces/FaceRoot::setName`, `delete`, `moveInto` | rename, delete person, move face | no |
 | `Dav/Faces/FacePhoto::delete` | remove face: `NULL`, plus a whole-cluster vector read | no |
 | `Dav/Faces/FacesHome::createDirectory` | create person | no |
-| `Service/FsActionService::onAccessUpdate` | copies rows (`cluster_id` NULL), then deletes by `file_id` with no ownership filter; queues `ClusterFacesJob` | only where the file's storage has a marker (`StorageService::getFilesInMount`) |
-| `Service/FsActionService::onMove` | same copy and delete | no check in `onMove`; `FileListener` has partial ignored-territory checks |
-| `Service/FsActionService::onDeletion` | deletes by `file_id` | no; this is the `.noimage` mass-delete trap |
-| `ClusterFacesJob` | HDBSCAN writes; fails on 512-dim rows | armed by NULL rows (`MaintenanceJob`) or directly by the two handlers above |
+| `Service/FsActionService` access update | **observed:** copies every row of a file to each user who gained access, whatever its state (the `-1` and `-3` rows too), with `cluster_id` NULL, `face_vector` copied and **no `facewright_detection_faces` link**; queues `ClusterFacesJob` for the recipient; deletes by `file_id` for users without access | only where the file's storage has a marker (`StorageService::getFilesInMount`) |
+| `Service/FsActionService` move | no change on 12.0.3 without a share; 12.0.2 copies and deletes (code only) | `FileListener` has partial ignored-territory checks |
+| `Service/FsActionService::onDeletion` | **observed:** after a `.noimage` appeared, one queued deletion removed the file's rows for every user. The links stayed behind and `facewright_faces` survived, so nothing was lost beyond the assignments | no; this is the `.noimage` mass-delete trap |
+| `ClusterFacesJob` | HDBSCAN writes; fails on 512-dim rows | armed by NULL rows (`MaintenanceJob`) or directly by the access-update handler |
 | `occ recognize:reset-face-clusters`, `recognize:reset-faces`, admin reset | wipe everything | no |
 
-`docs/independence.md` does not list the `FsActionService` paths. `ProcessFsActionsJob` has no settings
-gate. Group folders and external storage have no marker at a user root, so they are the likely exposure.
+The access-update event does not fire when a share is created. Recognize queues the update when the
+recipient's mounts are first registered, which is their first request after the share.
+`ProcessFsActionsJob` has no settings gate. Not tested: group folders (the app is not on dev) and
+external storage, which have no marker at a user root and are the likely exposure on live.
+
+Consequence for the design: rows Recognize creates are unlinked copies of ours. The reconcile query for
+stale rows (E.2) matches them by vector length, which holds for both a real vector (over 3500) and the
+blanked `'[]'` (length 2). Removing them is correct, because they have no visible own row.
+
+`docs/independence.md` does not list the `FsActionService` paths.
 
 **Memories' five writes** (`js/memories-main.js`, 10.1.0): `DELETE recognize/{u}/faces/{p}/{id}-{name}`,
 `DELETE recognize/{u}/faces/{p}`, `MKCOL recognize/{u}/faces/{p}`, `MOVE` rename on `faces/{p}`, and
@@ -216,6 +234,21 @@ compatible release is acceptable: report it). Then index test photos with `occ m
 stack has had no Memories-indexed photos, and every Memories check below needs them. The People page
 in Memories must list people before you continue.
 
+**Done (2026-11-06).** Dev is on Nextcloud 34.0.5, but the App Store gave **Memories 11.0.2 and
+Recognize 12.0.3**, newer than live's 10.1.0 and 12.0.2. The plan's Memories claims were rechecked on
+11.0.2 (fixed `BACKENDS` constant, same DAV writes). Recognize 12.0.3 behaves differently from 12.0.2,
+see "What else writes". Two caveats:
+
+- The Memories 11.0.2 migration `900002Date20260920233813` failed with "Duplicate key name
+  `memories_parent_mc_fid_idx`": the index already existed although the migration was not recorded, so
+  its `hasIndex` guard was not enough. Dropping that index on the dev database and re-running
+  `occ upgrade` fixed it. Expect the same on any instance that upgrades Memories across that migration
+  after an interrupted run.
+- Memories 11.0.2 on Nextcloud 34 lists 297 people for the admin user through its Recognize backend
+  (`GET /apps/memories/api/clusters/recognize`, 25 indexed files, 5 of them with faces). For that,
+  `recognize/faces.enabled` was set to `true` with `occ config:app:set` and the user's `memories`
+  `timelinePath` to `/`; both were unset on dev. Checked at API level only, not in a browser.
+
 ### A.2 Reproduce the `FsActionService` writes
 
 No code. On the dev stack, as a throwaway experiment, with Recognize enabled and a `.noimage` at each
@@ -230,6 +263,12 @@ user's root as in production:
 Record, for each case: were rows copied or deleted, and was `ClusterFacesJob` queued
 (`occ background-job:list`). Add the results to "What else writes" in this doc, replacing "Not reproduced".
 Do not change the plan's direction on the result: reconcile handles all outcomes.
+
+**Done (2026-11-06), on Recognize 12.0.3.** Method: a test file with three clustered rows, a folder
+shared to a second user, `occ background-job:execute --force-execute` for each queued Recognize job, and
+row counts before and after. Results are in "What else writes". Dev was restored from a dump taken
+beforehand. Not covered: 12.0.2's move path (its `fs_moves` columns no longer exist after the 12.0.3
+migration, so it cannot run on this database), group folders and external storage.
 
 ### A.3 Add `occ facewright:own-tables --precheck`
 
@@ -248,6 +287,15 @@ Read-only. Prints the numbers Stage C depends on:
 - Links whose `face_id` is missing from `facewright_faces` (must be 0).
 
 **Verify:** the numbers match direct SQL on dev.
+
+**Done (2026-11-06).** As built, the command prints these names (the four marked `must be 0` fail the
+run): `detections_total`, `detections_linked`, `unlinked_long_rows` (must be 0), `unlinked_other_rows`,
+`link_user_mismatch` (must be 0), `links_without_detection`, `links_missing_face` (must be 0),
+`duplicate_user_face_groups`, `duplicate_user_face_extra_rows` (must be 0), `dangling_cluster_rows`,
+`people_total`, `people_without_members_titled`, `people_without_members_untitled`.
+`links_without_detection` is new: A.2 showed that a Recognize deletion leaves links behind. On dev every
+number matched independent SQL, and a planted duplicate, an orphan link and a link to a missing face
+were all caught (then removed). Bridge version is 0.8.1.
 
 ### A.4 **[user runs]** Precheck on production, and a backup
 

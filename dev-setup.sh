@@ -9,7 +9,7 @@
 # so that whole layer is unnecessary here - Nextcloud's AppAPI can talk to `facewright:9030`
 # straight over the network.
 #
-# Verified end-to-end against a real run of this exact compose stack (fresh volumes, NC 33).
+# Verified end-to-end against a real run of this exact compose stack (fresh volumes; re-checked on NC 34).
 # Two real bugs were found and fixed along the way, in case either resurfaces:
 #
 # 1. `nc.set_init_status(100)` (nc_py_api's own post-/init callback into Nextcloud, not this
@@ -40,7 +40,7 @@ until $COMPOSE_EXEC status 2>/dev/null | grep -q "installed: true"; do
 done
 
 echo "--- installing AppAPI + recognize + memories ---"
-# app_api ships enabled by default on recent Nextcloud (confirmed on NC 33 in this stack: no
+# app_api ships enabled by default on recent Nextcloud (confirmed on NC 33 and 34 in this stack: no
 # "app_store" occ namespace exists, and "app:install app_api" exits 1 with "already installed").
 # Both are non-errors here - only fail if app_api ends up neither already-enabled nor freshly
 # installed.

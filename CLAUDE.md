@@ -149,6 +149,8 @@ writes nothing, for measuring against a database that must not change), `facewri
 [--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below),
 `facewright:migrate-faces [--dry-run] [--chunk=<files>] [--reset-cursor]` (Stage 1 backfill,
 see "Schema mapping").
+`facewright:own-tables --precheck` (read-only counts that decide whether the move into our own tables
+can start; `docs/own-tables.md`).
 
 ## Invariants — read before touching the tables
 
