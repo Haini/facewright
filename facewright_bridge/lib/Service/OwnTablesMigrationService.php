@@ -29,6 +29,14 @@ class OwnTablesMigrationService {
 		'unknown_sentinel_rows',
 	];
 
+	/**
+	 * How far above Recognize's counters ours are seeded: enough that no id of ours starts on a row Recognize already
+	 * holds. It does not keep the spaces apart for good: a push of an explicit id moves Recognize's counter past it,
+	 * so its next row lands where our next id will. ProjectionService::reconcile() handles that meeting (a row on the
+	 * id of a visible face is overwritten, on a hidden one removed as a squatter).
+	 */
+	public const SEED_MARGIN = 1000;
+
 	private const APP_ID = 'facewright_bridge';
 	private const CURSOR_KEY = 'own_tables_after_id';
 
@@ -205,12 +213,12 @@ class OwnTablesMigrationService {
 
 	/**
 	 * Raises the id counters of our two tables above Recognize's, plus a margin, so an id we allocate can never
-	 * be one Recognize's tables already hold or will hand out soon. MariaDB does not advance a counter on
+	 * be one Recognize's tables already hold. MariaDB does not advance a counter on
 	 * explicit inserts into another table, which is why this is a step of its own. Only ever raises.
 	 *
 	 * @return array<string, array{current: int, floor: int, raised: bool}>
 	 */
-	public function seedIds(bool $dryRun, int $margin = 1000): array {
+	public function seedIds(bool $dryRun, int $margin = self::SEED_MARGIN): array {
 		$out = [];
 		foreach ([['facewright_user_faces', 'recognize_face_detections'], ['facewright_clusters', 'recognize_face_clusters']] as [$ours, $theirs]) {
 			$current = $this->autoIncrement($ours);

@@ -361,9 +361,21 @@ class ProjectionService {
 				$report['A']++;
 				$room($fixA) ? $fixA[] = $id : $report['truncated'] = true;
 			}
+			// B: a hidden face of ours whose row in Recognize's table is the same face (a Stage D remnant).
 			$report['B'] += $this->count(
-				"SELECT COUNT(*) FROM {$uf} u INNER JOIN {$rfd} d ON d.id = u.id WHERE u.id > {$after} AND u.id <= {$upper}{$uu} AND u.state NOT IN ({$visible})"
+				"SELECT COUNT(*) FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id INNER JOIN {$rfd} d ON d.id = u.id "
+				. "WHERE u.id > {$after} AND u.id <= {$upper}{$uu} AND u.state NOT IN ({$visible}) AND d.user_id <=> u.user_id AND d.file_id <=> f.file_id"
 			);
+			// C (squatters): a row sitting on the id of a hidden face of ours but belonging to another user or file.
+			// Recognize hands out ids from its own counter, which MariaDB moves past every id we push, so its next
+			// row lands exactly where our next id will. A visible face overwrites it (A); a hidden one never will.
+			foreach ($this->column(
+				"SELECT u.id FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id INNER JOIN {$rfd} d ON d.id = u.id "
+				. "WHERE u.id > {$after} AND u.id <= {$upper}{$uu} AND u.state NOT IN ({$visible}) AND NOT (d.user_id <=> u.user_id AND d.file_id <=> f.file_id) ORDER BY u.id"
+			) as $id) {
+				$report['C']++;
+				$room($fixC) ? $fixC[] = $id : $report['truncated'] = true;
+			}
 		}
 
 		// C: rows of Recognize's table that have no row of ours. The vector length is read only for these.
@@ -413,9 +425,11 @@ class ProjectionService {
 		$uf = $this->table('facewright_user_faces');
 		$fc = $this->table('facewright_clusters');
 		foreach (array_chunk($fixC, self::CHUNK) as $chunk) {
-			// Re-checked in the statement: only a row that still has no row of ours.
+			// Re-checked in the statement: only a row with no visible face of ours behind it. (A hidden face of
+			// ours has no claim on a row in Recognize's table, and a row with no face of ours at all is a stale copy.)
+			$visible = FaceState::ASSIGNED . ',' . FaceState::UNASSIGNED;
 			$this->withRetry(fn () => $this->db->executeStatement(
-				"DELETE FROM {$rfd} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$uf})"
+				"DELETE FROM {$rfd} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$uf} WHERE state IN ({$visible}))"
 			));
 			$report['repaired']['C'] += count($chunk);
 		}
