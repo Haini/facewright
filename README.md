@@ -37,17 +37,17 @@ Two apps live in this repo to make that possible:
   boxes + 512-d embeddings.
 - **`facewright_bridge`** - a regular Nextcloud PHP app. ExApps have no sanctioned path to raw
   database access, and per-user fan-out needs real Nextcloud-side APIs
-  (`IUserMountCache` etc.), so this small app is what actually calls `facewright`, then writes
-  the results into Recognize's tables via Nextcloud's `QueryBuilder`. It also owns clustering
+  (`IUserMountCache` etc.), so this small app is what actually calls `facewright`, keeps the
+  results in its own tables, and copies what Memories shows into Recognize's tables. It also owns clustering
   (turning raw detections into "people"), file-event/background-job triggers, and an admin
   settings page.
 
 **A People page of its own.** `facewright_bridge` adds a "People" entry to the top bar for curating
 what clustering produced: browse people as face crops, rename them, merge two that are the same
 person (it suggests likely pairs), delete one, move a face to another person, mark a face as "not
-a face", and do any of that to a whole selection at once. Unlike removing a face in Memories, which
-the next clustering pass can undo, a removal here sticks. Memories remains the place to browse
-photos by person. Merge suggestions are per person and use an uncalibrated distance threshold
+a face", and do any of that to a whole selection at once. Edits made in Memories go through the
+same code, so a removal sticks in either place. Memories remains the place to browse photos by
+person. Merge suggestions are per person and use an uncalibrated distance threshold
 (`suggest_max_distance`, default 0.6).
 
 Rejected alternative: patching Recognize's PHP to call an ExApp instead of its Node subprocess.
@@ -64,10 +64,12 @@ full design history and every incident/gotcha hit building this, if you want the
   [Immich](https://github.com/immich-app/immich)'s InsightFace defaults (cosine distance 0.5,
   min 3 faces), since Immich uses the same `buffalo_l` model. Spot-checked against real photos
   from one library and looked correct, but not yet validated against a large, diverse dataset.
-- **No resilience to Recognize's own schema changing.** This project depends directly on
-  Recognize's internal tables, which are undocumented and could change in a future Recognize
-  release (Recognize 10 already renamed the vector column once). `docs/independence.md` reviews
-  the full coupling to Recognize and Memories and lays out a staged way out of it.
+- **Memories still needs Recognize's tables.** The data lives in this project's own tables, but
+  Memories reads a copy in Recognize's internal tables and sends its edits to Recognize's DAV paths,
+  which this app answers. Both are undocumented and could change in a future release (Recognize 10
+  already renamed the vector column once); a change there breaks Memories' People page, not the
+  data. `docs/independence.md` reviews the coupling, and `docs/own-tables.md` is the plan, ending in
+  a change to Memories itself.
 - **The People page has only been tried by hand, on a throwaway instance with generated data,**
   not yet on a real library. A face marked "not a face" is forgotten if its file is re-detected
   from scratch (`occ facewright:detect`, `occ facewright:reset`).

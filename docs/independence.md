@@ -4,9 +4,9 @@ A review of how far `facewright_bridge` is coupled to Recognize and Memories tod
 roadmap for reducing it. Companion to `CLAUDE.md`, which documents the current design; this file
 documents what would have to change and in which order.
 
-**Status.** Stages 0 and 1 are done. `docs/own-tables.md` replaces the rest of this roadmap: the data
-moves into tables we own, a temporary one-way push feeds Recognize's tables, and an upstream Memories
-change is the target. Stage 2's shim is no longer planned. This file stays as the coupling inventory;
+**Status.** Stages 0 and 1 are done. `docs/own-tables.md` replaced the rest of this roadmap and is mostly
+done too: the data lives in tables we own, a temporary one-way push feeds Recognize's tables, and an upstream
+Memories change is the target. Stage 2's shim is no longer planned. This file stays as the coupling inventory;
 its deviations are listed in that plan.
 
 The step-by-step implementation plan for the roadmap is `docs/independence-implementation.md`;
@@ -14,8 +14,8 @@ where the two differ, that plan wins (its "Deviations" section lists the differe
 
 Verified against the app versions installed on the reference instance: Memories 8.1.0,
 Recognize 12.0.2 (both at `<apps-dir>/`), and the Photos app shipped with
-Nextcloud 33. Line numbers refer to those versions. The live instance has since moved to Nextcloud 34
-and Memories 10.1.0; `docs/own-tables.md` was checked against those.
+Nextcloud 33. Line numbers refer to those versions. The live instance has since moved to Nextcloud 34,
+Memories 11.0.2 and Recognize 12.0.3; `docs/own-tables.md` records what changed.
 
 ## Why
 

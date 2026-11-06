@@ -84,9 +84,9 @@ showing a cropped contact face (the whole contact photo is shown).
 Names reach Memories with no extra work: accepting a suggestion is a rename of a
 `recognize_face_clusters` row, which is what Memories reads.
 
-If this is built after Stage D of `docs/own-tables.md`, its joins on `recognize_face_clusters` should
-target `facewright_clusters`, and renames reach Memories through the projection. Cluster ids stay
-valid either way.
+Since Stage D of `docs/own-tables.md` the joins here should target `facewright_clusters` rather than
+`recognize_face_clusters`, and renames reach Memories through the projection. Cluster ids are the same in
+both.
 
 ---
 
