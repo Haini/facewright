@@ -230,7 +230,7 @@ class FaceStore {
 		$sql = "SELECT c.id FROM {$fc} c WHERE c.user_id = ?"
 			. ($among !== null ? ' AND c.id IN (' . implode(',', $this->ints($among)) . ')' : '')
 			. ($untitledOnly ? " AND c.title = ''" : '')
-			. " AND NOT EXISTS (SELECT 1 FROM {$uf} u WHERE u.cluster_id = c.id)"
+			. " AND NOT EXISTS (SELECT 1 FROM {$uf} u WHERE u.user_id = c.user_id AND u.cluster_id = c.id)"
 			// A row of Recognize's own that points at the person and has no row of ours: not ours to orphan.
 			. " AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = c.id AND NOT EXISTS (SELECT 1 FROM {$uf} u2 WHERE u2.id = d.id))"
 			. ' ORDER BY c.id';

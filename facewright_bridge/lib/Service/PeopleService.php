@@ -101,7 +101,11 @@ class PeopleService {
 	private function clusterListQuery(string $userId, int $minCount, string $search): IQueryBuilder {
 		$qb = $this->db->getQueryBuilder();
 		$qb->from('facewright_clusters', 'c')
-			->leftJoin('c', 'facewright_user_faces', 'u', $qb->expr()->eq('u.cluster_id', 'c.id'))
+			// user_id too: the index is (user_id, cluster_id), and without it this walks every face for every person.
+			->leftJoin('c', 'facewright_user_faces', 'u', $qb->expr()->andX(
+				$qb->expr()->eq('u.user_id', 'c.user_id'),
+				$qb->expr()->eq('u.cluster_id', 'c.id'),
+			))
 			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
 			->groupBy('c.id', 'c.title');
 		if ($search !== '') {
