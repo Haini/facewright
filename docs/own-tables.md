@@ -813,6 +813,28 @@ New option `occ facewright:own-tables --blank-vectors [--dry-run] [--chunk=<n>]`
 Large rewrites belong in commands, not migrations. Disk is reclaimed only by rebuilding the table, which
 is an `ALTER TABLE ... FORCE` in a maintenance window. Leave that to the user.
 
+**What this frees, measured on live 2026-11-07** (exact `COUNT(*)`; `information_schema.table_rows` was up to 22% low):
+`rfd` held 199,483 rows in a 1,132 MB `.ibd`, of which 913 MB was `face_vector` text on 199,339 rows of ours and
+44,854 rows were hidden-state (B). With vectors in-page at about 4.8 KB, only about 3 rows fit on a 16 KB page, so every
+Memories read of `rfd` pulls in vectors nothing reads. The buffer pool was 2 GB and full (1,468 of 129,792 pages
+free). Expected after F.1 and the rebuild: about 154,600 rows and roughly 30 to 40 MB, freeing about 1.1 GB of
+disk and taking `rfd` out of competition for the pool. All face tables together then come to about 430 MB, the
+largest being `facewright_faces` (312 MB, 131,755 float32 embeddings). Re-measure before running; the numbers drift.
+
+**Rebuild.** Blanking and deleting free nothing by themselves: the rows shrink, but pages stay sparse until the table
+is rebuilt. After both steps and their verification, with the user's go-ahead:
+
+    ALTER TABLE oc_recognize_face_detections FORCE, ALGORITHM=INPLACE, LOCK=NONE;
+
+On MariaDB 10.11 this rebuilds online (reads and writes continue), and the schema is unchanged: the table is
+Recognize's, so nothing but the rebuild is done to it. Before it, record `data_length`, `index_length`, `data_free` and the
+`.ibd` size, and compare them afterwards together with `COUNT(*)`, which must not change. `OPTIMIZE TABLE` does the same
+(InnoDB maps it to a rebuild) but says less clearly what it does.
+
+**Ordering note, unchecked against the Stage D code:** blanking may not need the two-week wait that deleting rows
+does, because `--hydrate` writes `'[]'` anyway and Stage D reads embeddings only from `facewright_faces`. Verify that
+claim in the Stage D files before acting on it; pulling it forward is the user's call.
+
 **Verify:** `rfd` holds only `cluster_id > 0` or `-1` rows, apart from legacy rows; Memories unchanged.
 
 ### F.2 Delete the transitional code
