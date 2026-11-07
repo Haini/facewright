@@ -242,6 +242,9 @@ ignored) are the source of truth for people and face assignments (`docs/own-tabl
   the cutover (tolerated until Stage F), C stale copies and squatters, D people missing or stale. It reads a vector
   only for rows with no row of ours. Recognize's `.noimage` deletion job, its access sync (which writes rows of its
   own) and even `occ recognize:reset-face-clusters` are recoverable this way; that is tested in `dev/`.
+- **`facewright_user_faces` has no index that starts with `cluster_id`.** Every query or join on it by `cluster_id` must
+  also name `user_id` (the index is `(user_id, cluster_id)`). Without it the query walks every face for each person, and
+  dev's small data will not show it: the People overview took 26 s per query on a real library for this reason.
 - **Reads use ours**: clustering, the People page and API, suggestions, face crops, access sync, reset, the commands.
   The one read of Recognize's table is the legacy-member test: a person that a row of Recognize's own with no row of
   ours still points at is never judged empty, so never deleted (`FaceStore::emptyClusterIds`). Merge and delete move

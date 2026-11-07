@@ -32,8 +32,7 @@
 > 4. **Stage G** (the Memories pull request) posts publicly: only with the user's go-ahead.
 >
 > **Verification tooling** is under `dev/` (`dev/README.md`; `dev/run-all.sh --ui` on the compose stack, which takes a
-> lock because the dev DB is shared). The last full run passed 15 of 16 suites. The one failure was the rollback drill,
-> which was then fixed and passed 23 of 23 on its own; there has been no full 16-of-16 run since. The ground-truth
+> lock because the dev DB is shared). The last full run passed 17 of 17 suites (2026-11-07). The ground-truth
 > clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from the Georgia Tech set, which is fetched, never
 > committed) passed 15 of 15.
 >
@@ -260,6 +259,7 @@ re-projecting, instead of losing curation or forcing a rescan.
      anything (an out-of-range API parameter, a loop that did not split its input, a setup call that had failed).
    - Every test asserts its own precondition: the rows it needs exist, and something actually changed.
    - Plant a failure to prove each checker can fail, then repair it.
+   - Compare time as well as output, on production-sized data. Identical output hid the Stage D regression below.
    - Dev has no dangling, legacy or oddly shaped rows. Before a change reaches live, list what live has that dev
      does not (the precheck's informational counts) and decide how each would behave.
 
@@ -577,6 +577,15 @@ Fixed: those rows were reopened to `NULL` in Recognize's table (id list dumped f
 `passProgress` now counts rows written. The chain ended on live and `--verify` is clean. The regression is
 `dev/chain-loop-test.sh dangling`; it fails on the code from before the fix (the chain still loops after 12 runs).
 
+### Finding from the code review: the People overview slowed down by two orders of magnitude (fixed)
+
+Stage D moved `PeopleService::clusterListQuery()` from Recognize's table, which has an index on `cluster_id`, to
+`facewright_user_faces`, whose index is `(user_id, cluster_id)`, and the join named only `cluster_id`. On live the query
+took 26.4 s for a user with 3,491 people and ran twice per page. With `u.user_id = c.user_id` in the join it takes 0.19 s,
+and `occ facewright:people` went from 26.9 s to 0.57 s and from 9.7 s to 0.46 s. `FaceStore::emptyClusterIds()` had the same
+shape (27 ms against 0.15 ms per candidate). Every capture stayed identical throughout, because they compare output, and
+dev is too small to feel it. The user noticed it first. Fixed and deployed 2026-11-06.
+
 ### Finding from the `dev/` scripts: parallel DAV moves deadlock (fixed)
 
 Memories sends one MOVE per face, in parallel, when a person is merged. Three of eleven returned 500 on dev
@@ -724,8 +733,12 @@ The person-visible check passed (the user renamed, moved and removed faces in Me
 run afterwards still had A = C = D = 0, `--verify` exit 0, nothing of ours in the log after the unpause).
 
 Afterwards the job's `repaired` line was raised from info to warning, because live logs at Warning and a repair left no
-trace: one file copied, no version bump, no `occ upgrade`. The bridge's comment-only changes of 2026-11-07 are not on
-live; they arrive with the next deploy.
+trace: one file copied, no version bump, no `occ upgrade`.
+
+Then the review fixes went to live on 2026-11-07, ten files copied, no version bump, no `occ upgrade`, after `dev/run-all.sh
+--ui` passed 17 of 17 (backup: `<backups>/facewright-pre-phase2/`): `persistAssignments()` writes through `FaceStore`, the
+job counts what it really deleted, clears `projection_last_error` once clean and skips its recount when it found nothing,
+and the deadlock retry is shared (`DeadlockRetry`). The comment-only changes went with them, so live matches the repo.
 
 Still to do: the day-after check at the top of this document, and then at least two weeks before Stage F.
 
