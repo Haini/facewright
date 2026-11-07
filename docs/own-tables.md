@@ -690,7 +690,7 @@ fail, and handing writes back to it would lose them.
 
 ### As built (2026-11-06)
 
-Commits `4dcb839` (projection and reconcile), `b8093d8` (writers), `1deda14` (job, status, no router switch), `e790c0d`
+Commits `37ebbb4` (projection and reconcile), `8285ebd` (writers), `2ad7d5d` (job, status, no router switch), `c03cbeb`
 (squatters), plus the `dev/` suites. Differences from the first design, each found by a test:
 
 - **`push()` inside a transaction does not throw.** It logs, flags the copy dirty and returns false. A listener (a file
@@ -723,7 +723,7 @@ Cut over with the runbook below, in this order, each step checked before the nex
 
 1. Processing paused; nothing running. A full dump of the one database, a tarball of the live bridge files, and the
    counts and checksums of Recognize's two tables were saved outside the repo (live files were
-   byte-identical to the Stage D tip `d620eff`, so the tarball is the R2 rollback source). Stage D's `--verify` was clean.
+   byte-identical to the Stage D tip `3c0cba4`, so the tarball is the R2 rollback source). Stage D's `--verify` was clean.
    **One precondition was not met as written:** the runbook asks for Stage D on live for a few days, and it ran for
    hours; the user chose to go ahead. Share and unshare have therefore still not been seen on live, under Stage D or E.
 2. Files deployed from `git archive HEAD`, version 0.10.0, `occ upgrade`. It updated only the bridge: the three pending

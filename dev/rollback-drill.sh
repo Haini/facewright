@@ -4,9 +4,9 @@
 # must pass: nothing is lost. Then the Stage E files return and the copy must be clean again.
 # Swaps the TRACKED files of facewright_bridge in this checkout (restored on exit, even on a crash), so it refuses to
 # start unless that directory is clean. Changes data: restore a snapshot afterwards.
-#   dev/rollback-drill.sh        STAGE_D_REF (default d620eff) is the last commit before Stage E
+#   dev/rollback-drill.sh        STAGE_D_REF (default 3c0cba4) is the last commit before Stage E
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-: "${STAGE_D_REF:=d620eff}"; u=$ADMIN_USER
+: "${STAGE_D_REF:=3c0cba4}"; u=$ADMIN_USER
 BR="$REPO_DIR/facewright_bridge"
 [ -z "$(git -C "$REPO_DIR" status --porcelain facewright_bridge)" ] || { echo "facewright_bridge has uncommitted changes: commit or stash them first (this script swaps its files)"; exit 2; }
 git -C "$REPO_DIR" cat-file -e "$STAGE_D_REF^{commit}" 2>/dev/null || { echo "no such commit: $STAGE_D_REF"; exit 2; }
