@@ -29,6 +29,22 @@ DAV_BASE="http://localhost/remote.php/dav"
 
 occ() { docker exec -u www-data "$NC_CONTAINER" php occ "$@"; }
 
+# An app password for USER, made once and kept in .work/tokens. Nextcloud checks a real password against its Argon2id
+# hash on every Basic-auth request (0.37 s of CPU each, whatever the parallelism) and an app password by a plain hash
+# lookup (0.04 s), which makes a suite about ten times faster with the same requests. Falls back to the password, so a
+# missing container or a failed `occ` costs speed, not a false result. The Memories UI flows log in with the real one.
+fast_pass() {  # fast_pass USER PASSWORD
+  local u=$1 p=$2 f="$WORK_DIR/tokens/$1" t=""
+  [ -f "$f" ] && t=$(cat "$f")
+  if [ -n "$t" ] && [ "$(docker exec "$NC_CONTAINER" curl -s -o /dev/null -w '%{http_code}' -u "$u:$t" -H 'OCS-APIRequest: true' http://localhost/ocs/v2.php/cloud/user 2>/dev/null)" = 200 ]; then
+    echo "$t"; return
+  fi
+  t=$(docker exec -u www-data -e NC_PASS="$p" "$NC_CONTAINER" php occ user:auth-tokens:add --password-from-env --name=dev-suite "$u" 2>/dev/null | grep -oE '[A-Za-z0-9]{40,}' | head -1)
+  if [ -n "$t" ]; then mkdir -p "$WORK_DIR/tokens"; echo "$t" > "$f"; echo "$t"; else echo "$p"; fi
+}
+ADMIN_PASS=$(fast_pass "$ADMIN_USER" "$ADMIN_PASS")
+BOB_PASS=$(fast_pass "$BOB_USER" "$BOB_PASS")
+
 # SQL: rows tab-separated without a header (sql), or with one (sqlh); `one` is the first value; `csv` one column
 # as a comma list. Warnings about passing the password on the command line are dropped.
 sql()  { docker exec "$DB_CONTAINER" mariadb -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -e "$1" 2>/dev/null; }

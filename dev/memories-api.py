@@ -13,6 +13,11 @@ import concurrent.futures, json, os, subprocess, sys, urllib.parse
 
 NC = os.environ.get("NC_CONTAINER", "recognaize-nextcloud-1")
 DEFAULT = "admin:dev-admin-password"   # bob has no Memories timeline folder, so Memories refuses him
+try:   # the app password lib.sh keeps: ten times faster than the real password, which costs an Argon2id check per request
+    _t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".work/tokens/admin")).read().strip()
+    if _t and NC == "recognaize-nextcloud-1": DEFAULT = "admin:" + _t
+except OSError:
+    pass
 
 def get(user, pw, path):
     r = subprocess.run(["docker", "exec", NC, "curl", "-s", "-u", f"{user}:{pw}", "-H", "OCS-APIRequest: true", f"http://localhost/apps/memories/api/{path}"],

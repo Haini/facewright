@@ -14,8 +14,9 @@ ls "$WORK_DIR/snapshots/original"* >/dev/null 2>&1 || { echo "no snapshot 'origi
 declare -a names results
 run() { local name=$1; shift
   "$DEV_DIR/snapshot.sh" restore original >/dev/null
+  local t0=$SECONDS
   "$@" > "$WORK_DIR/last-$name.log" 2>&1; local rc=$?
-  names+=("$name"); results+=("$rc"); printf '%-28s %s   (log: %s)\n' "$name" "$([ $rc -eq 0 ] && echo PASS || echo "FAIL ($rc)")" "$WORK_DIR/last-$name.log"; }
+  names+=("$name"); results+=("$rc"); printf '%-28s %-9s %4d s   (log: %s)\n' "$name" "$([ $rc -eq 0 ] && echo PASS || echo "FAIL ($rc)")" "$((SECONDS-t0))" "$WORK_DIR/last-$name.log"; }
 echo "(a snapshot restore precedes every suite)"
 run reads-stable           "$DEV_DIR/reads.sh" stable
 run reads-direct-stable    "$DEV_DIR/reads-direct.sh" stable

@@ -44,6 +44,14 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `make-shared-fixture.sh`, `check-fixture.sh` | shared-file fixture and the preconditions the suites need | fixture only |
 | `setup-venv.sh`, `make-portrait.py` | Playwright/Chromium and a real-face test photo (`dev/.work/venv`) | no |
 
+## Why it is not slower
+
+- **App passwords.** `lib.sh` replaces the suites' passwords with app passwords (`fast_pass`, kept in `.work/tokens`), because
+  a real password costs an Argon2id check per request. Same requests, same answers. The Memories UI flows log in for real.
+- **Cached detection.** `clustering-truth.sh` keeps what detection wrote in `.work/gt-cache`, keyed on the ExApp and detection
+  code and on `PEOPLE`, and rebuilds it when those change. `DETECT_FRESH=1` forces the real upload and detection.
+- `run-all.sh` prints each suite's seconds. Suites share one database, so they cannot run side by side.
+
 ## Using them for a change
 
 Capture on the old code, run `stable` to prove the capture deterministic, change the code, capture again, diff.
