@@ -7,6 +7,11 @@
 > confirmed in Memories that rename, move and remove-face edits work and show at once. The work is on `master`, not
 > pushed. Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
 >
+> **On dev, not on live (commit `f4008f7`, `dev/run-all.sh --ui` 18 of 18):** `--migrate` and `migrate-faces` refuse once our
+> tables hold faces, a repeated share copy no longer breaks the unique index, `setState()` refuses a person on a state
+> that has none. Until that is deployed, **do not run either command on live**: `--migrate` overwrites our tables from
+> Recognize's copy. Deploying is a file copy, no version bump, no `occ upgrade`, and needs the user's go-ahead.
+>
 > **What is open, in order** (nothing below is started; each destructive step needs the user's go-ahead):
 > 1. **Day-after check (from 2026-11-07).** A clean dry run alone proves little, because the hourly
 >    `ProjectionMaintenanceJob` repairs drift before anyone looks. The evidence is what it logged. On live:
@@ -585,6 +590,15 @@ took 26.4 s for a user with 3,491 people and ran twice per page. With `u.user_id
 and `occ facewright:people` went from 26.9 s to 0.57 s and from 9.7 s to 0.46 s. `FaceStore::emptyClusterIds()` had the same
 shape (27 ms against 0.15 ms per candidate). Every capture stayed identical throughout, because they compare output, and
 dev is too small to feel it. The user noticed it first. Fixed and deployed 2026-11-06.
+
+### Findings from the same review: traps left by the direction change (fixed on dev)
+
+Stage E reversed which table is the truth, but two older commands still assumed the opposite. `own-tables --migrate` copied
+Recognize's rows over ours under nothing but a paused flag: planted on dev, it turned an assigned face into a pending one,
+and after one of Recognize's resets it would do that to every face. `migrate-faces` would adopt Recognize's copies. Both
+now refuse once our table holds faces. The unique `(user_id, face_id)` index, new in Stage C, also made `copyToUsers()` throw
+for a user who already had the rows (a crash between rows and marker), so every retry failed and the marker never came
+back. All proven failing first in `dev/own-traps.sh`.
 
 ### Finding from the `dev/` scripts: parallel DAV moves deadlock (fixed)
 
