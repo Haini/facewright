@@ -16,7 +16,8 @@ the architecture, the invariants that are easy to break silently, and the operat
 were learned the hard way. It deliberately does not narrate how each of those was discovered.
 
 **Current work:** start at "Where things stand", the top of `docs/own-tables.md`. It says what runs on live and what is
-open next, with the exact commands.
+open next. The live instance's names, paths and exact commands are deliberately not in this repo: they are in the operator's
+private notes.
 
 ## Architecture
 

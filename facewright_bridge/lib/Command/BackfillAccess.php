@@ -71,7 +71,7 @@ class BackfillAccess extends Command {
 		$totals = ['mounts' => 0, 'examined' => 0, 'copied' => 0, 'pruned' => 0];
 		$touched = [];
 		$done = [];
-		// Unioned, not summed. Mounts nest - here files/Bilder is shared to Bob and four folders
+		// Unioned, not summed. Mounts nest - here files/Photos is shared to Bob and four folders
 		// inside it are shared to her separately - so a dry run, which writes nothing to make the
 		// second visit a no-op, would otherwise count the same file once per containing mount.
 		$dryRunCopy = [];
@@ -86,7 +86,7 @@ class BackfillAccess extends Command {
 				if ($onlyRoot !== null && $rootId !== $onlyRoot) {
 					continue;
 				}
-				// Consti's home root and Bob's twelve share roots into it are distinct mounts, but
+				// An owner's home root and Bob's twelve share roots into it are distinct mounts, but
 				// two users sharing the same root would otherwise be walked twice.
 				$key = $mount->getStorageId() . ':' . $rootId;
 				if (isset($done[$key])) {

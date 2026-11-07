@@ -2,33 +2,26 @@
 
 > ## Where things stand (updated 2026-11-07) — read this first
 >
-> **Stages A to E are done and live.** Live (`<app>`) runs bridge 0.10.0: our tables are the source of
+> **Stages A to E are done and live.** Live runs bridge 0.10.0: our tables are the source of
 > truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
 > confirmed in Memories that rename, move and remove-face edits work and show at once. The work is on `master`, not
-> pushed. Rollback source: `<backups>/facewright-pre-stage-e/` (see "Rollback").
->
-> **On dev, not on live (commit `f4008f7`, `dev/run-all.sh --ui` 18 of 18):** `--migrate` and `migrate-faces` refuse once our
-> tables hold faces, a repeated share copy no longer breaks the unique index, `setState()` refuses a person on a state
-> that has none. Until that is deployed, **do not run either command on live**: `--migrate` overwrites our tables from
-> Recognize's copy. Deploying is a file copy, no version bump, no `occ upgrade`, and needs the user's go-ahead.
+> pushed. The rollback source is a full dump and the Stage D bridge, taken at the cutover (see "Rollback").
 >
 > **What is open, in order** (nothing below is started; each destructive step needs the user's go-ahead):
-> 1. **Day-after check (from 2026-11-07).** A clean dry run alone proves little, because the hourly
->    `ProjectionMaintenanceJob` repairs drift before anyone looks. The evidence is what it logged. On live:
->    ```
->    docker exec -u www-data <app> php occ facewright:project --dry-run
->    docker exec -u www-data <app> php occ facewright:own-tables --verify
->    docker exec -u www-data <app> php occ config:app:get facewright_bridge projection_last_error
->    docker exec <app> grep '"app":"facewright_bridge"' /var/www/html/data/nextcloud.log
->    ```
->    Expected: A = C = D = 0, `--verify` exits 0, B 44,858 or lower (it falls as faces change, it never rises), legacy
->    40, and no `projection_last_error` value (the command exits 1 when the key is unset). In the log, read every
->    `repaired N difference(s) ... (A x, C y, D z)` line and any error. These lines are warnings since 2026-11-06 23:19
->    UTC, so an earlier repair left no trace; live logs at Warning. C after a share is expected: Recognize's own access
->    sync writes rows, and that is what reconcile removes. A or D needs an explanation: a failed push logs an error,
->    Recognize's handlers can delete rows; with neither, a writer is missing its push. Do this after a clustering run and
->    a share have happened; if either has not, say so rather than calling it clean. Also open the admin page and confirm
->    the "Memories sync" line says up to date (never looked at in a browser).
+> 1. **Day-after check.** A clean dry run alone proves little, because the hourly `ProjectionMaintenanceJob` repairs drift
+>    before anyone looks. The evidence is what it logged. On the live instance (the exact commands and expected numbers
+>    are in the operator's private notes, which is where every name and path of that instance lives): `occ
+>    facewright:project --dry-run`, `occ facewright:own-tables --verify`, `occ config:app:get facewright_bridge
+>    projection_last_error`, and the lines of `nextcloud.log` with `"app":"facewright_bridge"`.
+>    Expected: A = C = D = 0, `--verify` exits 0, B no higher than recorded at the cutover (it falls as faces change, it
+>    never rises), legacy rows unchanged, and no `projection_last_error` value (the command exits 1 when the key is unset).
+>    In the log, read every `repaired N difference(s) ... (A x, C y, D z)` warning and any error. These lines are warnings
+>    since 2026-11-06, so an earlier repair left no trace. C after a share is expected: Recognize's own access sync writes
+>    rows, and that is what reconcile removes. A or D needs an explanation: a failed push logs an error, Recognize's
+>    handlers can delete rows; with neither, a writer is missing its push.
+>    **Run on 2026-11-07: clean, but not yet the full check.** No file had been detected, no face created and no share made
+>    since the cutover, so a clustering run on new faces and a share have still not happened on live under Stage E. Repeat
+>    after those. Also open the admin page and confirm the "Memories sync" line says up to date (never seen in a browser).
 > 2. **If A, C or D is not 0:** save the dry-run output first, then find the cause, and only then run `occ
 >    facewright:project` (the hourly job may repair it first, so check the log too). Drift that comes back is a missed
 >    writer: fix the writer. Rollback tiers are under "Rollback".
@@ -101,7 +94,7 @@ As it stood before this work (`1ef8cc6`); the last column is where each table en
 ## What else writes to `rfd` and `rfc`
 
 Code read from Recognize 12.0.2 and Memories 10.1.0, what live ran at the time (under
-`<apps-dir>/`). Behaviour observed on the dev stack on Recognize 12.0.3 and Memories 11.0.2
+in the instance's `custom_apps`). Behaviour observed on the dev stack on Recognize 12.0.3 and Memories 11.0.2
 (Stage A.2), which live has run since the upgrade recorded under Stage B. The two Recognize versions differ:
 
 | | 12.0.2 (read, gone from live) | 12.0.3 (live and dev, observed on dev) |
@@ -237,7 +230,7 @@ re-projecting, instead of losing curation or forcing a rescan.
 1. **Read `CLAUDE.md` first, in full.** The "Invariants" section is not optional. Column order, job
    dedup semantics and `persistAssignments()`'s guard are all touched here.
 2. **Work on the compose stack only.** `recognaize-nextcloud-1`, `recognaize-db-1`. The production
-   instance (`<app>`, `<db>`, `<apps-dir>/`) is reference material:
+   instance (its names and paths are in the operator's private notes) is reference material:
    the Stage A precheck and its backup were handed to the user, and the live deploys of Stages C to E were done
    with the user's go-ahead for each. Read-only checks on live (`project --dry-run`, `own-tables --verify`,
    the log) are fine; anything that writes, deploys or upgrades needs the user's explicit go-ahead first.
@@ -317,7 +310,7 @@ were all caught (then removed). Bridge version is 0.8.1.
 
 ### A.4 Precheck on production, and a backup
 
-**Done (2026-11-06).** Backup in `<backups>/facewright-pre-own-tables/`: `face-tables.sql.gz` (the eight
+**Done (2026-11-06).** A backup was taken first: `face-tables.sql.gz` (the eight
 face-related tables, `--single-transaction`) and `bridge-0.8.0.tgz`. The bridge files were copied to live
 **without running `occ upgrade`**: `occ app:update --showonly` on live lists a dozen pending store updates,
 among them Memories 11.0.2 and Recognize 12.0.3, and `occ upgrade` applies them. So the live copy's
@@ -391,7 +384,7 @@ writes back to Recognize.
 
 **Deployed to live (2026-11-06).** Copied with the version left at 0.8.0 and no `occ upgrade`: the router
 has no migration and no `info.xml` change, and an upgrade would also apply the pending App Store updates
-(Memories 11.0.2, Recognize 12.0.3, about ten more). Backups in `<backups>/facewright-pre-router/`
+(Memories 11.0.2, Recognize 12.0.3, about ten more). Backups were taken first
 (`bridge-pre-router.tgz` and a fresh dump of the face tables). Checked without a login: no new log
 errors, `occ` loads, and an unauthenticated DAV request is 401 (a 500 would mean the plugin failed to
 build). **Not checked on live:** an authenticated edit. Live runs Memories 10.1.0 and Recognize 12.0.2,
@@ -406,8 +399,7 @@ errors from our code in the log, and the precheck afterwards was clean (the merg
 **Live upgraded (2026-11-06), with the user's go-ahead.** `occ upgrade` took about three minutes and applied the
 pending store updates: Memories 10.1.0 to 11.0.2, Recognize 12.0.2 to 12.0.3, the bridge to 0.8.1 (now identical
 to the repo, no pin) and eight others. Preflight showed live's Memories had already run the migration that
-failed on dev (dev jumped from 8.1.0), so only two small ones were pending. A full database dump from before is in
-`<backups>/facewright-pre-upgrade/`. Afterwards: data and precheck unchanged, no new log errors from our code.
+failed on dev (dev jumped from 8.1.0), so only two small ones were pending. A full database dump was taken before. Afterwards: data and precheck unchanged, no new log errors from our code.
 Still pending in the store: maps, files_scripts, workflow_media_converter.
 
 **Recognize's `MaintenanceJob` came back and ran before it could be removed.** The upgrade re-adds it, and it was
@@ -478,7 +470,7 @@ second `--verify` a few days after the live migration is for.
 
 ### Stage C on live
 
-**Done on live (2026-11-06), with the user's go-ahead.** Backup first: `<backups>/facewright-pre-stage-c/` (a full
+**Done on live (2026-11-06), with the user's go-ahead.** Backup first (a full
 database dump and the previous bridge). Processing was paused, the files deployed and `occ upgrade` run in one
 chain: about a minute, creating the two tables (the three other pending store apps were not applied, since two are
 disabled or not applicable; no Recognize job appeared). The precheck was clean, and `--migrate` ran in about 40
@@ -586,12 +578,12 @@ Fixed: those rows were reopened to `NULL` in Recognize's table (id list dumped f
 
 Stage D moved `PeopleService::clusterListQuery()` from Recognize's table, which has an index on `cluster_id`, to
 `facewright_user_faces`, whose index is `(user_id, cluster_id)`, and the join named only `cluster_id`. On live the query
-took 26.4 s for a user with 3,491 people and ran twice per page. With `u.user_id = c.user_id` in the join it takes 0.19 s,
+took 26.4 s for a user with several thousand people and ran twice per page. With `u.user_id = c.user_id` in the join it takes 0.19 s,
 and `occ facewright:people` went from 26.9 s to 0.57 s and from 9.7 s to 0.46 s. `FaceStore::emptyClusterIds()` had the same
 shape (27 ms against 0.15 ms per candidate). Every capture stayed identical throughout, because they compare output, and
 dev is too small to feel it. The user noticed it first. Fixed and deployed 2026-11-06.
 
-### Findings from the same review: traps left by the direction change (fixed on dev)
+### Findings from the same review: traps left by the direction change (fixed)
 
 Stage E reversed which table is the truth, but two older commands still assumed the opposite. `own-tables --migrate` copied
 Recognize's rows over ours under nothing but a paused flag: planted on dev, it turned an assigned face into a pending one,
@@ -730,7 +722,7 @@ The admin page's new line has been rendered but not looked at in a browser.
 Cut over with the runbook below, in this order, each step checked before the next:
 
 1. Processing paused; nothing running. A full dump of the one database, a tarball of the live bridge files, and the
-   counts and checksums of Recognize's two tables were saved to `<backups>/facewright-pre-stage-e/` (live files were
+   counts and checksums of Recognize's two tables were saved outside the repo (live files were
    byte-identical to the Stage D tip `d620eff`, so the tarball is the R2 rollback source). Stage D's `--verify` was clean.
    **One precondition was not met as written:** the runbook asks for Stage D on live for a few days, and it ran for
    hours; the user chose to go ahead. Share and unshare have therefore still not been seen on live, under Stage D or E.
@@ -749,8 +741,8 @@ run afterwards still had A = C = D = 0, `--verify` exit 0, nothing of ours in th
 Afterwards the job's `repaired` line was raised from info to warning, because live logs at Warning and a repair left no
 trace: one file copied, no version bump, no `occ upgrade`.
 
-Then the review fixes went to live on 2026-11-07, ten files copied, no version bump, no `occ upgrade`, after `dev/run-all.sh
---ui` passed 17 of 17 (backup: `<backups>/facewright-pre-phase2/`): `persistAssignments()` writes through `FaceStore`, the
+Then the review fixes went to live on 2026-11-07, in two file copies (ten files, then seven, the second closing the `--migrate` trap), no version bump, no `occ upgrade`, after `dev/run-all.sh
+--ui` passed 17 and then 18 of 18: `persistAssignments()` writes through `FaceStore`, the
 job counts what it really deleted, clears `projection_last_error` once clean and skips its recount when it found nothing,
 and the deadlock retry is shared (`DeadlockRetry`). The comment-only changes went with them, so live matches the repo.
 

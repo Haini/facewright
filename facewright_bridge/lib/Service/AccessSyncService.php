@@ -37,8 +37,8 @@ class AccessSyncService {
 	 *
 	 * In dry-run mode `copied`/`pruned` stay at 0 and the would-be work is reported instead as
 	 * `dryRunCopy`/`dryRunPrune`, keyed "fileId:userId". That is not bookkeeping fussiness: mounts
-	 * nest, and on this instance Bob has files/Bilder shared *and* four folders inside it shared
-	 * separately. A real run writes each file once (the second mount finds her already marked and
+	 * nest, and on this instance Bob has files/Photos shared *and* four folders inside it shared
+	 * separately. A real run writes each file once (the second mount finds them already marked and
 	 * skips), but a dry run writes nothing, so every nested mount would re-count the same files -
 	 * inflating the estimate by 18% here. Returning keys lets the caller union them instead.
 	 *
@@ -110,8 +110,8 @@ class AccessSyncService {
 				continue;
 			}
 			// Only now is the per-file access set worth its query. A user who looks stale relative
-			// to *this* mount may hold access through another one - Bilder/ shared to one person
-			// and Bilder/2024/ separately to another is enough to trigger it. Recognize's
+			// to *this* mount may hold access through another one - Photos/ shared to one person
+			// and Photos/2024/ separately to another is enough to trigger it. Recognize's
 			// onAccessUpdate applies the mount-root set as the keep-list for every file in the
 			// mount and deletes the second person's rows; we don't.
 			$keep = $this->accessService->getUsersWithAccess($fileId);
@@ -199,7 +199,7 @@ class AccessSyncService {
 	 *  - Nobody holds rows but someone holds a processed marker: the file has already been through
 	 *    detection and yielded nothing (a photo with no faces, or one that permanently failed to
 	 *    decode). Copying the marker is what stops it being re-inferred. This matters far more than
-	 *    it sounds: on this instance 28,056 of Consti's 54,332 processed files are zero-face, so
+	 *    it sounds: on this instance about half of one library's processed files are zero-face, so
 	 *    treating "no rows" as "not yet detected" would re-run inference on more than half the
 	 *    library every time a folder is shared.
 	 *

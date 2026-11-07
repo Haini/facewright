@@ -13,8 +13,7 @@ out in "Deviations from independence.md" at the end.
    work touches.
 2. **Work on the compose stack, never on the production instance.** `docker compose up -d` and
    `bash dev-setup.sh` give a throwaway Nextcloud 33 with Recognize, Memories and the ExApp. The
-   production instance (`<app>`, `<db>`, and the app copies under
-   `<apps-dir>/`) is read-only reference material for this plan. Do not run
+   production instance (and its app copies in `custom_apps`) is read-only reference material for this plan. Do not run
    `occ` or SQL against it.
 3. **One commit per numbered step**, message in the style of `git log` (imperative subject, a body
    that says why). Do not batch steps across a stage into one commit.
@@ -452,7 +451,7 @@ any App Store version so the updater never offers real Recognize on top of it �
 comment), `<licence>agpl</licence>`, `<dependencies><nextcloud min-version="33" max-version="35"/>`,
 `<sabre><collections><collection>OCA\Recognize\Dav\RootCollection</collection></collections></sabre>`
 plus `<types><filesystem/><dav/></types>` (copy the element order from
-`<apps-dir>/recognize/appinfo/info.xml:81-84,131-135` — `info.xsd` is a
+`custom_apps/recognize/appinfo/info.xml:81-84,131-135` — `info.xsd` is a
 sequence, so a misplaced element makes the app fail to parse, as CLAUDE.md notes for `<settings>`).
 
 The shim's classes are derived from Recognize's (AGPL-3.0, same as this repo): keep the

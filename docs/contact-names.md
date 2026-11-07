@@ -98,7 +98,7 @@ both.
    (paused jobs re-add themselves, silent returns must log, 4xx versus retryable failures) and
    "Bridge app" deploy mechanics all apply here.
 2. **Work on the compose stack only** (`recognaize-nextcloud-1`, `recognaize-db-1`,
-   `recognaize-facewright-1`). Production (`<app>` and friends) is read-only. The only
+   `recognaize-facewright-1`). Production is read-only. The only
    use of production is step 6's read-only counts, and only after the user approves.
 3. **One commit per numbered step**, in the style of `git log`: an imperative subject and a body
    that says why. End each message with the attribution line the session gives you.

@@ -13,7 +13,7 @@ The step-by-step implementation plan for the roadmap is `docs/independence-imple
 where the two differ, that plan wins (its "Deviations" section lists the differences and why).
 
 Verified against the app versions installed on the reference instance: Memories 8.1.0,
-Recognize 12.0.2 (both at `<apps-dir>/`), and the Photos app shipped with
+Recognize 12.0.2 (both in the instance's `custom_apps`), and the Photos app shipped with
 Nextcloud 33. Line numbers refer to those versions. The live instance has since moved to Nextcloud 34,
 Memories 11.0.2 and Recognize 12.0.3; `docs/own-tables.md` records what changed.
 
@@ -266,10 +266,10 @@ the place to browse photos. Requirements: `docs/people-ui.md`.
 ## Verification
 
 - Re-check every line reference above against the installed versions before acting on it:
-  `grep -n recognize <apps-dir>/memories/lib/Util.php`,
-  `sed -n 136,166p <apps-dir>/recognize/lib/Dav/Faces/PropFindPlugin.php`,
-  `sed -n 92,100p <apps-dir>/recognize/lib/Db/FaceClusterMapper.php`,
-  `docker exec <app> grep -n recognize /var/www/html/apps/photos/lib/Controller/PageController.php`.
+  `grep -n recognize custom_apps/memories/lib/Util.php`,
+  `sed -n 136,166p custom_apps/recognize/lib/Dav/Faces/PropFindPlugin.php`,
+  `sed -n 92,100p custom_apps/recognize/lib/Db/FaceClusterMapper.php`,
+  `docker exec <app-container> grep -n recognize /var/www/html/apps/photos/lib/Controller/PageController.php`.
 - Finding 1, on the compose stack (`docker compose up -d && bash dev-setup.sh`): upload photos of
   one person, `occ facewright:cluster <user>`, delete the person in Memories, run the command
   again; an untitled cluster with the same members reappears. Finding 2: remove one face from a

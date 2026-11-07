@@ -29,7 +29,7 @@ use OCP\IAppConfig;
  *
  * Also listens to NodeRenamedEvent, because a move is how most photos actually *enter* an included
  * path on this instance: the phone auto-uploads into SofortUpload/ (not included, so the create-time
- * job correctly skips it), and the user later sorts them into Bilder/. Neither create event fires
+ * job correctly skips it), and the user later sorts them into Photos/. Neither create event fires
  * again for a move, so without this the only thing that ever noticed was the hourly
  * DetectionMaintenanceJob sweep. Enqueuing on every rename is cheap and safe: DetectQueuedJob
  * re-evaluates included paths and already-processed state at run time, so an in-place rename of a

@@ -19,7 +19,7 @@ use OCP\IUserManager;
  * all as of v12 - mounts cover it.
  *
  * Where this deliberately differs from Recognize: ICachedMountFileInfo::getPath() already returns
- * mountPoint . internalPath (e.g. "/Bob/files/PhotosFromConsti/x.jpg"), so a single mount-cache
+ * mountPoint . internalPath (e.g. "/Bob/files/PhotosFromAlice/x.jpg"), so a single mount-cache
  * call yields both the user set *and* every user's files-root-relative path. Recognize re-resolves
  * a Node per user instead. At 65k files that difference is the bulk of the fan-out's cost.
  *
@@ -28,8 +28,8 @@ use OCP\IUserManager;
  * worth inferring if *any* enabled user with access has it under their own included paths;
  * pickFetchUser() is then restricted to that set, because the ExApp downloads the file as the fetch
  * user and $path must be theirs. Rows still fan out to everyone with access regardless - so with
- * Consti including "Bilder", a photo he owns at Bilder/x.jpg and shares to Bob at
- * PhotosFromConsti/x.jpg is processed and reaches both, whatever Bob's own list says. The
+ * Alice including "Photos", a photo Alice owns at Photos/x.jpg and shares to Bob at
+ * PhotosFromAlice/x.jpg is processed and reaches both, whatever Bob's own list says. The
  * allowlist decides which photos are worth inference, not who may see the faces.
  */
 class AccessService {
