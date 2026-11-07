@@ -62,7 +62,7 @@ help:
 	@echo "  bust-cache        evicts HaRP's cached host/port record for this app (see CLAUDE.md -"
 	@echo "                    HaRP caches ExApp records forever until explicitly told otherwise;"
 	@echo "                    re-run this after re-registering with a different port)"
-	@echo "  verify            hits /heartbeat and /detect through the real Nextcloud/HaRP path"
+	@echo "  verify            hits /heartbeat through the real Nextcloud/HaRP path"
 
 .PHONY: build
 build:

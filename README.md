@@ -76,26 +76,70 @@ full design history and every incident/gotcha hit building this, if you want the
 - Rename, delete and mount-change handling exists (`FileCreatedListener`, `FileAccessListener`)
   but `PruneService` has never deleted anything on a real instance.
 
+## Requirements
+
+- Nextcloud 33 to 35, with AppAPI (shipped enabled on recent versions), Recognize ≥ 3.8 and
+  Memories. Recognize must stay installed and enabled: Memories only shows its People page when it is.
+- Docker with BuildKit (the default since Docker 23) to build the ExApp image. Python dependencies
+  are pinned exactly in `requirements.txt`, so a clean build gets the versions known to work.
+- For a real instance: an AppAPI manual-install daemon behind HaRP (see below).
+
 ## Quickstart: try it locally
 
 A `docker-compose.yml` spins up a throwaway Nextcloud + DB for testing the PHP side
 (`facewright_bridge`) and the `facewright` ExApp together, without touching a real instance:
 
 ```
-docker compose up -d
-bash dev-setup.sh   # first run only: installs AppAPI + recognize + memories, registers the ExApp
+docker compose up -d   # first run builds the ExApp image, which takes a while
+bash dev-setup.sh      # first run only: installs AppAPI + recognize + memories, registers the ExApp
 ```
 
-Then open <http://localhost:8080> (`admin` / `dev-admin-password`), enable the People page and
-set an included-paths list under Administration settings > Facewright, and upload some photos.
+This registers the ExApp as a **manual-install daemon without HaRP**: on the compose network,
+Nextcloud and the `facewright` container reach each other directly by container name, so the
+FRP tunnel the real deployment uses isn't needed. `occ app_api:app:list` should show `facewright`
+as enabled afterwards. The InsightFace model (`buffalo_l`) is downloaded when the container first
+starts, so the container needs internet access then.
 
-This registers the ExApp as a **manual-install daemon without HaRP** - on the compose network,
-Nextcloud and the `facewright` container can reach each other directly by container name, so the
-FRP-tunnel layer the real deployment recipe below uses (to cross a network boundary) isn't
-needed here. See `dev-setup.sh`'s comments for a caveat: that specific no-HaRP registration
-command is a best-effort translation of the real recipe below, not yet verified end-to-end the
-way the HaRP one has been - if `occ app_api:app:list` doesn't show `facewright` as enabled after
-running it, compare against `occ app_api:daemon:register --help` on your stack.
+Then open <http://localhost:8080> (`admin` / `dev-admin-password`) and:
+
+1. Put an empty file named `.noimage` at the top of the user's Files (see "Keeping Recognize's
+   own face detection off" below for why), **before** turning on the People page.
+2. **Administration settings > Facewright:** tick "Show the People page", and either tick
+   "Automatically detect faces in new uploads" or press "Scan entire library" there later. Automatic
+   detection is off by default, so uploading photos alone does nothing.
+3. **Personal settings > Facewright** (per user): tick "Find faces in my photos" and add the
+   folders to look at under "Folders to look at". An empty list means nothing is scanned. Users
+   are off until they turn this on (only users who had already logged in when the app was first
+   enabled start switched on).
+4. Upload some photos into one of those folders. Grouping into people needs at least three faces
+   of the same person by default; results show on the People page in the top bar and in
+   Memories.
+
+## Keeping Recognize's own face detection off
+
+Turning on the People page sets Recognize's `faces.enabled` to `true`, because Memories reads it.
+Recognize also uses that same setting to decide whether to run its **own** face detection on new
+uploads. Left alone, it then writes its own faces next to ours and starts its own clustering
+job, which cannot handle Facewright's embeddings and can use several GB of memory. Two steps
+prevent this:
+
+- **An empty `.noimage` file at the root of every user's Files.** Recognize's ignore marker makes
+  it skip everything below it; Facewright does not honour it and keeps working normally. Add it
+  for each new user too. Do this before any photos are processed: on an instance where Recognize
+  already has face data, adding or removing the marker makes Recognize delete or re-classify
+  every file below it, so read "Coexisting with Recognize" in `CLAUDE.md` first.
+- **Remove Recognize's `MaintenanceJob` after installing, upgrading or re-enabling Recognize**
+  (it is registered again each time):
+
+  ```
+  occ background-job:list --class='OCA\Recognize\BackgroundJobs\MaintenanceJob'
+  echo y | occ background-job:delete <id>
+  ```
+
+  Delete any `OCA\Recognize\BackgroundJobs\ClusterFacesJob` the list shows as well.
+
+After adding markers on a running instance, restart the web container: Recognize caches the
+ignore list in APCu with no expiry (background jobs run from cron are not affected).
 
 ## Deploying against a real Nextcloud instance
 
@@ -111,8 +155,9 @@ make register APP_SECRET=<same-secret-as-above>
 make verify APP_SECRET=<same-secret-as-above>
 ```
 
-`make help` lists every target, including troubleshooting ones (`bust-cache`) for a specific
-HaRP caching gotcha documented in `CLAUDE.md`.
+`make verify` checks `/heartbeat` through the real Nextcloud/HaRP path; it does not run a
+detection. `make help` lists every target, including troubleshooting ones (`bust-cache`) for a
+specific HaRP caching gotcha documented in `CLAUDE.md`.
 
 This recipe assumes an existing AppAPI + HaRP manual-install-daemon setup, matching how AppAPI
 is commonly self-hosted outside Nextcloud's official AIO bundle. Adjust `deploy.env` if your
@@ -121,8 +166,10 @@ setup differs (different container names, a docker-based daemon instead of manua
 Once the ExApp is running, `facewright_bridge` needs to be installed the same way any
 non-app-store Nextcloud app is: copy (or bind-mount, for active development) the
 `facewright_bridge/` directory into your instance's `custom_apps/`, then
-`occ app:enable facewright_bridge`. Configure the People-page toggle, included-paths allowlist,
-and clustering/scan triggers from Administration settings > Facewright.
+`occ app:enable facewright_bridge`. Then follow "Keeping Recognize's own face detection off"
+above, and configure as in steps 2 and 3 of the quickstart: the People-page toggle, triggers
+and clustering defaults under Administration settings > Facewright, and each user's on switch
+and folders under Personal settings > Facewright.
 
 ## License
 

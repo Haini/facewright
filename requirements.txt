@@ -1,5 +1,57 @@
-nc_py_api[app]>=0.19.2
-insightface>=0.7.3
-onnxruntime>=1.18.0
-opencv-python-headless>=4.10.0
-numpy>=1.26.0
+# Exact versions, frozen from the running ExApp image (Python 3.12.13) on 2026-11-07, so a clean
+# build reproduces the image that is known to work. The direct dependencies are the first block;
+# everything after it is what they pulled in. To upgrade: change a direct pin, build, check
+# detection still works, then refresh the rest with `docker exec <container> python3 -m pip freeze`.
+
+# Direct
+nc-py-api[app]==0.30.2
+insightface==1.0.1
+onnxruntime==1.27.0
+opencv-python-headless==5.0.0.93
+numpy==2.5.1
+
+# Transitive
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.14.2
+certifi==2026.6.17
+charset-normalizer==3.4.9
+click==8.4.2
+fastapi==0.139.0
+filelock==3.29.7
+flatbuffers==25.12.19
+h11==0.16.0
+httptools==0.8.0
+idna==3.18
+ImageIO==2.37.3
+jh2==5.0.13
+lazy-loader==0.5
+ml_dtypes==0.5.4
+networkx==3.6.1
+niquests==3.20.1
+onnx==1.22.0
+opencv-python==5.0.0.93
+packaging==26.2
+pillow==12.3.0
+protobuf==7.35.1
+pydantic==2.13.4
+pydantic_core==2.46.4
+python-dotenv==1.2.2
+PyYAML==6.0.3
+qh3==1.9.4
+requests==2.34.2
+scikit-image==0.26.0
+scipy==1.18.0
+starlette==1.3.1
+tifffile==2026.6.1
+tqdm==4.68.4
+typing-inspection==0.4.2
+typing_extensions==4.16.0
+urllib3==2.7.0
+urllib3-future==2.22.901
+uvicorn==0.51.0
+uvloop==0.22.1
+wassima==2.1.2
+watchfiles==1.2.0
+websockets==16.1
+xmltodict==1.0.4
