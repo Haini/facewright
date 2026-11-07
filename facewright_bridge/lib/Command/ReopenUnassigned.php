@@ -53,8 +53,7 @@ class ReopenUnassigned extends Command {
 		}
 
 		$affected = $this->reopen($userId);
-		$output->writeln("Reopened {$affected} / {$matching} to pending (cluster_id = NULL).");
-		$output->writeln('After this, -1 means unassigned - run this once, before deploying step 0.2.');
+		$output->writeln("Reopened {$affected} / {$matching} to pending.");
 
 		return 0;
 	}

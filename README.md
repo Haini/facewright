@@ -71,8 +71,8 @@ full design history and every incident/gotcha hit building this, if you want the
   data. `docs/independence.md` reviews the coupling, and `docs/own-tables.md` is the plan, ending in
   a change to Memories itself.
 - **The People page has only been tried by hand, on a throwaway instance with generated data,**
-  not yet on a real library. A face marked "not a face" is forgotten if its file is re-detected
-  from scratch (`occ facewright:detect`, `occ facewright:reset`).
+  not yet on a real library. A face marked "not a face" is forgotten by a full reset
+  (`occ facewright:reset`).
 - Rename, delete and mount-change handling exists (`FileCreatedListener`, `FileAccessListener`)
   but `PruneService` has never deleted anything on a real instance.
 

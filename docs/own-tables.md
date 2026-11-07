@@ -454,8 +454,8 @@ Deviations from the plan, and why:
 6. **`--verify` reports dangling rows separately.** A face assigned to a person that no longer exists is copied as
    pending by the backfill and as assigned by a later change; both are right, so such rows are excluded from the
    mismatch count and must merely exist.
-7. If `occ facewright:migrate-faces` links more rows after the backfill, run `--migrate` again (it is safe to
-   repeat): the new links make those rows "ours", and the copy does not have them.
+7. If `occ facewright:migrate-faces` linked more rows after the backfill, `--migrate` was run again. True until Stage E
+   only: both commands now refuse once our tables hold faces, because they would overwrite the source of truth.
 
 **How it was verified on dev.** After the backfill (2,797 faces, 311 people) `--verify` exits 0. The checker itself
 was broken four ways (a wrong state, a deleted copy, a tampered name, a stray copy) and caught all four.

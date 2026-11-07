@@ -109,8 +109,8 @@ Services (`lib/Service/`):
 - `BatchTriggerService` — enumerates unprocessed candidates for enabled users and enqueues jobs.
 - `FaceStore` — the only writer of `facewright_user_faces` / `facewright_clusters` (see "Our own tables").
 - `ProjectionService` — copies them into Recognize's tables for Memories, and reconciles drift; the one place that
-  writes `recognize_face_detections` / `_clusters` (plus the deliberate direct statements in `ResetService` and
-  `PeopleService::moveLegacyMembers`).
+  writes `recognize_face_detections` / `_clusters` (plus the deliberate direct statements in `ResetService`,
+  `PeopleService::moveLegacyMembers` and `VectorCompactionService`).
 - `ResetService`, `VectorCompactionService` — maintenance.
 
 Background jobs (`lib/BackgroundJob/`):
@@ -165,7 +165,7 @@ writes nothing, for measuring against a database that must not change), `facewri
 `facewright:migrate-faces [--dry-run] [--chunk=<files>] [--reset-cursor]` (Stage 1 backfill,
 see "Schema mapping").
 `facewright:own-tables --precheck | --migrate | --verify | --seed-ids` (the move into our own tables; `--migrate`
-needs processing paused; `--verify` checks ours internally and Recognize's copy through the projection's reconcile;
+needs processing paused and refuses once our tables hold faces, as does `migrate-faces`; `--verify` checks ours internally and Recognize's copy through the projection's reconcile;
 `docs/own-tables.md`), `facewright:project [--dry-run] [--hydrate] [--user=<uid>] [--limit=<n>]` (report and repair the
 copy Memories reads; `--hydrate` is the rollback).
 
@@ -206,8 +206,8 @@ copy Memories reads; `--hydrate` is the rollback).
   `-2`; Memories inner-joins to `recognize_face_clusters`, so `-2` is invisible there.
 - **Ignored** means "not a face, or not someone to group", set only by a human from the People page. Clustering skips it
   like unassigned, and `resetUser()` keeps it (an ignore is a judgement about the detection, not about how it was
-  clustered). Memories and Recognize never see it. It is lost when the detection rows are rewritten (forced `occ
-  facewright:detect`, `occ facewright:reset`), a known limitation.
+  clustered). Memories and Recognize never see it. It is lost by `occ facewright:reset`, a known limitation; a re-run of `occ
+  facewright:detect` runs inference again but adds no row for a user who has them, and keeps it.
 - `facewright_cluster_centroids` (one cached centroid per person, `member_count` marks staleness)
   and `facewright_merge_dismissals` (`cluster_a < cluster_b` always) reference
   person ids, which are autoincrement and never reused, so a row left behind is inert. Merge, delete, `resetUser()` and `ResetService`

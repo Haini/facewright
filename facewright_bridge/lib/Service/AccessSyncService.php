@@ -283,11 +283,7 @@ class AccessSyncService {
 			return 0;
 		}
 
-		// The donor's rows come from our own tables: whose they are, which physical face each points
-		// at, and its geometry. Columns are named explicitly on both sides of the copy below, and that
-		// is not pedantry: Recognize's table has the physical order (x, y, height, width) while
-		// DetectionService writes (x, y, width, height), so a positional copy would silently
-		// transpose every bounding box.
+		// The donor's rows: which physical face each points at, so each copy links to the same one.
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('u.id', 'u.face_id')
 			->from('facewright_user_faces', 'u')
@@ -303,12 +299,18 @@ class AccessSyncService {
 			$faceIdsByDonorRow[(int)$row['id']] = (int)$row['face_id'];
 		}
 
+		// A user can already hold the rows without the marker: a crash between the two (see below), which only the
+		// marker needs to heal. Their rows would break the unique (user, face) index, and every retry with it.
+		$holders = $this->usersWithRowsFor($fileId);
+
 		$written = 0;
 		foreach ($toUsers as $toUser) {
 			if (!$this->userManager->userExists($toUser)) {
 				continue;
 			}
-			$written += $this->copyRowsToUser($fileId, $toUser, $rows, $faceIdsByDonorRow);
+			if (!in_array($toUser, $holders, true)) {
+				$written += $this->copyRowsToUser($fileId, $toUser, $rows, $faceIdsByDonorRow);
+			}
 			// Rows before marker, same invariant as DetectionService::detect().
 			$this->processedFiles->copyMarker($fileId, $fromUser, $toUser, count($rows));
 		}

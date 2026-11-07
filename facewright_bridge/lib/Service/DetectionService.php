@@ -146,9 +146,7 @@ class DetectionService {
 		}
 
 		$targets = array_values(array_unique($targetUserIds ?? [$fetchUserId]));
-		// recognize_face_detections has no unique constraint on (user_id, file_id), so nothing at
-		// the DB level would stop a re-run from doubling a user's rows. One indexed query
-		// (recognize_facedet_file) rather than one per user.
+		// A re-run must not add a user's faces twice (the unique index would refuse them). One query, not one per user.
 		//
 		// Only the *inserts* are skipped for a user who already has rows - they still get a
 		// processed marker below. Skipping both would leave a user with rows but no marker, which
@@ -156,8 +154,8 @@ class DetectionService {
 		// every pass forever.
 		$insertTargets = array_values(array_diff($targets, $this->usersWithRowsFor($fileId, $targets)));
 
-		// One transaction for the whole file: Recognize's rows, the links and our own copy of each
-		// assignment are written together or not at all, so a crash cannot leave them disagreeing.
+		// One transaction for the whole file: the physical faces, each user's row and the links are written together
+		// or not at all, so a crash cannot leave them disagreeing.
 		// The processed marker stays outside and after it - see the invariant below.
 		$this->db->beginTransaction();
 		try {
@@ -168,8 +166,8 @@ class DetectionService {
 			throw $e;
 		}
 
-		// Recorded even for zero-face results - recognize_face_detections never gets a row then,
-		// which used to mean such files were reprocessed on every subsequent trigger run.
+		// Recorded even for zero-face results: such a file has no row anywhere else, and would otherwise be
+		// reprocessed on every trigger run.
 		//
 		// Rows first, marker second, and that order is an invariant rather than a style choice: a
 		// crash in between leaves rows without a marker, which the next scan heals (it finds the

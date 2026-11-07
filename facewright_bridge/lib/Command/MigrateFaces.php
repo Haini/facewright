@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\FaceMigrationService;
+use OCA\FacewrightBridge\Service\OwnTablesMigrationService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -20,6 +21,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 class MigrateFaces extends Command {
 	public function __construct(
 		private FaceMigrationService $migration,
+		private OwnTablesMigrationService $ownTables,
 	) {
 		parent::__construct();
 	}
@@ -33,6 +35,11 @@ class MigrateFaces extends Command {
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
+		if (!$input->getOption('dry-run') && $this->ownTables->storeHoldsData()) {
+			// An unlinked row with a long vector is one of Recognize's copies now, not a face of ours waiting for a link.
+			$output->writeln('<error>Refusing: this backfill predates our own tables, and what it would link now are Recognize\'s copies.</error>');
+			return 1;
+		}
 		if ($input->getOption('reset-cursor')) {
 			$this->migration->resetCursor();
 			$output->writeln('Cursor reset - next run starts from file_id 0.');

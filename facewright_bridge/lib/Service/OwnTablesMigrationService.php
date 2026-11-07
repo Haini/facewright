@@ -60,6 +60,14 @@ class OwnTablesMigrationService {
 		return $this->db->tableExists('facewright_user_faces') && $this->db->tableExists('facewright_clusters');
 	}
 
+	/**
+	 * Whether our table already holds faces. Since Stage E it is the source of truth, so nothing may copy Recognize's
+	 * table over it: that table is a sparse copy, and after one of Recognize's resets a wiped one.
+	 */
+	public function storeHoldsData(): bool {
+		return $this->count('SELECT COUNT(*) FROM (SELECT 1 FROM ' . $this->table('facewright_user_faces') . ' LIMIT 1) x') > 0;
+	}
+
 	public function isPaused(): bool {
 		return $this->appConfig->getValueString(self::APP_ID, 'processing_paused', 'false') === 'true';
 	}

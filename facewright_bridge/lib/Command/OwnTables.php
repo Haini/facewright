@@ -99,6 +99,11 @@ class OwnTables extends Command {
 			$output->writeln('<error>Pause processing first (admin page, "Pause processing"): a row changing between a chunk\'s read and its write would be copied stale.</error>');
 			return 1;
 		}
+		$resuming = $this->migration->getCursor() > 0 && !$input->getOption('reset-cursor');
+		if (!$dryRun && !$resuming && $this->migration->storeHoldsData()) {
+			$output->writeln('<error>Refusing: our tables already hold faces and are the source of truth since Stage E. This would overwrite them from Recognize\'s copy. To repair that copy, use occ facewright:project.</error>');
+			return 1;
+		}
 		$blocked = $this->blockers($output, false);
 		if ($blocked !== []) {
 			$output->writeln('<error>Not starting: ' . implode(', ', $blocked) . ' must be 0 (occ facewright:own-tables --precheck).</error>');

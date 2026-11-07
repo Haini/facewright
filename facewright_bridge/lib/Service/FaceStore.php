@@ -67,6 +67,9 @@ class FaceStore {
 	 */
 	public function setState(string $userId, array $ids, int $state, ?int $clusterId = null, array $onlyStates = []): array {
 		FaceState::toSentinel($state, $clusterId); // rejects an unknown state and an ASSIGNED face without a person
+		if ($clusterId !== null && $state !== FaceState::ASSIGNED) {
+			throw new \InvalidArgumentException('Only an assigned face has a person.');
+		}
 		if ($clusterId !== null && !$this->lockCluster($userId, $clusterId)) {
 			throw new \InvalidArgumentException("Person {$clusterId} does not exist for {$userId}.");
 		}
