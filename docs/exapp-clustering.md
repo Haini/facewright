@@ -10,7 +10,10 @@ stored checksum) is sketched at the end and is not part of this plan.
 **C1 is done (2026-11-08), on dev only.** The ExApp has the cache and `/cluster`; `dev/exapp-cluster.sh` passes 20 of
 20 (with a planted fault caught), `dev/writers-files.sh` still passes (detection unchanged). Measured on dev: 300 attempts
 against a 50,000-face pool take 2.4 s of compute (about 3 s round trip), against about 190 s in PHP; `/heartbeat`
-stayed under 40 ms meanwhile. Nothing is deployed to live. **Next: C2.**
+stayed under 40 ms meanwhile. Nothing is deployed to live.
+
+**C2 is done (2026-11-08), on dev only.** `ClusteringService` takes the "create a person" step as a callable and has
+`loadPoolForComparison()` / `assignInMemory()`; production behaviour is unchanged (see C2's "Done"). **Next: C3.**
 
 ## Why
 
@@ -180,6 +183,20 @@ The comparison must not write, so:
 - `dev/clustering-truth.sh` with `PEOPLE=50`: passes as before (15 of 15 at the last run).
 - `dev/persist-guard.sh` and `dev/chain-loop-test.sh dangling` and `assignable`: pass.
 - Planted fault: make the production callable return a fixed existing id; `clustering-sets.sh compare` must fail. Revert.
+- `dev/cluster-inmemory.sh --prepare` (new): the two new methods write nothing (checksums of our tables, Recognize's and
+  `oc_jobs`), `$reopen` adds exactly the unclusterable rows, `faceIds` covers the pool, and `persistAssignments()`
+  refuses a temporary label.
+
+**Done (2026-11-08).** `loadDetections()` returns `faceIds` only when asked (`$withFaceIds`), so the production pool is
+unchanged in memory. Results on dev:
+- `clustering-sets.sh`: the old code saved twice gives identical sets (306 people for admin, 2 for bob), and the new
+  code the same. The planted fault (one person for every new face) gives 1 and 1 and fails.
+- `clustering-truth.sh` with `PEOPLE=50`: 15 of 15 (a fresh detection of all 750 photos, no cache for 50).
+- `persist-guard.sh` 11 of 11, `chain-loop-test.sh dangling` 5 of 5 and `assignable` 4 of 4, `writers-cluster.sh` 16 of 16.
+- `cluster-inmemory.sh --prepare`: 8 of 8 on 2,768 reopened faces (305 people formed in memory, nothing written). Planted
+  fault (`assignInMemory()` also allocating a real person): the "nothing written" checks fail on `facewright_clusters`.
+- `--prepare` exists because the restored dev data has only 4 unclusterable faces and nothing pending: without it a
+  reopen forms no person and the run proves little, which the check now reports.
 
 ### C3 Bridge: the ExApp client
 

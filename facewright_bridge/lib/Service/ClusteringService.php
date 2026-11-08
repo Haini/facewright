@@ -100,7 +100,7 @@ class ClusteringService {
 	public function clusterUser(string $userId, float $maxDistance, int $minFaces): array {
 		['detections' => $detections, 'pendingIds' => $idsToProcess, 'skippedForeign' => $skippedForeign] = $this->loadDetections($userId);
 
-		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
+		$stats = $this->assignClusters($detections, $idsToProcess, fn (): int => $this->createCluster($userId), $maxDistance, $minFaces);
 		$written = $this->persistAndRevert($userId, $detections, $stats);
 
 		// One full pass that wrote nothing is the same proof ClusterScanJob's chain uses: with the
@@ -158,7 +158,7 @@ class ClusteringService {
 		));
 		$idsToProcess = array_slice($unclusteredIds, 0, $chunkSize);
 
-		$stats = $this->assignClusters($detections, $idsToProcess, $userId, $maxDistance, $minFaces);
+		$stats = $this->assignClusters($detections, $idsToProcess, fn (): int => $this->createCluster($userId), $maxDistance, $minFaces);
 		$written = $this->persistAndRevert($userId, $detections, $stats);
 
 		// Only rows that were pending on entry and are still unassigned - not every null in the
@@ -183,6 +183,44 @@ class ClusteringService {
 			'remainingUnclustered' => $remainingUnclustered,
 			'pendingUnassignedIds' => $pendingUnassignedIds,
 		];
+	}
+
+	/**
+	 * The pool a pass of $userId would start from, for occ facewright:cluster-compare (docs/exapp-clustering.md). Writes
+	 * nothing. The same as loadDetections() returns, plus `faceIds` (row id => facewright_faces.id, which the ExApp's
+	 * embedding cache is keyed by).
+	 *
+	 * With $reopen, the unclusterable rows are put into `pendingIds` too, in memory only: that is the pool a pass would
+	 * see after clearUnclusterableMarks(). Without it, a library whose backlog is done has nothing to attempt.
+	 *
+	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, pendingIds: list<int>, skippedForeign: int, faceIds: array<int, int>}
+	 */
+	public function loadPoolForComparison(string $userId, bool $reopen): array {
+		$pool = $this->loadDetections($userId, true);
+		if ($reopen) {
+			$pending = array_flip($pool['pendingIds']);
+			foreach ($pool['detections'] as $id => $detection) {
+				// Normalized to null by loadDetections(): pending or unclusterable. Assigned rows have a person id.
+				if ($detection['cluster_id'] === null && !isset($pending[$id])) {
+					$pool['pendingIds'][] = $id;
+				}
+			}
+			sort($pool['pendingIds']);
+		}
+		return $pool;
+	}
+
+	/**
+	 * assignClusters() without writing: for occ facewright:cluster-compare. $newCluster supplies the label of each person
+	 * the pass would create (the comparison passes temporary negative labels; persistAssignments() refuses those).
+	 *
+	 * @param array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}> $detections
+	 * @param list<int> $ids
+	 * @param callable(): int $newCluster
+	 * @return array{newClusters: int, joined: int, skipped: int, changedIds: list<int>, createdClusterIds: list<int>}
+	 */
+	public function assignInMemory(array &$detections, array $ids, float $maxDistance, int $minFaces, callable $newCluster): array {
+		return $this->assignClusters($detections, $ids, $newCluster, $maxDistance, $minFaces);
 	}
 
 	/**
@@ -354,11 +392,15 @@ class ClusteringService {
 	 * same as the original single-pass algorithm did) and reports which ids actually changed, so
 	 * the caller persists only those instead of rewriting every already-clustered row again.
 	 *
+	 * $newCluster creates a person and returns its id: FaceStore::allocateCluster() in production, a temporary label in
+	 * occ facewright:cluster-compare. It is called at the moment a new person is needed, in attempt order.
+	 *
 	 * @param array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}> $detections
 	 * @param list<int> $idsToProcess
+	 * @param callable(): int $newCluster
 	 * @return array{newClusters: int, joined: int, skipped: int, changedIds: list<int>, createdClusterIds: list<int>}
 	 */
-	private function assignClusters(array &$detections, array $idsToProcess, string $userId, float $maxDistance, int $minFaces): array {
+	private function assignClusters(array &$detections, array $idsToProcess, callable $newCluster, float $maxDistance, int $minFaces): array {
 		$newClusters = 0;
 		$joined = 0;
 		$skipped = 0;
@@ -387,7 +429,7 @@ class ClusteringService {
 			}
 
 			if ($clusterId === null) {
-				$clusterId = $this->createCluster($userId);
+				$clusterId = $newCluster();
 				$createdClusterIds[] = $clusterId;
 				$newClusters++;
 			} else {
@@ -440,7 +482,7 @@ class ClusteringService {
 	 *
 	 * @return array{detections: array<int, array{file_id: int, vector: list<float>, cluster_id: ?int}>, pendingIds: list<int>, skippedForeign: int}
 	 */
-	private function loadDetections(string $userId): array {
+	private function loadDetections(string $userId, bool $withFaceIds = false): array {
 		$wanted = $this->selectWantedIds($userId); // detectionId => [faceId, clusterId]
 
 		// Within one user a face is never shared across two detection rows (fan-out only shares a
@@ -493,7 +535,14 @@ class ClusteringService {
 		// monotonically.
 		sort($pendingIds);
 
-		return ['detections' => $detections, 'pendingIds' => $pendingIds, 'skippedForeign' => $skippedForeign];
+		$pool = ['detections' => $detections, 'pendingIds' => $pendingIds, 'skippedForeign' => $skippedForeign];
+		if ($withFaceIds) {
+			$pool['faceIds'] = [];
+			foreach ($detections as $id => $_) {
+				$pool['faceIds'][$id] = $wanted[$id]['faceId'];
+			}
+		}
+		return $pool;
 	}
 
 	/**
@@ -599,6 +648,10 @@ class ClusteringService {
 		$requested = 0;
 		foreach (array_values(array_unique($ids)) as $id) {
 			$clusterId = $detections[$id]['cluster_id'];
+			if ($clusterId !== null && $clusterId <= 0) {
+				// A temporary label from a comparison run (assignInMemory()), or a sentinel: never a person to write.
+				throw new \LogicException("Refusing to persist cluster id {$clusterId} for detection {$id}");
+			}
 			if ($clusterId !== null) {
 				$byPerson[(int)$clusterId][] = (int)$id;
 				$requested++;
