@@ -161,7 +161,8 @@ another user) and `FacePreviewController` (`/faces/{id}/preview`, a square crop 
 
 `occ` commands: `facewright:detect <user> <path>` (forces re-detection), `facewright:scan`,
 `facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:cluster-compare <user> [--reopen] [--chunks=<n>]
-[--chunk-size=<n>]` (PHP clustering against the ExApp's `/cluster`, writing nothing; `docs/exapp-clustering.md`), `facewright:merge-clusters [--dry-run]`,
+[--chunk-size=<n>]` (PHP clustering against the ExApp's `/cluster`, writing nothing; `docs/exapp-clustering.md`), `facewright:embedding-checksums
+[--dry-run] [--chunk=<n>]` (fills `facewright_faces.embedding_crc` where NULL; resumable), `facewright:merge-clusters [--dry-run]`,
 `facewright:backfill-access [--dry-run] [--prune]`, `facewright:compact-vectors [--dry-run]`,
 `facewright:init-user-settings [--dry-run]`, `facewright:reset [--dry-run] [--yes]`,
 `facewright:people <user> [--faces=<idOrTitle>] [--unassigned] [--ignored] [--delete-empty]
@@ -197,6 +198,10 @@ copy Memories reads; `--hydrate` is the rollback).
   = its `id`) to its physical face (`face_id`), with `user_id` denormalized for per-user cleanup
   queries. `ClusteringService` and `PeopleService` read embeddings only from `facewright_faces` —
   never `face_vector`.
+- `facewright_faces.embedding_crc` is the CRC32 of `embedding`, which the ExApp's embedding cache is validated by.
+  **Every writer of `embedding` writes it in the same statement**: `setValues()` updates in place, and an update that
+  kept the old value makes it wrong, not unknown. NULL means unknown and is allowed (readers compute `CRC32(embedding)`
+  then); `own-tables --verify` fails on a stored value that differs.
 - `cluster_id` in Recognize's table and in the API is the sentinel form of `FaceState`, the state of a row of
   `facewright_user_faces` (`FaceState::fromSentinel()` / `toSentinel()`): `NULL` pending, `> 0` assigned, `-1` unassigned,
   `-2` unclusterable, `-3` ignored. `js/people.js` reads the sentinels. Only `> 0` and `-1` are written to Recognize's

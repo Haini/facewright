@@ -40,7 +40,8 @@ class ExAppClusteringClient {
 
 	/**
 	 * CRC32 of each face's embedding blob, the same value as Python's zlib.crc32 and PHP's crc32() (checked in C1).
-	 * MariaDB and MySQL compute it in the SELECT; elsewhere the blobs are read and hashed here.
+	 * The stored embedding_crc when set; when it is NULL (unknown: a row from before the column, or a writer that does
+	 * not set it), MariaDB and MySQL compute it in the SELECT, and elsewhere the blob is read and hashed here.
 	 *
 	 * @param list<int> $faceIds
 	 * @return array<int, int> face id => crc; ids with no row are absent
@@ -54,13 +55,22 @@ class ExAppClusteringClient {
 				->from('facewright_faces')
 				->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
 			if ($inDatabase) {
-				$qb->selectAlias($qb->createFunction('CRC32(' . $qb->getColumnName('embedding') . ')'), 'crc');
+				$qb->selectAlias($qb->createFunction(
+					'COALESCE(' . $qb->getColumnName('embedding_crc') . ', CRC32(' . $qb->getColumnName('embedding') . '))'
+				), 'crc');
 			} else {
-				$qb->addSelect('embedding');
+				// Read the blob only where the checksum is unknown.
+				$qb->addSelect('embedding_crc')
+					->selectAlias($qb->createFunction('CASE WHEN ' . $qb->getColumnName('embedding_crc') . ' IS NULL THEN '
+						. $qb->getColumnName('embedding') . ' END'), 'embedding');
 			}
 			$result = $qb->executeQuery();
 			while ($row = $result->fetch()) {
-				$out[(int)$row['id']] = $inDatabase ? (int)$row['crc'] : crc32(self::blob($row['embedding']));
+				$out[(int)$row['id']] = match (true) {
+					$inDatabase => (int)$row['crc'],
+					$row['embedding_crc'] !== null => (int)$row['embedding_crc'],
+					default => crc32(self::blob($row['embedding'])),
+				};
 			}
 			$result->closeCursor();
 		}

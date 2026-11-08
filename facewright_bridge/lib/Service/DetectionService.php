@@ -285,7 +285,9 @@ class DetectionService {
 			'width' => $width,
 			'height' => $height,
 			'det_score' => $detScore,
-			'embedding' => FaceVectorCodec::encode($embedding),
+			'embedding' => $blob = FaceVectorCodec::encode($embedding),
+			// Written with the blob, always: the ExApp's cache is validated by it (ExAppClusteringClient).
+			'embedding_crc' => crc32($blob),
 			'model' => 'buffalo_l',
 		]);
 

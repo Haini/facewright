@@ -19,7 +19,7 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 `dev/exapp-client.sh` passes 12 of 12.
 
 **C5 is under way on live (2026-11-08):** deployed, user1 compared in full with 0 differences, user2 running; see C5's
-"Progress". **The switch-over is planned as Part 2 (S1 to S7), not started.**
+"Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 is done on dev.**
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -397,9 +397,10 @@ between two people are rare (C5 found none on user1). It changes which person wi
 - Migration (next version after **0.10.1**: live's `info.xml` says 0.10.0 only because C5 deployed a command without an
   upgrade; the repo is at 0.10.1): `facewright_faces.embedding_crc`, `Types::BIGINT`, nullable, unsigned not required
   (CRC32 fits in a signed BIGINT). No data in the migration.
-- Writers: `DetectionService::upsertFace()` sets `embedding_crc = crc32($blob)` in the same `setValues()` call.
-  `FaceMigrationService` (Stage 1 backfill, refuses once our tables hold faces, deleted in Stage F.2) may leave it
-  `NULL`; that is safe by the rule above. `grep -rn "'facewright_faces'" lib/` must show no other writer of `embedding`.
+- Writers: `DetectionService::upsertFace()` sets `embedding_crc = crc32($blob)` in the same `setValues()` call, and so
+  does `FaceMigrationService` (Stage 1 backfill, refuses once our tables hold faces, deleted in Stage F.2): both use
+  `setValues()`, which updates an existing row in place, and an update that kept an old checksum would make it wrong,
+  not unknown. `grep -rn "'facewright_faces'" lib/` must show no other writer of `embedding`.
 - `occ facewright:embedding-checksums [--dry-run] [--chunk=5000]`: keyset on `id` over rows with `embedding_crc IS
   NULL`; on MariaDB/MySQL `UPDATE ... SET embedding_crc = CRC32(embedding) WHERE id BETWEEN ...`, elsewhere in PHP.
   Prints rows done; resumable by construction (it only selects `NULL`).
@@ -412,6 +413,25 @@ between two people are rare (C5 found none on user1). It changes which person wi
 embedding_crc <> CRC32(embedding)` is 0; a forced re-detection (`occ facewright:detect`) keeps it 0; planted fault (the
 upsert without the column, then a re-detection that changes the embedding: edit one row's blob by hand first) makes
 `--verify` fail. `dev/exapp-client.sh` and `dev/cluster-compare.sh` still pass.
+
+**Done (2026-11-08), on dev only (bridge 0.11.0 there).** Migration `Version000008000Date20261108120000`, the
+command, both writers, the client's `COALESCE`, and `--verify`'s `embedding_crc_wrong` (zero) and
+`embedding_crc_unknown` (info). `dev/embedding-crc.sh`, 20 of 20:
+- the backfill fills all 2,797 dev faces; a second run has nothing to do; with every second row set back to NULL it
+  fills exactly those (resumable);
+- a wrong stored checksum planted in the data fails `--verify`;
+- the client returns `CRC32(embedding)` with every checksum stored and with a quarter of them NULL;
+- a forced re-detection of the real test portrait, whose stored embedding and checksum were made consistently stale,
+  replaces both; with the checksum taken out of the upsert (planted in the code) the same re-detection leaves a wrong
+  checksum and `--verify` fails.
+- **Dev data:** admin's files on dev are synthetic fixtures (`fw_*.jpg`, about 900 fake faces each, one all-zero
+  embedding), which a re-detection cannot reproduce; the suite uploads the real portrait instead.
+- **Snapshots:** `dev/snapshot.sh restore` replays `DROP`/`CREATE TABLE`, so the snapshot "original" taken before the
+  migration removed the column again. It was re-saved after the upgrade (the old one kept as `original-pre-s1`), and
+  `clustering-truth.sh`'s detection cache (plain `INSERT`s without column names) was rebuilt by its key changing.
+  Any later migration needs the same: restore, upgrade, save.
+- Regression after the change to detection: `clustering-truth.sh` (`PEOPLE=50`, fresh detection) 15 of 15,
+  `writers-files.sh` 21 of 21, `exapp-client.sh` 12 of 12, `cluster-compare.sh` 16 of 16.
 
 ### S2 ExApp: forget and prune
 

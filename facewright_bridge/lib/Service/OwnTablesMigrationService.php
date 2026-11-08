@@ -200,6 +200,12 @@ class OwnTablesMigrationService {
 			'link_user_or_face_mismatch' => [$this->count(
 				"SELECT COUNT(*) FROM {$uf} u INNER JOIN {$links} l ON l.detection_id = u.id WHERE l.user_id <> u.user_id OR l.face_id <> u.face_id"
 			), 'zero'],
+			// A stored checksum must be the blob's: the ExApp's embedding cache trusts it (docs/exapp-clustering.md, S1).
+			// NULL is "unknown" and allowed; readers compute it then.
+			'embedding_crc_wrong' => [$this->count(
+				"SELECT COUNT(*) FROM {$faces} WHERE embedding_crc IS NOT NULL AND embedding_crc <> CRC32(embedding)"
+			), 'zero'],
+			'embedding_crc_unknown' => [$this->count("SELECT COUNT(*) FROM {$faces} WHERE embedding_crc IS NULL"), 'info'],
 			'people_in_store' => [$this->count("SELECT COUNT(*) FROM {$fc}"), 'info'],
 			'faces_in_store' => [$this->count("SELECT COUNT(*) FROM {$uf}"), 'info'],
 		];

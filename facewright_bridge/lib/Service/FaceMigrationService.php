@@ -157,7 +157,10 @@ class FaceMigrationService {
 				'width' => $geometry['width'],
 				'height' => $geometry['height'],
 				'det_score' => null,
-				'embedding' => FaceVectorCodec::encode($vector),
+				'embedding' => $blob = FaceVectorCodec::encode($vector),
+				// Every writer of embedding writes its checksum too: an update that kept an old one would be wrong,
+				// not unknown (docs/exapp-clustering.md, S1).
+				'embedding_crc' => crc32($blob),
 				'model' => 'buffalo_l',
 			]);
 			$facesCreated++;
