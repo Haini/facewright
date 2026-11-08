@@ -76,7 +76,9 @@ our people service, and an upstream Memories change as the end state. It replace
   the `NotFound` subclass — check the status code explicitly.
 - Only `/heartbeat` is exempt from signature checks; a bare `curl` at the container 401s.
 - `ex_app/lib/clustering.py`: an embedding cache (SQLite under `FACEWRIGHT_DATA_DIR`, a volume) and `/cluster`, the
-  NumPy twin of the PHP matching. Comparison stage: nothing in the bridge calls it yet (`docs/exapp-clustering.md`).
+  NumPy twin of the PHP matching. Used by `occ facewright:cluster-compare` and, when the app config
+  `clustering_engine` is `exapp` (default `php`), by `ClusterScanJob`, which falls back to PHP for the rest of a chain
+  if the ExApp fails (`docs/exapp-clustering.md`, Part 2).
   BLAS threads are capped at 2 in the `Dockerfile`, like ONNX Runtime's.
 - `make build` / `make run` rebuild and restart the deployed container; on dev, use `docker compose up -d --build
   facewright` instead.
@@ -160,7 +162,7 @@ another user) and `FacePreviewController` (`/faces/{id}/preview`, a square crop 
   page turns into a merge offer; never match on the English message.
 
 `occ` commands: `facewright:detect <user> <path>` (forces re-detection), `facewright:scan`,
-`facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:cluster-compare <user> [--reopen] [--chunks=<n>]
+`facewright:cluster <user> [--engine=php|exapp]`, `facewright:cluster-scan`, `facewright:cluster-compare <user> [--reopen] [--chunks=<n>]
 [--chunk-size=<n>]` (PHP clustering against the ExApp's `/cluster`, writing nothing; `docs/exapp-clustering.md`), `facewright:embedding-checksums
 [--dry-run] [--chunk=<n>]` (fills `facewright_faces.embedding_crc` where NULL; resumable), `facewright:merge-clusters [--dry-run]`,
 `facewright:backfill-access [--dry-run] [--prune]`, `facewright:compact-vectors [--dry-run]`,

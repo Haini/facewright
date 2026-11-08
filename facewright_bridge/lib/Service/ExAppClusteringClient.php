@@ -12,11 +12,12 @@ use OCP\IDBConnection;
 /**
  * The bridge's side of the ExApp's /cluster (docs/exapp-clustering.md). The ExApp keeps a cache of embeddings keyed by
  * facewright_faces.id and validated by the CRC32 of the stored blob: a face id's embedding can change, because
- * DetectionService::upsertFace() updates in place on a forced re-detection. The checksum is computed when it is needed,
- * never stored, so no writer of facewright_faces can leave it stale.
+ * DetectionService::upsertFace() updates in place on a forced re-detection. The checksum is facewright_faces.embedding_crc,
+ * which every writer of the embedding sets; where it is NULL (unknown) it is computed here.
  *
- * Comparison stage: only occ facewright:cluster-compare calls this, and nothing it returns is written anywhere. Errors
- * are thrown, never retried silently, apart from the one documented retry after a 409.
+ * Called by occ facewright:cluster-compare (which writes nothing) and by the exapp engine,
+ * ClusteringService::clusterUserExApp(), which writes the answer through persistAssignments(). Errors are thrown, never
+ * retried silently, apart from the one documented retry after a 409.
  */
 class ExAppClusteringClient {
 	private const APP_ID = 'facewright';
@@ -28,6 +29,10 @@ class ExAppClusteringClient {
 	// Pairs per /cluster/cache/check (about 25 bytes each): 50,000 pairs were 1.2 MB in C1.
 	private const CHECK_BATCH = 20000;
 	private const TIMEOUT = 120;
+	// /cluster under the exapp engine attempts every pending face in one request. Sized in S3 from C5: user2 (a pool of
+	// about 55,000) took 2.26 s of compute per 300 attempts, about 7.5 ms each; a full reopen of user2 (about 31,000
+	// attempts) is then about 235 s, and twice that is under this. HaRP's own timeout is 1,800 s.
+	private const CLUSTER_TIMEOUT = 600;
 
 	/** @var array{requests: int, bytesSent: int, ms: int} totals since the last takeStats() */
 	private array $stats = ['requests' => 0, 'bytesSent' => 0, 'ms' => 0];
@@ -110,10 +115,10 @@ class ExAppClusteringClient {
 	 */
 	public function cluster(string $userId, array $pool, array $attempt, float $maxDistance, int $minFaces): array {
 		$body = ['max_distance' => $maxDistance, 'min_faces' => $minFaces, 'pool' => $pool, 'attempt' => $attempt];
-		$answer = $this->post($userId, '/cluster', $body, true);
+		$answer = $this->post($userId, '/cluster', $body, true, self::CLUSTER_TIMEOUT);
 		if (isset($answer['missing'])) {
 			$this->syncCache($userId, array_map('intval', $answer['missing']));
-			$answer = $this->post($userId, '/cluster', $body, true);
+			$answer = $this->post($userId, '/cluster', $body, true, self::CLUSTER_TIMEOUT);
 			if (isset($answer['missing'])) {
 				throw new ExAppClusteringException('/cluster still lacks ' . count($answer['missing']) . ' face(s) after a sync');
 			}
@@ -163,10 +168,10 @@ class ExAppClusteringClient {
 	 * @param bool $allowMissing return a 409's body (it names the faces the ExApp lacks) instead of throwing
 	 * @return array<string, mixed>
 	 */
-	private function post(string $userId, string $route, array $body, bool $allowMissing = false): array {
+	private function post(string $userId, string $route, array $body, bool $allowMissing = false, int $timeout = self::TIMEOUT): array {
 		$started = microtime(true);
 		// The user is the one being clustered; the ExApp does not use it. AppAPI sends $body as JSON.
-		$response = $this->appAPI->exAppRequest(self::APP_ID, $route, $userId, 'POST', $body, ['timeout' => self::TIMEOUT]);
+		$response = $this->appAPI->exAppRequest(self::APP_ID, $route, $userId, 'POST', $body, ['timeout' => $timeout]);
 		$this->stats['requests']++;
 		$this->stats['bytesSent'] += strlen(json_encode($body));
 		$this->stats['ms'] += (int)round((microtime(true) - $started) * 1000);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Service;
 
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\IAppConfig;
 use OCP\IDBConnection;
 use OCP\IUser;
 use OCP\IUserManager;
@@ -87,13 +88,29 @@ class ClusteringService {
 	// MariaDB's 16 MB default) and clear of per-statement placeholder limits on other backends.
 	private const VECTOR_FETCH_BATCH = 500;
 
+	// Which engine matches (docs/exapp-clustering.md, Part 2): app config facewright_bridge / clustering_engine. Anything
+	// but ENGINE_EXAPP means PHP, so an unset or mistyped value keeps today's behaviour.
+	public const ENGINE_PHP = 'php';
+	public const ENGINE_EXAPP = 'exapp';
+
 	public function __construct(
 		private IDBConnection $db,
 		private IUserManager $userManager,
 		private LoggerInterface $logger,
 		private FaceStore $faceStore,
 		private ProjectionService $projection,
+		private ExAppClusteringClient $exApp,
+		private IAppConfig $appConfig,
 	) {
+	}
+
+	/** The engine a new chain or a manual run uses when none is given: the app config, PHP unless it says exapp. */
+	public function configuredEngine(): string {
+		return self::normalizeEngine($this->appConfig->getValueString('facewright_bridge', 'clustering_engine', self::ENGINE_PHP));
+	}
+
+	public static function normalizeEngine(?string $engine): string {
+		return $engine === self::ENGINE_EXAPP ? self::ENGINE_EXAPP : self::ENGINE_PHP;
 	}
 
 	/** @return array{newClusters: int, joined: int, skipped: int, written: int, skippedForeign: int, markedUnclusterable: int} */
@@ -183,6 +200,116 @@ class ClusteringService {
 			'remainingUnclustered' => $remainingUnclustered,
 			'pendingUnassignedIds' => $pendingUnassignedIds,
 		];
+	}
+
+	/**
+	 * One full pass of $userId matched by the ExApp's /cluster (docs/exapp-clustering.md, S3): every pending face is
+	 * attempted in one request, so there is no cursor. What is written, and the guards on it, are the PHP path's:
+	 * persistAssignments(). The people a pass creates are allocated after the ExApp answers, one per new label, just
+	 * before the write; a pass that fails after allocating deletes them again.
+	 *
+	 * The same result shape as clusterUserChunk(), so ClusterScanJob's stop logic reads both. `lastId` is always null
+	 * (no cursor), and `skippedForeign` is always 0: the pool is built without reading embeddings, so a blob of the wrong
+	 * length is only found by the ExApp, which refuses it (and the chain then falls back to PHP, which skips it).
+	 *
+	 * @throws ExAppClusteringException the ExApp could not be reached, refused the request or answered nonsense
+	 * @return array{attempted: int, newClusters: int, joined: int, skipped: int, written: int,
+	 *     skippedForeign: int, lastId: null, remainingUnclustered: int,
+	 *     pendingUnassignedIds: list<int>, computeMs: int, uploaded: int, poolSize: int}
+	 */
+	public function clusterUserExApp(string $userId, float $maxDistance, int $minFaces): array {
+		['rows' => $rows, 'pendingIds' => $pendingIds, 'checksums' => $checksums] = $this->loadPoolIds($userId);
+		$result = [
+			'attempted' => count($pendingIds), 'newClusters' => 0, 'joined' => 0, 'skipped' => 0, 'written' => 0,
+			'skippedForeign' => 0, 'lastId' => null, 'remainingUnclustered' => count($pendingIds),
+			'pendingUnassignedIds' => $pendingIds, 'computeMs' => 0, 'uploaded' => 0, 'poolSize' => count($rows),
+		];
+		if ($pendingIds === []) {
+			return $result;
+		}
+
+		$result['uploaded'] = $this->exApp->syncCache($userId, array_keys($checksums), $checksums)['uploaded'];
+		$answer = $this->exApp->cluster($userId, $rows, $pendingIds, $maxDistance, $minFaces);
+		$result['computeMs'] = (int)($answer['compute_ms'] ?? 0);
+
+		// What the answer may say, checked before anything is written: only rows of this pool that had no label, each
+		// either an existing person of the pool or a new label that a "new" decision introduced.
+		$poolLabel = [];
+		foreach ($rows as [$rowId, , , $label]) {
+			$poolLabel[$rowId] = $label;
+		}
+		$persons = array_flip(array_filter($poolLabel, fn (?int $label): bool => $label !== null));
+		$newLabels = [];
+		foreach ($answer['decisions'] ?? [] as $decision) {
+			$action = $decision['action'] ?? null;
+			match ($action) {
+				'new' => $newLabels[(int)$decision['label']] = true,
+				'join', 'skip', 'already' => null,
+				default => throw new ExAppClusteringException('/cluster: unknown decision ' . json_encode($action)),
+			};
+			if ($action === 'new' || $action === 'join' || $action === 'skip') {
+				$result[['new' => 'newClusters', 'join' => 'joined', 'skip' => 'skipped'][$action]]++;
+			}
+		}
+		$labels = [];
+		foreach ($answer['labels'] ?? [] as $entry) {
+			[$rowId, $label] = [(int)($entry[0] ?? 0), (int)($entry[1] ?? 0)];
+			$known = $label > 0 ? isset($persons[$label]) : isset($newLabels[$label]);
+			if (!array_key_exists($rowId, $poolLabel) || $poolLabel[$rowId] !== null || !$known || isset($labels[$rowId])) {
+				throw new ExAppClusteringException("/cluster: label {$label} for row {$rowId} does not fit the pool");
+			}
+			$labels[$rowId] = $label;
+		}
+
+		// New people in the order the ExApp made them (-1, -2, ...), as PHP makes them during matching.
+		$personOf = [];
+		$created = [];
+		try {
+			foreach (array_keys($newLabels) as $label) {
+				$personOf[$label] = $created[] = $this->createCluster($userId);
+			}
+			$assignments = [];
+			foreach ($labels as $rowId => $label) {
+				$assignments[$rowId] = ['cluster_id' => $label > 0 ? $label : $personOf[$label]];
+			}
+			$writtenIds = $this->persistAssignments($userId, $assignments, array_keys($assignments), $created);
+		} catch (\Throwable $e) {
+			if ($created !== []) {
+				$this->inTransaction(fn () => $this->faceStore->deleteEmptyUntitled($userId, $created));
+			}
+			throw $e;
+		}
+
+		$written = array_flip($writtenIds);
+		$result['written'] = count($writtenIds);
+		$result['pendingUnassignedIds'] = array_values(array_filter($pendingIds, fn (int $id): bool => !isset($written[$id])));
+		$result['remainingUnclustered'] = count($result['pendingUnassignedIds']);
+		return $result;
+	}
+
+	/**
+	 * The pool clusterUserExApp() sends: selectWantedIds() with each face's checksum, no embeddings. Rows ascending by
+	 * row id, which is the order ties are decided in. Labels as loadDetections() normalizes them: a person's id, or null
+	 * for pending and unclusterable rows, and only pending rows in `pendingIds`. A row whose face is gone is left out,
+	 * as loadDetections() leaves it out.
+	 *
+	 * @return array{rows: list<array{0: int, 1: int, 2: int, 3: ?int}>, pendingIds: list<int>, checksums: array<int, int>}
+	 */
+	public function loadPoolIds(string $userId): array {
+		$wanted = $this->selectWantedIds($userId);
+		$checksums = $this->exApp->checksums(array_values(array_unique(array_column($wanted, 'faceId'))));
+		$rows = [];
+		$pendingIds = [];
+		foreach ($wanted as $id => ['faceId' => $faceId, 'clusterId' => $clusterId]) {
+			if (!isset($checksums[$faceId])) {
+				continue;
+			}
+			if ($clusterId === null) {
+				$pendingIds[] = $id;
+			}
+			$rows[] = [$id, $faceId, $checksums[$faceId], $clusterId > 0 ? $clusterId : null];
+		}
+		return ['rows' => $rows, 'pendingIds' => $pendingIds, 'checksums' => $checksums];
 	}
 
 	/**

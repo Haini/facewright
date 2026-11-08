@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\BackgroundJob;
 
 use OCA\FacewrightBridge\Service\ClusteringService;
+use OCA\FacewrightBridge\Service\ExAppClusteringException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
 use OCP\BackgroundJob\QueuedJob;
@@ -42,7 +43,8 @@ class ClusterScanJob extends QueuedJob {
 
 	/**
 	 * @param array{userId: string, maxDistance: float, minFaces: int, chunkSize: int,
-	 *     afterId: int, passProgress: bool} $argument
+	 *     afterId: int, passProgress: bool, engine?: string} $argument `engine` is fixed when the chain starts
+	 *     (ClusterTriggerService), so a config change does not switch a running chain; missing means php
 	 */
 	protected function run($argument): void {
 		if ($this->appConfig->getValueString('facewright_bridge', 'processing_paused', 'false') === 'true') {
@@ -51,6 +53,10 @@ class ClusterScanJob extends QueuedJob {
 		}
 
 		$userId = $argument['userId'];
+		if (ClusteringService::normalizeEngine($argument['engine'] ?? null) === ClusteringService::ENGINE_EXAPP) {
+			$this->runExApp($argument);
+			return;
+		}
 		$chunkSize = max(1, (int)($argument['chunkSize'] ?? 300));
 		$afterId = (int)($argument['afterId'] ?? 0);
 		$passProgress = (bool)($argument['passProgress'] ?? false);
@@ -92,5 +98,46 @@ class ClusterScanJob extends QueuedJob {
 		}
 
 		$this->jobList->add(self::class, [...$argument, 'afterId' => $result['lastId'], 'passProgress' => $passProgress]);
+	}
+
+	/**
+	 * The `exapp` engine (docs/exapp-clustering.md, S3): one run is one full pass, every pending face in one /cluster
+	 * request, so there is no cursor. The stop logic is the PHP chain's with "a pass" being this run: a pass that wrote
+	 * something is followed by another (matching is order-dependent, a new person can make an earlier skip matchable);
+	 * one that wrote nothing marks what it found pending unclusterable, and the chain ends.
+	 *
+	 * Falls back per chain, not per call: if the ExApp fails, the rest of this chain is today's chunked PHP chain from
+	 * the start, and the next chain (ClusteringMaintenanceJob, hourly) tries the ExApp again. A LogicException counts as
+	 * a failure too: it is persistAssignments() refusing what this path made of the answer, before writing anything.
+	 */
+	private function runExApp(array $argument): void {
+		$userId = $argument['userId'];
+		try {
+			$result = $this->clustering->clusterUserExApp($userId, (float)$argument['maxDistance'], (int)$argument['minFaces']);
+		} catch (ExAppClusteringException|\LogicException $e) {
+			$this->logger->warning(
+				"facewright: ExApp clustering for {$userId} failed, continuing this chain in PHP: " . $e->getMessage(),
+				['app' => 'facewright_bridge', 'exception' => $e],
+			);
+			$this->jobList->add(self::class, [...$argument, 'engine' => ClusteringService::ENGINE_PHP, 'afterId' => 0, 'passProgress' => false]);
+			return;
+		}
+		$this->logger->info(
+			"facewright: clustering pass for {$userId} (ExApp) - pool {$result['poolSize']}, {$result['attempted']} attempted, "
+			. "{$result['newClusters']} new, {$result['joined']} joined, {$result['skipped']} skipped, "
+			. "{$result['written']} written, {$result['remainingUnclustered']} still unclustered; "
+			. "{$result['uploaded']} uploaded, compute {$result['computeMs']} ms."
+		);
+
+		if ($result['written'] > 0 && $result['remainingUnclustered'] > 0) {
+			$this->jobList->add(self::class, [...$argument, 'afterId' => 0, 'passProgress' => false]);
+			return;
+		}
+		$marked = $result['written'] === 0 && $result['pendingUnassignedIds'] !== []
+			? $this->clustering->markUnclusterable($userId, $result['pendingUnassignedIds'])
+			: 0;
+		$this->logger->info('facewright: clustering for ' . $userId . ' stopping - ' . (
+			$result['remainingUnclustered'] === 0 ? 'nothing left unclustered.' : 'a full pass made no further progress.'
+		) . ($marked > 0 ? " Marked {$marked} detection(s) unclusterable." : ''));
 	}
 }

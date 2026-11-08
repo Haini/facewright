@@ -85,6 +85,8 @@ class ClusterTriggerService {
 			'chunkSize' => $chunkSize,
 			'afterId' => 0,
 			'passProgress' => false,
+			// Fixed for the whole chain; ClusterScanJob may switch it to php once, as its fallback.
+			'engine' => $this->clustering->configuredEngine(),
 		]);
 		return true;
 	}

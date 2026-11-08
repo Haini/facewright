@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\ClusteringService;
+use OCA\FacewrightBridge\Service\ExAppClusteringException;
 use OCA\FacewrightBridge\Service\FaceState;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
@@ -32,20 +33,38 @@ class ClusterFaces extends Command {
 			->addArgument('user', InputArgument::REQUIRED)
 			->addOption('max-distance', null, InputOption::VALUE_REQUIRED, 'Max cosine distance to count as a match', '0.5')
 			->addOption('min-faces', null, InputOption::VALUE_REQUIRED, 'Min matches (incl. self) to form/join a cluster', '3')
-			->addOption('reset', null, InputOption::VALUE_NONE, 'Clear this user\'s existing cluster assignments first');
+			->addOption('reset', null, InputOption::VALUE_NONE, 'Clear this user\'s existing cluster assignments first')
+			->addOption('engine', null, InputOption::VALUE_REQUIRED, 'php or exapp (default: the app config clustering_engine, php when unset)');
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$userId = $input->getArgument('user');
 		$maxDistance = (float)$input->getOption('max-distance');
 		$minFaces = (int)$input->getOption('min-faces');
+		$engine = $input->getOption('engine') ?? $this->clustering->configuredEngine();
+		if (!in_array($engine, [ClusteringService::ENGINE_PHP, ClusteringService::ENGINE_EXAPP], true)) {
+			$output->writeln('<error>--engine must be php or exapp</error>');
+			return 1;
+		}
 
 		if ($input->getOption('reset')) {
 			$this->clustering->resetUser($userId);
 			$output->writeln('Reset existing cluster assignments.');
 		}
 
-		$result = $this->clustering->clusterUser($userId, $maxDistance, $minFaces);
+		if ($engine === ClusteringService::ENGINE_EXAPP) {
+			// No fallback here: a manual run says what failed and leaves the choice to whoever ran it.
+			try {
+				$result = $this->clusterExApp($userId, $maxDistance, $minFaces);
+			} catch (ExAppClusteringException $e) {
+				$output->writeln('<error>ExApp clustering failed, nothing written: ' . $e->getMessage() . '</error>');
+				return 1;
+			}
+			$output->writeln(sprintf('ExApp: pool %d, %d attempted, %d embedding(s) uploaded, compute %d ms.',
+				$result['poolSize'], $result['attempted'], $result['uploaded'], $result['computeMs']));
+		} else {
+			$result = $this->clustering->clusterUser($userId, $maxDistance, $minFaces);
+		}
 
 		if ($result['skippedForeign'] > 0) {
 			fwrite(STDERR, "Skipped {$result['skippedForeign']} detection(s) with non-InsightFace vector dimensions.\n");
@@ -69,6 +88,20 @@ class ClusterFaces extends Command {
 		$this->printClusterSizes($output, $userId);
 
 		return 0;
+	}
+
+	/**
+	 * clusterUser()'s one pass and its marking rule, on the ExApp: a pass that wrote nothing marks what it found pending.
+	 *
+	 * @return array{newClusters: int, joined: int, skipped: int, written: int, skippedForeign: int, markedUnclusterable: int,
+	 *     poolSize: int, attempted: int, uploaded: int, computeMs: int}
+	 */
+	private function clusterExApp(string $userId, float $maxDistance, int $minFaces): array {
+		$result = $this->clustering->clusterUserExApp($userId, $maxDistance, $minFaces);
+		$result['markedUnclusterable'] = $result['written'] === 0 && $result['pendingUnassignedIds'] !== []
+			? $this->clustering->markUnclusterable($userId, $result['pendingUnassignedIds'])
+			: 0;
+		return $result;
 	}
 
 	private function printClusterSizes(OutputInterface $output, string $userId): void {

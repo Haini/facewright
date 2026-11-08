@@ -19,7 +19,8 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 `dev/exapp-client.sh` passes 12 of 12.
 
 **C5 is under way on live (2026-11-08):** deployed, user1 compared in full with 0 differences, user2 running; see C5's
-"Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 and S2 are done on dev.**
+"Progress". **The switch-over is planned as Part 2 (S1 to S7); S1, S2 and S3 are done on dev** (S3: the `exapp` engine,
+off unless `clustering_engine=exapp`).
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -491,6 +492,36 @@ In `ClusterScanJob::run()`:
   reopened pool, against a `php` chunk's.
 - Planted fault: `clusterUserExApp()` writing negative labels without allocating → `persistAssignments()` must throw
   (C2's guard) and the job must fall back, not write.
+
+**Done (2026-11-08), on dev only.** As planned, with these specifics:
+- `ClusteringService::clusterUserExApp()` and `loadPoolIds()`; the engine is `ENGINE_PHP` / `ENGINE_EXAPP`, read by
+  `configuredEngine()` (anything but `exapp` is PHP). Before writing, the answer is checked against the pool: only rows
+  that had no label, each given an existing person of the pool or a label a `new` decision introduced; anything else is
+  an `ExAppClusteringException`. People are allocated in the order the ExApp made them (-1, -2, ...); if anything fails
+  after that, they are deleted again (`deleteEmptyUntitled`).
+- `ClusterScanJob` falls back on `ExAppClusteringException` **and** `LogicException` (persistAssignments() refusing a
+  label ≤ 0 is a bug in this path, and the fallback must still happen; nothing is written by then).
+- `/cluster`'s timeout is 600 s (`CLUSTER_TIMEOUT`; the cache calls keep 120 s). Sized from user2's C5 chunks: 2.26 to
+  2.30 s of compute per 300 attempts against a pool of about 55,000, about 7.5 ms per attempt; a full reopen of user2
+  (about 31,000 attempts) is then about 235 s, twice that about 470 s.
+- `occ facewright:cluster --engine=php|exapp` (default: the config). No fallback there: an ExApp failure exits 1 having
+  written nothing.
+- Not done: a cap on attempts per request (not needed by the numbers above); `skippedForeign` is 0 under `exapp` (a
+  blob of the wrong length is refused by the ExApp's put, and the chain falls back to PHP, which skips it).
+
+Verified on dev with `clustering_engine=exapp`: `clustering-sets.sh` php against exapp identical (admin 306 people,
+bob 2; 8.3 s against 1.7 s), `clustering-truth.sh` (`PEOPLE=50`, detection from cache) 14 of 14, `persist-guard.sh` 11
+of 11, `chain-loop-test.sh dangling` 5 of 5 and `assignable` 4 of 4, `writers-cluster.sh` 16 of 16 (each confirmed in
+the ExApp's log as served by `/cluster`); unchanged: `exapp-client.sh` 12 of 12, `cluster-compare.sh` 16 of 16,
+`cluster-inmemory.sh --prepare` 8 of 8. New `dev/cluster-engine.sh`, 21 of 21, on admin reset (2,789 pending):
+- (a) the php chain takes 13 runs, the exapp chain 2 (one pass that writes 2,783, one that writes nothing and marks
+  6 unclusterable); same people and same unclusterable faces;
+- (b) the ExApp stopped before the first run: that run writes nothing, logs one warning and re-queues the chain as
+  `engine: php` from `afterId: 0`; the chain stays in PHP after the ExApp is back and ends with the php chain's result;
+- (c) PHP peak memory: a php chunk of 300 rises from 16.3 MB to 53.1 MB, a whole exapp pass of 2,789 to 29.0 MB;
+- (d) planted: negative labels written without making people. persistAssignments() refuses, nothing is written, the
+  warning names the refusal, the chain goes on in PHP and ends with the php chain's result;
+- (e) planted: a failure after the 306 people were made. All 306 are deleted again and nothing is written.
 
 ### S4 Bridge: cache hygiene
 
