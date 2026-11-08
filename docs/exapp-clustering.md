@@ -18,6 +18,9 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 **C3 is done (2026-11-08), on dev only.** `ExAppClusteringClient` syncs the cache and calls `/cluster`;
 `dev/exapp-client.sh` passes 12 of 12.
 
+**C5 is under way on live (2026-11-08):** deployed, user1 compared in full with 0 differences, user2 running; see C5's
+"Progress". **The switch-over is planned as Part 2 (S1 to S7), not started.**
+
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
 ExApp is about 20× faster even on dev's small pools. **Next: C5, on live, with the user's go-ahead for each action.**
@@ -315,6 +318,26 @@ How the design was filled in:
 4. Record in this document: per library, differences by class, total PHP and ExApp time, PHP peak memory, cache size
    on disk, payload sizes. These numbers decide the switch-over.
 
+**Progress (2026-11-08).** Done with the user's go-ahead:
+- Dump and rollback material in the operator's backups (`facewright-pre-c5`: full database, the live 0.10.0 bridge,
+  counts, the previous `deploy.env`); the previous ExApp image tagged `facewright:pre-c5`. The running image dated from
+  2026-07-29, but its `main.py` and packages equal the repo's before C1, so the rebuild added C1 and nothing else.
+- **ExApp:** after `make run`, every signed request answered 401: `deploy.env`'s `APP_SECRET` was not the secret
+  AppAPI has registered (the old container had been started with the registered one some other way). Fixed by running
+  with the registered secret and correcting `deploy.env`; not by re-registering. `make verify` cannot catch this,
+  because `/heartbeat` is exempt from signatures: after any ExApp redeploy, run one signed request (a read-only
+  `/detect` through `exAppRequest`). Processing was paused during the swap; nothing was marked failed. Note that
+  `nc_py_api` logs both secrets in full on a mismatch.
+- **Bridge:** `occ app:update --showonly` listed three unrelated store updates, which `occ upgrade` would have installed.
+  This deploy adds only a command, so it was copied with `info.xml` at 0.10.0 and no upgrade (CLAUDE.md's rule for
+  command-only changes); live therefore reports 0.10.0 with the 0.10.1 code. The other four files that differed from
+  live differed in comments only (compared token by token).
+- user1, `--chunks=3`: 900 attempts against a 22,097-face pool, 0 differences; PHP 50 s per chunk, the ExApp 1.1 s round
+  trip. The cold sync sent 59 MB in 25 requests through HaRP in 2 s.
+- **user1, full `--reopen`:** 13,713 attempts in 46 chunks, 0 differences of any class; both engines 1 new, 1 join,
+  13,709 skip. PHP 2,285 s (38 min), peak 350 MB; the ExApp 48 s round trip, 41 s compute, 29 MB sent. 47× faster.
+- user2, full `--reopen`: running (started 18:29 UTC).
+
 ## Deviations from what was discussed
 
 - **No refactor of the writing path for the comparison.** Injecting the "create a person" step into
@@ -325,16 +348,165 @@ How the design was filled in:
 - **No `shadow` mode in cron.** The command gives the same evidence on demand, at a scale (a full reopen) that cron would
   only reach after a threshold change.
 
-## Later: the switch-over (not planned here)
+# Part 2: The switch-over (S1 to S7)
 
-Only after C5's numbers are clean, and with the user's decision:
-- `clustering_engine` app config: `php` (default) or `exapp`. Under `exapp` the ExApp's labels are turned into people by
-  the bridge (allocate the new ones, then write everything through `persistAssignments()`), and a failed ExApp call
-  falls back to PHP for that run.
-- **Chunking dropped under `exapp`**: one request per pass, attempting every pending id. `ClusterScanJob` keeps its
-  stop condition ("a full pass made no assignment") and its paused handling.
-- A stored `embedding_crc` column (migration, written by every writer of `facewright_faces.embedding`, a resumable
-  backfill) so a pass reads no blobs when the cache is warm.
-- Cache hygiene: prune by `seen_at`; `occ facewright:reset` and the deletion paths clear the matching entries or the
-  whole cache.
-- CLAUDE.md: the engine, the cache and its checksum rule in "Components" and the invariants; close open item 7.
+Only after C5 is clean for both libraries, and each live step only with the user's go-ahead. Same working rules as
+Part 1 ("How to work this plan"). The goal: `ClusterScanJob` uses the ExApp for matching, PHP stays as the fallback, and
+nothing about what is written, or when, changes: `persistAssignments()` stays the only writer and its guards (a
+human's change wins) stay the gate.
+
+## What changes, and what does not
+
+| | Today (`php`) | After (`exapp`) |
+|---|---|---|
+| Pool loaded in PHP | ids, labels **and vectors** (about 12 KB per face) | ids, face ids, checksums and labels (no vectors) |
+| Matching | `assignClusters()`, 300 attempts per chunk, the pool reloaded per chunk | `/cluster`, every pending id in one request |
+| People created | during matching (`createCluster()`) | after the ExApp answers, one per new label, just before the write |
+| Writing | `persistAssignments()` | `persistAssignments()`, unchanged |
+| Stop condition | a full pass wrote nothing → mark the rest unclusterable | the same; one request is one full pass |
+| Pool selection (`selectWantedIds()`, 20 per person) | as is | as is |
+| Tie order | the order MariaDB returns the vector batches in | ascending row id |
+
+The last row is a real, deliberate difference: PHP's order is not stable either (unordered `IN()` batches), and ties
+between two people are rare (C5 found none on user1). It changes which person wins a tie, nothing else.
+
+## Decisions taken here
+
+- **Engine switch:** app config `facewright_bridge` / `clustering_engine`, `php` (default when unset) or `exapp`. Read
+  when a chain starts and stored in `ClusterScanJob`'s argument as `engine`, so a running chain does not change engine
+  halfway. `occ facewright:cluster` gets `--engine=php|exapp`, defaulting to the config.
+- **Fallback per chain, not per call:** if an ExApp call fails (`ExAppClusteringException`), the job logs a warning and
+  re-adds itself with `engine: php` and `afterId: 0`, so the rest of that chain is today's chunked PHP chain. The next
+  chain (`ClusteringMaintenanceJob`, hourly) tries the ExApp again. Mixing per call would mix a whole-pass engine with a
+  cursor-based one inside one chain.
+- **No chunking under `exapp`,** as decided with the user. One request attempts every pending id. Size its timeout from
+  C5: `compute_ms` per attempt at user2's pool size, times the largest pending count expected (a full reopen of user2,
+  about 31,000), with a margin of 2. HaRP's server timeout is 1800 s (C1). If that product comes out above 600 s,
+  stop and bring the numbers to the user: then a cap on attempts per request is needed after all.
+- **Stored checksum:** a nullable `embedding_crc` column on `facewright_faces`. `NULL` means "unknown": readers then
+  compute `CRC32(embedding)` in SQL as today, so the column is an optimisation and never a source of wrong answers.
+  It is written by every writer of `embedding` and filled for old rows by a resumable command.
+- **Cache hygiene:** the ExApp prunes entries not seen for 30 days by itself (at most once a day, inside `check`); the
+  bridge tells it to forget faces it deletes, after the commit and best-effort (a failure is logged, the prune is the
+  backstop); `occ facewright:reset` clears the whole cache.
+
+## Steps
+
+### S1 Stored checksum
+
+- Migration (next version after **0.10.1**: live's `info.xml` says 0.10.0 only because C5 deployed a command without an
+  upgrade; the repo is at 0.10.1): `facewright_faces.embedding_crc`, `Types::BIGINT`, nullable, unsigned not required
+  (CRC32 fits in a signed BIGINT). No data in the migration.
+- Writers: `DetectionService::upsertFace()` sets `embedding_crc = crc32($blob)` in the same `setValues()` call.
+  `FaceMigrationService` (Stage 1 backfill, refuses once our tables hold faces, deleted in Stage F.2) may leave it
+  `NULL`; that is safe by the rule above. `grep -rn "'facewright_faces'" lib/` must show no other writer of `embedding`.
+- `occ facewright:embedding-checksums [--dry-run] [--chunk=5000]`: keyset on `id` over rows with `embedding_crc IS
+  NULL`; on MariaDB/MySQL `UPDATE ... SET embedding_crc = CRC32(embedding) WHERE id BETWEEN ...`, elsewhere in PHP.
+  Prints rows done; resumable by construction (it only selects `NULL`).
+- `ExAppClusteringClient::checksums()` reads `COALESCE(embedding_crc, CRC32(embedding))` (PHP fallback on other
+  databases unchanged).
+- `occ facewright:own-tables --verify` gains one check: no row where `embedding_crc` is set and differs from
+  `CRC32(embedding)`.
+
+**Verify:** on dev, after the backfill, `SELECT COUNT(*) FROM oc_facewright_faces WHERE embedding_crc IS NULL OR
+embedding_crc <> CRC32(embedding)` is 0; a forced re-detection (`occ facewright:detect`) keeps it 0; planted fault (the
+upsert without the column, then a re-detection that changes the embedding: edit one row's blob by hand first) makes
+`--verify` fail. `dev/exapp-client.sh` and `dev/cluster-compare.sh` still pass.
+
+### S2 ExApp: forget and prune
+
+- `POST /cluster/cache/forget` `{"faces": [faceId, ...]}` → `{"removed": n}`.
+- In `cache_check`: at most once a day (a timestamp in a one-row table, or the file's own metadata), `DELETE FROM
+  embeddings WHERE seen_at < now - 30 days`. Log the count.
+- `/cluster`: no change. Its body for a full reopen of user2 is about 2 MB pool plus 31,000 attempt ids; C5 already sent
+  pools of that size.
+
+**Verify** (extend `dev/exapp-cluster.sh`): forget removes exactly the named ids; with the clock moved (set `seen_at`
+back in SQLite for some ids), the next `check` removes those and only those, and not twice in one day.
+
+### S3 Bridge: the ExApp engine
+
+In `ClusteringService`:
+- `loadPoolIds(string $userId): array` — `selectWantedIds()` plus checksums (`ExAppClusteringClient::checksums()`), no
+  vectors: `['rows' => list<[rowId, faceId, crc, label]>, 'pendingIds' => list<int>]`, rows ascending by id, labels
+  normalized exactly as `loadDetections()` does (unclusterable → null, and in `pendingIds` only if state is pending).
+- `clusterUserExApp(string $userId, float $maxDistance, int $minFaces): array` — `loadPoolIds()`, `syncCache()`,
+  `cluster()` with every pending id; then turn the answer into a write:
+  - each distinct negative label → `FaceStore::allocateCluster($userId)`, collected as `$createdClusterIds`;
+  - a map `rowId => ['cluster_id' => personId]` for every row the answer labelled;
+  - `persistAssignments($userId, $map, array_keys($map), $createdClusterIds)` — unchanged; it reads only `cluster_id`,
+    which is also why `dev/persist_guard.php` keeps working. It already deletes created people that ended up empty.
+  - Return the same shape as `clusterUserChunk()` (`attempted`, `newClusters`, `joined`, `skipped`, `written`,
+    `remainingUnclustered`, `pendingUnassignedIds`), with `pendingUnassignedIds` = pending on entry and not written.
+- Nothing else in the class changes; the PHP path keeps loading vectors.
+
+In `ClusterScanJob::run()`:
+- `engine = $argument['engine'] ?? 'php'`. For `exapp`: call `clusterUserExApp()`; on success apply the same stop logic
+  as today with "a full pass" being this one call (`written > 0` → re-add with `passProgress` reset; otherwise mark the
+  returned `pendingUnassignedIds` unclusterable and stop). On `ExAppClusteringException`: log a warning with the
+  message and re-add `[...$argument, 'engine' => 'php', 'afterId' => 0, 'passProgress' => false]`.
+- `ClusterTriggerService::enqueue()` writes `engine` from the app config. Its double-start guard (by `userId` among
+  pending jobs' arguments) is unchanged; an old-style argument without `engine` means `php`.
+
+`occ facewright:cluster --engine=php|exapp`: the synchronous path uses `clusterUserExApp()` for `exapp`.
+
+**Verify** on dev (all with `clustering_engine=exapp` unless stated):
+- `dev/clustering-sets.sh`: sets saved with `php` and with `exapp` from the same restored data are identical (dev has
+  no ties, see C4).
+- `dev/clustering-truth.sh` with `PEOPLE=50`: 15 of 15.
+- `dev/persist-guard.sh`, `dev/chain-loop-test.sh dangling` and `assignable`, `dev/writers-cluster.sh`: pass (the chain
+  tests start chains, so they exercise the job under `exapp`).
+- New `dev/cluster-engine.sh`: (a) a chain under `exapp` runs as one job per pass (count job runs), ends, and marks the
+  same unclusterable rows as a `php` chain; (b) the ExApp stopped mid-chain: the chain falls back, finishes in PHP,
+  logs one warning, and the result equals a pure `php` chain; (c) PHP peak memory of one `exapp` pass on admin's
+  reopened pool, against a `php` chunk's.
+- Planted fault: `clusterUserExApp()` writing negative labels without allocating → `persistAssignments()` must throw
+  (C2's guard) and the job must fall back, not write.
+
+### S4 Bridge: cache hygiene
+
+- `AccessSyncService` (the `facewright_faces` delete at the orphan cleanup) and `ResetService` (per-face delete):
+  after their transaction commits, `ExAppClusteringClient::forget($faceIds)`, catching and logging
+  `ExAppClusteringException`. `occ facewright:reset`: `clear()` after the reset.
+- Always, whatever `clustering_engine` says: `cluster-compare` fills the cache in `php` mode too. A failure never fails
+  the caller.
+
+**Verify:** `dev/writers-files.sh` (a delete) and `dev/own-traps.sh` pass; after a file delete the ExApp's cache no longer
+holds its face ids (read the SQLite count by id); with the ExApp stopped, a delete still succeeds and logs one warning.
+
+### S5 Docs
+
+`CLAUDE.md`: in "Components", the engine switch, the fallback, the cache and its checksum rule (a cached embedding
+counts only with the checksum the bridge sends; `embedding_crc` NULL means unknown, never "no checksum"); in "Job
+semantics", `ClusterScanJob`'s `engine` argument and the fallback; the new command; close open item 7 (keep the numbers
+from C5 as the reason). `dev/README.md`: the new suite.
+
+### S6 Live: deploy, still on `php` (the user's go-ahead)
+
+1. Fresh dump. `occ app:update --showonly`: **if store updates are pending, ask the user** before `occ upgrade`, which
+   installs them all (C5 found three unrelated ones on 2026-11-08). The migration makes the upgrade unavoidable here,
+   unlike C5.
+2. Deploy the ExApp (S2) as in C5: `make build run`; `deploy.env` now holds the registered secret, check its hash
+   against `oc_ex_apps` before `make run` anyway (C5's 401). Detection paused during the swap; one read-only `/detect`
+   before unpausing.
+3. Deploy the bridge, `occ upgrade`, delete Recognize's `MaintenanceJob` if it came back.
+4. `occ facewright:embedding-checksums --dry-run`, then for real; `own-tables --verify`.
+5. `cluster-compare --reopen --chunks=3` for user1 again: 0 differences (the checksums now come from the column).
+
+### S7 Live: switch (the user's go-ahead)
+
+1. `occ config:app:set facewright_bridge clustering_engine --value=exapp`.
+2. Watch the next real chain (new photos, or start one with `occ facewright:cluster-scan`): the log line per pass,
+   `oc_jobs`, the day-after checks (`project --dry-run`, `own-tables --verify`), and the People page.
+3. Rollback at any time: `occ config:app:set facewright_bridge clustering_engine --value=php`. A chain already queued
+   finishes on the engine it started with. Nothing written differs in kind, so there is nothing to undo; the column and
+   the cache can stay.
+4. After a week without fallbacks in the log, record it here; leaving `php` as the fallback is permanent by design.
+
+## Open questions for later (not in S1 to S7)
+
+- **The 20-per-person cap** (`CLUSTER_REPRESENTATIVE_CAP`) exists because PHP could not afford more. Under the ExApp,
+  matching against every member is affordable; whether it improves results is open item 2's question (clustering
+  quality), and needs the ground-truth set, not a guess.
+- **Memories' over-merged clusters** (open item 2) and threshold tuning become cheap to experiment with:
+  `cluster-compare` with `--max-distance` already gives both engines' answers in seconds on the ExApp side.
