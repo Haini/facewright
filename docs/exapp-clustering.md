@@ -13,7 +13,10 @@ against a 50,000-face pool take 2.4 s of compute (about 3 s round trip), against
 stayed under 40 ms meanwhile. Nothing is deployed to live.
 
 **C2 is done (2026-11-08), on dev only.** `ClusteringService` takes the "create a person" step as a callable and has
-`loadPoolForComparison()` / `assignInMemory()`; production behaviour is unchanged (see C2's "Done"). **Next: C3.**
+`loadPoolForComparison()` / `assignInMemory()`; production behaviour is unchanged (see C2's "Done").
+
+**C3 is done (2026-11-08), on dev only.** `ExAppClusteringClient` syncs the cache and calls `/cluster`;
+`dev/exapp-client.sh` passes 12 of 12. **Next: C4.**
 
 ## Why
 
@@ -214,6 +217,19 @@ New `lib/Service/ExAppClusteringClient.php`:
 
 **Verify:** unit-level through the command in C4. Planted fault for the 409 path: clear the cache (`/cluster/cache/clear`)
 between `syncCache()` and `cluster()`; the retry must recover, and with the retry removed the call must fail.
+
+**Done (2026-11-08).** `lib/Service/ExAppClusteringClient.php` and `ExAppClusteringException.php`. Beyond the plan:
+`checksums()` computes the CRC in PHP from the blob on databases other than MariaDB/MySQL; `upload()` sends the checksum
+of the blob it just read, so a face re-detected since `checksums()` is uploaded consistently and the pool's older
+checksum makes `/cluster` answer 409; `takeStats()` returns request count, bytes and time for the command's report.
+`dev/exapp-client.sh` (+ `exapp_client.php`; the check-line parser moved into `lib.sh` as `php_checks`) checks, on
+dev's admin (2,756 faces):
+- the SQL CRC32 equals `crc32()` of the blob as read (1,000 faces);
+- a cold sync uploads every face (4 requests, 7.4 MB, about 135 ms), a warm one nothing (1 request, about 20 ms);
+- a stale entry (another face's embedding under a face's id) is replaced, and only it;
+- `/cluster` after the cache was emptied recovers with one 409, a sync and one retry; planted fault (no retry): fails;
+- a face that cannot be synced throws after one retry instead of looping;
+- with the ExApp container stopped, a sync throws (`Could not resolve host`), and the ExApp comes back.
 
 ### C4 `occ facewright:cluster-compare`
 

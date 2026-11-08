@@ -43,6 +43,7 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `memories-ui/flows.py` | Memories' own UI: rename, remove face, move face, merge, remove person; requests and database | yes (restore) |
 | `exapp-cluster.sh` (+ `exapp_call.php`, `exapp_cluster_gen.py`, `exapp_match_selftest.py`) | the ExApp's embedding cache and `/cluster` through AppAPI: checksums agree, all-or-nothing puts, 409 on a missing or stale face, a 50k pool with `/heartbeat` timed meanwhile, `match_chunk()` against a port of the PHP loop (docs/exapp-clustering.md, C1) | ExApp cache only; leaves it empty |
 | `cluster-inmemory.sh [--prepare]` (+ `cluster_inmemory.php`) | the comparison's view of PHP clustering (`loadPoolForComparison`, `assignInMemory`) writes nothing, reopen adds exactly the unclusterable rows, a temporary label is refused (docs/exapp-clustering.md, C2) | only with `--prepare` (restore) |
+| `exapp-client.sh [USER]` (+ `exapp_client.php`) | the bridge's `ExAppClusteringClient`: checksums, cold and warm cache sync, a stale entry, the 409 retry, a face that cannot be synced, the ExApp stopped (docs/exapp-clustering.md, C3) | ExApp cache only; stops and starts the ExApp |
 | `live-capture.sh OUT users` | read-only capture for another instance (`NC_CONTAINER=…`); pause processing first | no |
 | `make-shared-fixture.sh`, `check-fixture.sh` | shared-file fixture and the preconditions the suites need | fixture only |
 | `setup-venv.sh`, `make-portrait.py` | Playwright/Chromium and a real-face test photo (`dev/.work/venv`) | no |

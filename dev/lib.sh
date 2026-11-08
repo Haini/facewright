@@ -105,6 +105,32 @@ verify_step() {  # verify_step LABEL : the invariant checker after a step
   if [ $rc -eq 0 ]; then PASS=$((PASS+1)); printf '  ok    verify after %s\n' "$1"
   else FAIL=$((FAIL+1)); printf '  FAIL  verify after %s\n' "$1"; echo "$out" | grep -E 'must|failed' | sed 's/^/        /'; fi
 }
+# Runs a PHP check script inside the Nextcloud container and counts its results. The script prints
+# "check <label> <expected> <actual>" (three JSON values) and "info <text>" lines; anything else is a failure.
+php_checks() {  # php_checks SCRIPT.php [ARGS...]
+  local script=$1; shift
+  docker cp "$DEV_DIR/$script" "$NC_CONTAINER:/tmp/$script" >/dev/null
+  local kind rest
+  while read -r kind rest; do
+    case $kind in
+      info) echo "  $rest" ;;
+      check) if python3 - "$rest" <<'PY'
+import json, sys
+dec = json.JSONDecoder(); s = sys.argv[1]; vals = []; i = 0
+while i < len(s):
+    if s[i] == " ": i += 1; continue
+    v, i = dec.raw_decode(s, i); vals.append(v)
+label, expected, actual = vals
+ok = expected == actual
+print(f"  {'ok  ' if ok else 'FAIL'}  {label}" + ("" if ok else f": expected {str(expected)[:200]}, got {str(actual)[:200]}"))
+sys.exit(0 if ok else 1)
+PY
+        then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi ;;
+      *) echo "  ??    $kind $rest"; FAIL=$((FAIL + 1)) ;;
+    esac
+  done < <(docker exec -u www-data "$NC_CONTAINER" php "/tmp/$script" "$@" 2>&1)
+  docker exec "$NC_CONTAINER" rm -f "/tmp/$script"
+}
 summary() {  # summary NAME : prints the totals; returns non-zero if anything failed
   echo; echo "$1: passed $PASS, failed $FAIL"; [ "$FAIL" -eq 0 ]
 }
