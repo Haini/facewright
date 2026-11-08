@@ -160,7 +160,8 @@ another user) and `FacePreviewController` (`/faces/{id}/preview`, a square crop 
   page turns into a merge offer; never match on the English message.
 
 `occ` commands: `facewright:detect <user> <path>` (forces re-detection), `facewright:scan`,
-`facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:merge-clusters [--dry-run]`,
+`facewright:cluster <user>`, `facewright:cluster-scan`, `facewright:cluster-compare <user> [--reopen] [--chunks=<n>]
+[--chunk-size=<n>]` (PHP clustering against the ExApp's `/cluster`, writing nothing; `docs/exapp-clustering.md`), `facewright:merge-clusters [--dry-run]`,
 `facewright:backfill-access [--dry-run] [--prune]`, `facewright:compact-vectors [--dry-run]`,
 `facewright:init-user-settings [--dry-run]`, `facewright:reset [--dry-run] [--yes]`,
 `facewright:people <user> [--faces=<idOrTitle>] [--unassigned] [--ignored] [--delete-empty]

@@ -16,7 +16,11 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 `loadPoolForComparison()` / `assignInMemory()`; production behaviour is unchanged (see C2's "Done").
 
 **C3 is done (2026-11-08), on dev only.** `ExAppClusteringClient` syncs the cache and calls `/cluster`;
-`dev/exapp-client.sh` passes 12 of 12. **Next: C4.**
+`dev/exapp-client.sh` passes 12 of 12.
+
+**C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
+`dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
+ExApp is about 20× faster even on dev's small pools. **Next: C5, on live, with the user's go-ahead for each action.**
 
 ## Why
 
@@ -271,6 +275,35 @@ no `unexplained`, 1 otherwise, 2 if there was nothing to attempt (say so: on a l
   `min_faces`; the bridge sending the pool sorted by id instead of in `$detections` order on data where that order
   differs (if no tie exists in dev data, say so and skip this one rather than pretend).
 - Larger: a synthetic pool is not needed; the live run in C5 is the scale test.
+
+**Done (2026-11-08).** `lib/Service/ClusteringCompareService.php`, `lib/Command/ClusterCompare.php`, registered in
+`info.xml` (0.10.1; on dev `occ app:update --showonly` listed nothing and `occ upgrade` brought back no Recognize job).
+How the design was filled in:
+- **Memory:** PHP matches in place on the pool (no copy of the vectors); the ExApp's request is built from the labels
+  before the chunk. A live-sized pool is held once.
+- **Attempts:** a chunk attempts the pending ids above the cursor that are still unlabelled, as production would after
+  reloading the pool.
+- **Differences:** every row either engine changed must end with the same label (people > 0 equal, new people mapped one
+  to one), and the decision counts (new, join, skip) must agree. A row that differs is classified at its own distances,
+  then at the attempted rows that gave it its label in either engine (at most 5); at most 50 rows per chunk are
+  classified, the rest count as unexplained, so the cap can only make a run stricter. Differing counts with no
+  `boundary` or `tie` in the chunk count as one `unexplained`.
+
+`dev/cluster-compare.sh` (results 2026-11-08):
+- admin, 2,768 faces reopened: 10 chunks, 305 new and 5 skipped in both, 0 differences; PHP 6.3 s and 80 MB peak, the
+  ExApp 0.3 s round trip. Nextcloud's tables (ours, Recognize's, `oc_jobs`) unchanged by count and `CHECKSUM TABLE`.
+- the ground-truth user, 750 faces pending, chunks of 100: 50 new in both, 0 differences. Then clustered for real and
+  every third assigned face reopened (250): 50 joins to existing people in both, 0 differences.
+- nothing pending: exit 2.
+- Planted faults in the ExApp, each exit 1 with unexplained differences: `min_faces` ignored (admin's pool); threshold
+  0.15 too tight (ground-truth user). The second shows only in the decision counts (2 joins instead of being pulled in
+  by their person's first face; the final groupings are equal), which is why the counts are compared.
+- **What dev cannot test.** Dev's data sits far from the threshold: neither user's result changes anywhere between 0.4
+  and 0.75 (the ground-truth user's first change is at 0.35). So no `boundary` or `tie` case occurs on dev, and the
+  plan's `<` vs `<=` fault is not usable as written: it is exactly what the `boundary` class exists to explain, so it
+  would be classified, not reported unexplained. The pool-order fault needs a tie between two people, which dev lacks;
+  `dev/exapp_match_selftest.py` (C1) covers that order with a constructed tie. The live run is the first test of both
+  classes.
 
 ### C5 On the live instance (the user's go-ahead for each action)
 
