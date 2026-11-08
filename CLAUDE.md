@@ -494,6 +494,30 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    per face, plus a per-face read-back query for `facewright_faces.id` — `IDBConnection::
    setValues()` has no id-returning mode), `AccessSyncService::copyToUsers()` and
    `ClusteringService::persistAssignments()`.
+7. **Clustering's matching runs in PHP; proposed: a `POST /cluster` endpoint in the ExApp.** Every
+   `ClusterScanJob` chunk reloads the user's whole pool (pending + unclusterable + ≤ 20 per person) as PHP float
+   arrays, about 12 KB per face against 2 KB stored, then compares each of up to 300 pending faces with all of it. At a
+   55k-face pool (measured 2026-11-07, synthetic vectors, PHP 8.5): 668 MB held, 0.63 s per face, about 3 min per chunk.
+   Reopening 31k unclusterable faces (a threshold change, `cluster --reset`) is then about 100 chunks, 5 to 6 hours.
+   Nothing breaks at today's sizes (the CLI limit is 4 GB). Packing pool vectors as strings cuts memory 4.3× for 17%
+   more time; the proposal below fixes the time as well.
+   - **The data stays where it is.** Moving our tables into the ExApp was rejected: every join with `oc_mounts` /
+     `oc_filecache` becomes an HTTP round trip, "write ours, commit, push" loses its transaction, Recognize's copy must
+     still be written inside Nextcloud's database, and the second store needs its own backup.
+   - **The ExApp only computes.** The bridge sends the pool's ids with each face's state, plus the pending ids and the
+     thresholds. The ExApp runs the same algorithm as `assignClusters()` (the same order, unclusterable faces matchable
+     but never attempted) as NumPy matrix products and returns proposed assignments, with temporary labels for new
+     people. The bridge allocates those people and writes everything through `persistAssignments()`, whose guards
+     (a human's change wins) stay the gate. The whole pass fits in one request, so chunking can go.
+   - **Embedding cache in the ExApp,** in its persistent storage, keyed by `facewright_faces.id`. It is disposable,
+     never a source of truth: losing it costs one slow first pass. **A face id's embedding is not immutable**:
+     `DetectionService::upsertFace()` updates in place on a forced re-detection. So each entry is validated by a checksum
+     of the embedding blob, stored in a new `facewright_faces` column at write time (a migration plus a resumable
+     backfill command). The bridge sends `(id, checksum)` pairs; the ExApp answers with the ids it lacks or holds
+     stale, the bridge sends those embeddings in batches, then the pass runs.
+   - **Before it ships:** the ExApp must run the pass off the event loop (see item 4, `/heartbeat` already stalls during
+     inference); `dev/clustering-truth.sh` must give the same assignments from both implementations; and the PHP path
+     should stay as a fallback for when the ExApp is down.
 
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of
