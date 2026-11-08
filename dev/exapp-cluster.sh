@@ -5,6 +5,7 @@
 #   - a put with one bad checksum stores none of the request
 #   - /cluster on a synthetic pool of N (default 50,000): answers, and /heartbeat keeps answering meanwhile
 #   - /cluster with a face never put, or a wrong checksum in the pool: 409 naming it
+#   - forget removes exactly the named faces; entries unseen for 30 days are pruned inside a check, at most once a day
 # Also prints the matching self-test (dev/exapp_match_selftest.py). Leaves the cache empty. Nextcloud's data unchanged.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 : "${FW_CONTAINER:=recognaize-facewright-1}"; : "${N:=50000}"
@@ -36,7 +37,8 @@ php=$(docker exec -i "$NC_CONTAINER" php -r '$n=0; while (($l = fgets(STDIN)) !=
 expect "MariaDB CRC32 = PHP crc32 (rows differing)" 0 "$php"
 
 echo "== put and check, real rows"
-call /cluster/cache/clear empty.json >/dev/null 2>&1 || true
+push_files   # before the first call: the previous run deleted the folder exapp_call.php is called from
+expect "clear at the start" 200 "$(call /cluster/cache/clear empty.json | status)"
 python3 - "$W" <<'EOF'
 import base64, json, sys
 w = sys.argv[1]
@@ -60,6 +62,33 @@ echo "== a put with one bad checksum stores nothing"
 expect "put with a bad checksum" 400 "$(call /cluster/cache/put put-bad.json | status)"
 expect "cache unchanged" 20 "$(cache_count)"
 
+echo "== forget (S2)"
+python3 - "$W" <<'EOF2'
+import json, sys
+w = sys.argv[1]
+ids = [int(l.split()[0]) for l in open(f"{w}/real.tsv")]
+json.dump({"faces": ids[:5] + [ids[0], 777777777]}, open(f"{w}/forget.json", "w"))
+EOF2
+push_files
+expect "forget 5 cached ids, a repeat and an unknown one" '{"removed":5}' "$(call /cluster/cache/forget forget.json | tail -1)"
+expect "cache holds the other 15" 15 "$(cache_count)"
+expect "check names exactly the 5 forgotten" 5 "$(call /cluster/cache/check check-real.json | tail -1 | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["missing"]))')"
+
+echo "== prune at most once a day (S2)"
+fw_sql() { docker exec "$FW_CONTAINER" python3 -c "import sqlite3,sys; c=sqlite3.connect('/data/embeddings.sqlite'); r=c.execute(sys.argv[1]).fetchall(); c.commit(); print(r[0][0] if r else '')" "$1"; }
+fw_sql "INSERT INTO meta (key, value) VALUES ('last_prune', strftime('%s','now') - 2*86400) ON CONFLICT(key) DO UPDATE SET value = excluded.value" >/dev/null
+fw_sql "UPDATE embeddings SET seen_at = strftime('%s','now') - 31*86400 WHERE id IN (SELECT id FROM embeddings ORDER BY id LIMIT 3)" >/dev/null
+call /cluster/cache/check check-real.json >/dev/null
+expect "the 3 entries unseen for 31 days pruned" 12 "$(cache_count)"
+expect "last prune recorded as today" 1 "$(fw_sql "SELECT strftime('%s','now') - value < 60 FROM meta WHERE key = 'last_prune'")"
+fw_sql "UPDATE embeddings SET seen_at = strftime('%s','now') - 31*86400 WHERE id IN (SELECT id FROM embeddings ORDER BY id LIMIT 2)" >/dev/null
+call /cluster/cache/check check-real.json >/dev/null
+expect "not again on the same day" 12 "$(cache_count)"
+fw_sql "UPDATE embeddings SET seen_at = strftime('%s','now') - 29*86400" >/dev/null
+fw_sql "UPDATE meta SET value = value - 2*86400 WHERE key = 'last_prune'" >/dev/null
+call /cluster/cache/check check-real.json >/dev/null
+expect "entries seen 29 days ago kept" 12 "$(cache_count)"
+
 echo "== synthetic pool of $N"
 docker exec "$FW_CONTAINER" rm -rf /tmp/gen
 docker exec -i "$FW_CONTAINER" python3 - /tmp/gen "$N" < "$DEV_DIR/exapp_cluster_gen.py" | sed 's/^/    /'
@@ -73,7 +102,7 @@ for f in "$W"/put-[0-9]*.json; do
 done
 expect "puts of 2,000 faces (~$(( $(stat -c %s "$W/put-000.json") / 1024 )) KB each) failing" 0 "$put_fail"
 echo "    slowest put: ${put_max} ms"
-expect "cache holds the pool" $((N + 20)) "$(cache_count)"
+expect "cache holds the pool" $((N + 12)) "$(cache_count)"
 check_body=$(python3 -c "import json; b=json.load(open('$W/cluster.json')); print(json.dumps({'faces': [[p[1], p[2]] for p in b['pool']]}))")
 echo "$check_body" > "$W/check-pool.json"; push_files
 r=$(call /cluster/cache/check check-pool.json)

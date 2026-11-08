@@ -19,7 +19,7 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 `dev/exapp-client.sh` passes 12 of 12.
 
 **C5 is under way on live (2026-11-08):** deployed, user1 compared in full with 0 differences, user2 running; see C5's
-"Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 is done on dev.**
+"Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 and S2 are done on dev.**
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -443,6 +443,15 @@ command, both writers, the client's `COALESCE`, and `--verify`'s `embedding_crc_
 
 **Verify** (extend `dev/exapp-cluster.sh`): forget removes exactly the named ids; with the clock moved (set `seen_at`
 back in SQLite for some ids), the next `check` removes those and only those, and not twice in one day.
+
+**Done (2026-11-08), on dev only.** `forget` and the prune are in `ex_app/lib/clustering.py` (the prune's last run is
+kept in a one-row `meta` table; `FACEWRIGHT_CACHE_PRUNE_DAYS`, default 30). `dev/exapp-cluster.sh`, 28 of 28:
+forget removes exactly 5 named ids (a repeat and an unknown id ignored) and `check` then names those 5; with the last
+prune set two days back and 3 entries aged to 31 days, a `check` prunes those 3 and records today; aged entries are not
+pruned again the same day; entries seen 29 days ago stay. Planted fault (the daily gate removed): "not again on the same
+day" fails. Also found and fixed: **the suite's opening clear never ran.** It came before the first `push_files`, so
+`exapp_call.php` was missing, and `|| true` hid that; the check after it passed only because the previous run had
+left the cache empty. It now pushes first and checks the clear's status (verified starting from a non-empty cache).
 
 ### S3 Bridge: the ExApp engine
 

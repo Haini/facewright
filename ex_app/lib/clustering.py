@@ -27,6 +27,10 @@ DB_PATH = DATA_DIR / "embeddings.sqlite"
 # Below SQLite's default SQLITE_MAX_VARIABLE_NUMBER (32766 since 3.32).
 SQL_BATCH = 5000
 PUT_MAX = 2000
+# Entries not seen by a check for this long are pruned (at most once a day, inside a check). A pruned face costs one
+# upload the next time its user is clustered. The bridge also tells the cache to forget faces it deletes.
+PRUNE_AFTER_DAYS = int(os.environ.get("FACEWRIGHT_CACHE_PRUNE_DAYS", "30"))
+PRUNE_EVERY_SECONDS = 86400
 
 ROUTER = APIRouter()
 
@@ -39,6 +43,7 @@ def init_cache() -> None:
             "CREATE TABLE IF NOT EXISTS embeddings ("
             " id INTEGER PRIMARY KEY, crc INTEGER NOT NULL, vec BLOB NOT NULL, seen_at INTEGER NOT NULL)"
         )
+        conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
 
 
 def _connect() -> sqlite3.Connection:
@@ -69,8 +74,28 @@ def _touch(conn: sqlite3.Connection, face_ids: list[int]) -> None:
         conn.execute(f"UPDATE embeddings SET seen_at = ? WHERE id IN ({marks})", [now, *batch])
 
 
+def _prune_if_due(conn: sqlite3.Connection) -> int:
+    """Deletes entries not seen for PRUNE_AFTER_DAYS, if the last prune is a day old. Returns the number removed."""
+    now = int(time.time())
+    row = conn.execute("SELECT value FROM meta WHERE key = 'last_prune'").fetchone()
+    if row is not None and now - row[0] < PRUNE_EVERY_SECONDS:
+        return 0
+    removed = conn.execute("DELETE FROM embeddings WHERE seen_at < ?", (now - PRUNE_AFTER_DAYS * 86400,)).rowcount
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('last_prune', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (now,),
+    )
+    if removed:
+        print(f"embedding cache pruned: {removed} entries not seen for {PRUNE_AFTER_DAYS} days", flush=True)
+    return removed
+
+
 class CheckRequest(BaseModel):
     faces: list[tuple[int, int]]  # (face id, crc32 of the embedding blob)
+
+
+class ForgetRequest(BaseModel):
+    faces: list[int]
 
 
 class PutFace(BaseModel):
@@ -97,6 +122,7 @@ def cache_check(payload: CheckRequest):
     """The ids that are not cached, or cached with another checksum. Matching ones are marked as seen."""
     wanted = dict(payload.faces)
     with _connect() as conn:
+        _prune_if_due(conn)
         found = _cached(conn, list(wanted), with_vectors=False)
         current = [face_id for face_id, crc in wanted.items() if face_id in found and found[face_id][0] == crc]
         _touch(conn, current)
@@ -128,6 +154,17 @@ def cache_put(payload: PutRequest):
             rows,
         )
     return {"stored": len(rows)}
+
+
+@ROUTER.post("/cluster/cache/forget")
+def cache_forget(payload: ForgetRequest):
+    """Removes these faces' embeddings: the bridge calls it after deleting the faces. Ids not cached are ignored."""
+    removed = 0
+    with _connect() as conn:
+        for batch in _batches(list(set(payload.faces))):
+            marks = ",".join("?" * len(batch))
+            removed += conn.execute(f"DELETE FROM embeddings WHERE id IN ({marks})", batch).rowcount
+    return {"removed": removed}
 
 
 @ROUTER.post("/cluster/cache/clear")
