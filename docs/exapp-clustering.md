@@ -7,7 +7,10 @@ stored checksum) is sketched at the end and is not part of this plan.
 
 ## Where things stand
 
-Nothing is built yet. Next: step C1.
+**C1 is done (2026-11-08), on dev only.** The ExApp has the cache and `/cluster`; `dev/exapp-cluster.sh` passes 20 of
+20 (with a planted fault caught), `dev/writers-files.sh` still passes (detection unchanged). Measured on dev: 300 attempts
+against a 50,000-face pool take 2.4 s of compute (about 3 s round trip), against about 190 s in PHP; `/heartbeat`
+stayed under 40 ms meanwhile. Nothing is deployed to live. **Next: C2.**
 
 ## Why
 
@@ -48,14 +51,14 @@ MariaDB, the same I/O as today's load; a stored column is part of the later swit
 All bodies are JSON. All endpoints sit behind `AppAPIAuthMiddleware` like `/detect`.
 
 1. `POST /cluster/cache/check` `{"faces": [[faceId, crc], ...]}` → `{"missing": [faceId, ...]}`: ids not in the cache
-   or held with another checksum.
+   or held with another checksum. Marks the matching ones as seen.
 2. `POST /cluster/cache/put` `{"faces": [{"id": faceId, "crc": crc, "embedding": "<base64 of 2048 bytes>"}, ...]}` →
    `{"stored": n}`. 400 if a blob is not 2048 bytes or its `zlib.crc32` is not `crc`; nothing in that request is stored
    then. The bridge sends at most 1,000 faces per request (about 2.8 MB).
 3. `POST /cluster` →
    ```
    {"max_distance": 0.5, "min_faces": 3,
-    "pool":    [[rowId, faceId, label], ...],   // in the bridge's pool order, see "Same input"
+    "pool":    [[rowId, faceId, crc, label], ...],   // in the bridge's pool order, see "Same input"
     "attempt": [rowId, ...]}                    // ascending, the ids PHP will attempt in this chunk
    ```
    `rowId` is `facewright_user_faces.id`. `label` is `null` (pending or unclusterable, as `loadDetections()` already
@@ -65,8 +68,12 @@ All bodies are JSON. All endpoints sit behind `AppAPIAuthMiddleware` like `/dete
     "labels":    [[rowId, label], ...],         // every pool row whose label this call changed
     "compute_ms": n}
    ```
-   New people get labels `-1, -2, ...` in the order they were created. 409 `{"missing": [faceId, ...]}` if a face is not
-   in the cache with the checksum last put (the bridge then runs 1 and 2 and retries once).
+   New people get labels `-1, -2, ...` in the order they were created, starting at `-1` on every call. 409
+   `{"missing": [faceId, ...]}` if a face is not in the cache with the checksum the pool names (the bridge then runs 1
+   and 2 and retries once). The checksum is in the pool so that `/cluster` never matches a stale vector, whatever
+   happened since the last `check`. 400 for a label ≤ 0, a row id twice, or an attempted id not in the pool.
+4. `POST /cluster/cache/clear` `{}` → `{"removed": n}`: empties the cache and `VACUUM`s the file (a `DELETE` alone left
+   the blobs on disk: 196 MB before, 12 KB after).
 
 ### The algorithm, exactly as PHP does it
 
@@ -112,12 +119,12 @@ Each difference is classified by recomputing, in PHP, the distances for the atte
 ### C1 ExApp: cache and `/cluster`
 
 Files: `ex_app/lib/main.py` (or a new module beside it, e.g. `ex_app/lib/clustering.py`, imported by `main.py`),
-`Makefile`, `deploy.env.example`, `Dockerfile` if a dependency is added (it should not be: NumPy is already there,
+`Makefile`, `docker-compose.yml`, `Dockerfile` if a dependency is added (it should not be: NumPy is already there,
 SQLite is in the standard library).
 
 - **Cache**: SQLite at `$FACEWRIGHT_DATA_DIR/embeddings.sqlite` (default `/data`), table
   `embeddings(id INTEGER PRIMARY KEY, crc INTEGER NOT NULL, vec BLOB NOT NULL, seen_at INTEGER NOT NULL)`.
-  `put` upserts; `check` and `/cluster` update `seen_at`. Open a connection per request (endpoints run in a thread pool).
+  `put` upserts; `check` updates `seen_at` for the ids that match. Open a connection per request (endpoints run in a thread pool).
 - **Volume**: `make run` mounts a named volume `facewright-data:/data` and sets `FACEWRIGHT_DATA_DIR=/data`. Without it,
   every container restart empties the cache, which is correct but slow.
 - **Threads**: the endpoints are plain `def`, not `async def`, so FastAPI runs them in its thread pool and `/heartbeat`
@@ -130,14 +137,27 @@ SQLite is in the standard library).
 - Log one line per `/cluster` call: pool size, attempts, `compute_ms`. Never log embeddings.
 
 **Verify:**
-- `make build run register verify` on dev; `/heartbeat` answers while a `/cluster` call with a 50k synthetic pool runs
-  (time a heartbeat during the call).
+- On dev the ExApp is the compose service (`docker compose up -d --build facewright`). **Never `make build` or `make run`
+  on this host for dev work: they rebuild and restart the live container.** `/heartbeat` answers while a `/cluster`
+  call with a 50k synthetic pool runs (time a heartbeat during the call).
 - A put with a wrong checksum stores nothing (400; the count is unchanged).
 - On dev, for 20 real rows: `SELECT id, CRC32(embedding) FROM oc_facewright_faces` equals `zlib.crc32` of the same blobs
   (fetch them hex-encoded) and PHP's `crc32()`. **If they differ, stop**: the design depends on it.
-- **Body size through HaRP**: send a `check` with 60,000 pairs and a `put` with 1,000 faces through AppAPI (a throwaway
-  `php -r` calling `exAppRequest`, as in `dev/clustering-truth.sh`). Record the largest that passed. If HaRP limits
-  bodies below what C3 needs, record the limit and size the batches to it.
+- **Body size through HaRP**: dev has no HaRP (compose talks to the ExApp directly), so this is answered by HaRP's
+  configuration on live, read-only, and proven in C5.
+
+**Done (2026-11-08).** `dev/exapp-cluster.sh` (with `exapp_call.php`, `exapp_cluster_gen.py`, `exapp_match_selftest.py`)
+checks all of the above through AppAPI, plus `match_chunk()` against a line-by-line Python port of the PHP loop
+(five synthetic pools of two chunks each, and a deterministic tie between two people that pool order must decide; the
+planted fault "pool order reversed" is caught there and only there, because random data has no such ties). Planted
+fault for the put: storing each face as it is validated; the suite fails on "cache unchanged". Results:
+- The CRCs agree on 20 real rows (MariaDB, PHP, Python).
+- Puts of 2,000 faces (5.3 MB each) take at most about 150 ms; a `check` of 50,000 pairs is 1.2 MB, a 50,000-face
+  `/cluster` body 2 MB.
+- `/cluster` on 50,000 faces with 300 attempts: 2.4 s compute, 0.5 s loading from SQLite, 3 s round trip. The float64
+  matrix is 50,000 × 512 × 8 bytes, about 205 MB, while a call runs (not measured as container memory).
+- HaRP on live (read-only, v0.4.8): no `http-buffer-request` and no body limit in its HAProxy configuration, `timeout
+  server 1800s`; bodies stream to the ExApp. The batch sizes stay as above until C5 proves them through HaRP.
 
 ### C2 Bridge: PHP clustering usable in memory, no behaviour change
 
@@ -195,8 +215,10 @@ Thresholds default to the user's effective settings (the same source `ClusterSca
 4. Run the ExApp: `cluster()` with the same pool in `$detections`' key order, labels as they stand. Time it (round trip
    and the ExApp's `compute_ms`).
 5. Compare and classify ("What counts as a difference"). Keep the first `--show` differences with their distances.
-6. Carry PHP's labels forward as the state for the next chunk; temporary labels from earlier chunks stay as they are
-   (they are just non-null labels to both engines).
+6. Carry PHP's labels forward as the state for the next chunk, with every temporary label replaced by a positive
+   stand-in id above every real person id (e.g. `max(id) + 1,000,000 + n`), consistently for both engines. In
+   production those people would exist by then; and `/cluster` refuses labels ≤ 0, and numbers its new people from `-1`
+   again on every call, so carrying `-1` forward would collide.
 
 Output: per chunk one line (attempted, new, joined, skipped per engine, differences by class, PHP ms, ExApp ms, payload
 bytes); at the end the totals, PHP's peak memory (`memory_get_peak_usage(true)`), and the shown differences. Exit 0 if

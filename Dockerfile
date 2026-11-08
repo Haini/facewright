@@ -57,6 +57,12 @@ ADD /ex_app/li[b] /ex_app/lib
 COPY --chmod=775 healthcheck.sh /
 COPY --chmod=775 start.sh /
 
+# NumPy's BLAS would otherwise start one thread per core for the /cluster matrix products. ONNX Runtime doing the same
+# correlated with native crashes and host reboots on this hardware (see the top of ex_app/lib/main.py).
+ENV OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+# The embedding cache (ex_app/lib/clustering.py). Mount a volume here, or every restart empties it.
+ENV FACEWRIGHT_DATA_DIR=/data
+
 WORKDIR /ex_app/lib
 ENTRYPOINT ["/start.sh", "python3", "main.py"]
 HEALTHCHECK --interval=2s --timeout=2s --retries=300 CMD /healthcheck.sh

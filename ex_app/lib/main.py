@@ -16,6 +16,9 @@ from nc_py_api import AsyncNextcloudApp, NextcloudApp, NextcloudException
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, anc_app, run_app, set_handlers
 from pydantic import BaseModel
 
+from clustering import ROUTER as CLUSTERING_ROUTER
+from clustering import init_cache
+
 # insightface's FaceAnalysis/model_zoo.get_model() only ever forwards `providers`/
 # `provider_options` kwargs to onnxruntime - there's no supported way to pass a SessionOptions
 # through, so ONNX Runtime falls back to its default of one intra-op thread per detected CPU
@@ -50,6 +53,7 @@ class DetectRequest(BaseModel):
 async def lifespan(app: FastAPI):
     global FACE_ANALYSIS
     set_handlers(app, enabled_handler)
+    init_cache()
     # Loading the model is expensive - do it once here, never per-request.
     FACE_ANALYSIS = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
     FACE_ANALYSIS.prepare(ctx_id=-1, det_size=(640, 640))
@@ -59,6 +63,7 @@ async def lifespan(app: FastAPI):
 
 APP = FastAPI(lifespan=lifespan)
 APP.add_middleware(AppAPIAuthMiddleware)
+APP.include_router(CLUSTERING_ROUTER)
 
 
 @APP.post("/detect")

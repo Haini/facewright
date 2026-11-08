@@ -75,6 +75,11 @@ our people service, and an upstream Memories change as the end state. It replace
 - `nc_py_api`'s `files.download` raises the base `NextcloudException` with `.status_code`, never
   the `NotFound` subclass — check the status code explicitly.
 - Only `/heartbeat` is exempt from signature checks; a bare `curl` at the container 401s.
+- `ex_app/lib/clustering.py`: an embedding cache (SQLite under `FACEWRIGHT_DATA_DIR`, a volume) and `/cluster`, the
+  NumPy twin of the PHP matching. Comparison stage: nothing in the bridge calls it yet (`docs/exapp-clustering.md`).
+  BLAS threads are capped at 2 in the `Dockerfile`, like ONNX Runtime's.
+- `make build` / `make run` rebuild and restart the deployed container; on dev, use `docker compose up -d --build
+  facewright` instead.
 
 ### `facewright_bridge` (Nextcloud app)
 

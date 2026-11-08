@@ -90,6 +90,7 @@ run: check-nc-url check-harp-certs
 		-e HP_FRP_ADDRESS=appapi-harp \
 		-e HP_FRP_PORT=8782 \
 		-v $(HARP_CERTS_DIR):/certs/frp:ro \
+		-v facewright-data:/data \
 		facewright:latest
 
 .PHONY: register

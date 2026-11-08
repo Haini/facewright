@@ -41,6 +41,7 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `rollback-drill.sh` | rollback tier R2: hydrate, swap the bridge files back to the Stage D commit, pass the Stage D checks, roll forward again (swaps tracked files; refuses unless clean) | yes (restore) |
 | `memories-api.py capture\|compare\|stable` | what Memories itself shows (people, photos per person, unassigned) as the oracle for table changes; proven able to fail | no |
 | `memories-ui/flows.py` | Memories' own UI: rename, remove face, move face, merge, remove person; requests and database | yes (restore) |
+| `exapp-cluster.sh` (+ `exapp_call.php`, `exapp_cluster_gen.py`, `exapp_match_selftest.py`) | the ExApp's embedding cache and `/cluster` through AppAPI: checksums agree, all-or-nothing puts, 409 on a missing or stale face, a 50k pool with `/heartbeat` timed meanwhile, `match_chunk()` against a port of the PHP loop (docs/exapp-clustering.md, C1) | ExApp cache only; leaves it empty |
 | `live-capture.sh OUT users` | read-only capture for another instance (`NC_CONTAINER=…`); pause processing first | no |
 | `make-shared-fixture.sh`, `check-fixture.sh` | shared-file fixture and the preconditions the suites need | fixture only |
 | `setup-venv.sh`, `make-portrait.py` | Playwright/Chromium and a real-face test photo (`dev/.work/venv`) | no |

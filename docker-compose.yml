@@ -78,6 +78,9 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: "9030"
       NEXTCLOUD_URL: http://nextcloud
+    volumes:
+      # The embedding cache (ex_app/lib/clustering.py); disposable, but a restart should not empty it.
+      - facewright_data:/data
     networks:
       - facewright-dev
 
@@ -87,3 +90,4 @@ networks:
 volumes:
   nextcloud_db:
   nextcloud_html:
+  facewright_data:
