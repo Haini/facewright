@@ -518,6 +518,8 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    - **Before it ships:** the ExApp must run the pass off the event loop (see item 4, `/heartbeat` already stalls during
      inference); `dev/clustering-truth.sh` must give the same assignments from both implementations; and the PHP path
      should stay as a fallback for when the ExApp is down.
+   - **Plan:** `docs/exapp-clustering.md`, comparison first (`occ facewright:cluster-compare`, PHP stays the only
+     engine that writes); the switch-over is sketched there, not planned.
 
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of
