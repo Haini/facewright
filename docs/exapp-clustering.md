@@ -18,8 +18,8 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 **C3 is done (2026-11-08), on dev only.** `ExAppClusteringClient` syncs the cache and calls `/cluster`;
 `dev/exapp-client.sh` passes 12 of 12.
 
-**C5 is under way on live (2026-11-08):** deployed, user1 compared in full with 0 differences, user2 running; see C5's
-"Progress". **The switch-over is planned as Part 2 (S1 to S7); S1, S2 and S3 are done on dev** (S3: the `exapp` engine,
+**C5 is done on live (2026-11-08):** both libraries compared in full with `--reopen`, 0 differences of any class (user2:
+31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1, S2 and S3 are done on dev** (S3: the `exapp` engine,
 off unless `clustering_engine=exapp`).
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
@@ -337,7 +337,13 @@ How the design was filled in:
   trip. The cold sync sent 59 MB in 25 requests through HaRP in 2 s.
 - **user1, full `--reopen`:** 13,713 attempts in 46 chunks, 0 differences of any class; both engines 1 new, 1 join,
   13,709 skip. PHP 2,285 s (38 min), peak 350 MB; the ExApp 48 s round trip, 41 s compute, 29 MB sent. 47× faster.
-- user2, full `--reopen`: running (started 18:29 UTC).
+- **user2, full `--reopen`:** a pool of 54,924, 31,126 attempts in 104 chunks, 0 differences of any class; both engines
+  14 new, 100 join, 30,954 skip. PHP 12,943 s (3 h 36 min), peak 786 MB; the ExApp 282 s round trip, 239 s compute
+  (about 7.7 ms per attempt), 167 MB sent over the 104 requests (each carries the whole pool). 46× faster. The cold sync
+  checked 54,924 faces and uploaded 34,376 (the rest were shared with user1) in 38 requests, 93 MB, 3.5 s.
+- **The cache on live** after both users: 56,473 embeddings, 222 MB on disk (about 4 KB per face against a 2 KB blob).
+- **C5 is complete: both libraries agree exactly.** The S3 timeout (600 s) holds: one request for user2's full reopen is
+  about 240 s of compute.
 
 ## Deviations from what was discussed
 
