@@ -17,6 +17,9 @@ run() { local name=$1; shift
   local t0=$SECONDS
   "$@" > "$WORK_DIR/last-$name.log" 2>&1; local rc=$?
   names+=("$name"); results+=("$rc"); printf '%-28s %-9s %4d s   (log: %s)\n' "$name" "$([ $rc -eq 0 ] && echo PASS || echo "FAIL ($rc)")" "$((SECONDS-t0))" "$WORK_DIR/last-$name.log"; }
+# The suites that write clustering results, again under clustering_engine=exapp (docs/exapp-clustering.md, S3).
+with_exapp() { occ config:app:set facewright_bridge clustering_engine --value=exapp >/dev/null; "$@"; local rc=$?
+  occ config:app:delete facewright_bridge clustering_engine >/dev/null; return $rc; }
 echo "(a snapshot restore precedes every suite)"
 run reads-stable           "$DEV_DIR/reads.sh" stable
 run reads-direct-stable    "$DEV_DIR/reads-direct.sh" stable
@@ -34,7 +37,21 @@ run project-concurrency    "$DEV_DIR/project-concurrency.sh"
 run project-recognize-trap "$DEV_DIR/project-recognize-trap.sh"
 run project-recognize-copies "$DEV_DIR/project-recognize-copies.sh"
 run rollback-drill         "$DEV_DIR/rollback-drill.sh"
-run clustering-truth       "$DEV_DIR/clustering-truth.sh"      # downloads the dataset on first use
+# PEOPLE=50 everywhere: the suite keeps one detection cache and deletes the others, and cluster-compare needs this one.
+run clustering-truth       env PEOPLE=50 "$DEV_DIR/clustering-truth.sh"      # downloads the dataset on first use
+# Clustering in the ExApp (docs/exapp-clustering.md): the ExApp's cache and /cluster, the client, the comparison, the
+# stored checksum, the engine and the cache hygiene; then the writers again with the exapp engine.
+run exapp-cluster          "$DEV_DIR/exapp-cluster.sh"
+run exapp-client           "$DEV_DIR/exapp-client.sh"
+run cluster-inmemory       "$DEV_DIR/cluster-inmemory.sh" --prepare
+run cluster-compare        "$DEV_DIR/cluster-compare.sh"
+run embedding-crc          "$DEV_DIR/embedding-crc.sh"
+run cluster-engine         "$DEV_DIR/cluster-engine.sh"
+run cache-hygiene          "$DEV_DIR/cache-hygiene.sh"
+run writers-cluster-exapp  with_exapp "$DEV_DIR/writers-cluster.sh"
+run chain-dangling-exapp   with_exapp "$DEV_DIR/chain-loop-test.sh" dangling
+run chain-assignable-exapp with_exapp "$DEV_DIR/chain-loop-test.sh" assignable
+run clustering-truth-exapp with_exapp env PEOPLE=50 "$DEV_DIR/clustering-truth.sh"
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
 fail=0; for r in "${results[@]}"; do [ "$r" -ne 0 ] && fail=$((fail+1)); done

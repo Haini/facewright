@@ -71,7 +71,7 @@ restore_e; trap - EXIT
 check "the Stage E files are back" 1 "$(ls "$BR/lib/Service/ProjectionService.php" 2>/dev/null | wc -l)"
 occ app:disable facewright_bridge >/dev/null 2>&1; occ app:enable facewright_bridge >/dev/null 2>&1
 check "   after an app:disable / app:enable cycle the hourly job is registered exactly once" 1 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%ProjectionMaintenanceJob'")"
-check "   and the app is enabled at the same version" "0.10.0" "$(occ config:app:get facewright_bridge installed_version)"
+check "   and the app is enabled at the same version" "$INSTALLED" "$(occ config:app:get facewright_bridge installed_version)"
 for id in $(sql "SELECT id FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'"); do echo y | docker exec -i -u www-data "$NC_CONTAINER" php occ background-job:delete "$id" >/dev/null 2>&1; done
 check "   and after deleting Recognize's MaintenanceJob (re-added by the cycle, same chain) none remain" 0 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'")"
 check "   the tree matches the commit" "" "$(git -C "$REPO_DIR" status --porcelain facewright_bridge)"

@@ -29,10 +29,14 @@
 >    cutover, so not before 2026-11-20, and needs the user's explicit go-ahead.
 > 4. **Stage G** (the Memories pull request) posts publicly: only with the user's go-ahead.
 >
+> **A separate track: clustering in the ExApp** (`docs/exapp-clustering.md`, its own "Where things stand"). Compared on
+> live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene are built on dev (S1 to S5).
+> Open: S6 (deploy to live, still on `php`) and S7 (switch), each with the user's go-ahead.
+>
 > **Verification tooling** is under `dev/` (`dev/README.md`; `dev/run-all.sh --ui` on the compose stack, which takes a
-> lock because the dev DB is shared). The last full run passed 17 of 17 suites (2026-11-07). The ground-truth
-> clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from the Georgia Tech set, which is fetched, never
-> committed) passed 15 of 15.
+> lock because the dev DB is shared). The last full run passed 28 of 28 suites (2026-11-09, without `--ui`, including
+> the ExApp clustering suites). The ground-truth clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from
+> the Georgia Tech set, which is fetched, never committed) passed 15 of 15.
 >
 > **Things that bit and will again:** Apache's opcache revalidates every 60 s (`reload_web` after editing source in
 > tests); `docker exec -i` is needed for piped stdin; `occ upgrade` applies every pending store update (check

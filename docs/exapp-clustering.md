@@ -19,8 +19,9 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 `dev/exapp-client.sh` passes 12 of 12.
 
 **C5 is done on live (2026-11-08):** both libraries compared in full with `--reopen`, 0 differences of any class (user2:
-31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S4 are done on dev** (S3: the `exapp` engine,
-off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache).
+31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S5 are done on dev** (S3: the `exapp` engine,
+off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache; S5: CLAUDE.md). **Next: S6, on live,
+with the user's go-ahead** (and their decision on pending store updates before `occ upgrade`).
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -566,6 +567,16 @@ step's request is counted.
 counts only with the checksum the bridge sends; `embedding_crc` NULL means unknown, never "no checksum"); in "Job
 semantics", `ClusterScanJob`'s `engine` argument and the fallback; the new command; close open item 7 (keep the numbers
 from C5 as the reason). `dev/README.md`: the new suite.
+
+**Done (2026-11-09).** `CLAUDE.md`: the ExApp component (the cache, the checksum rule, the hygiene), both engines
+under `ClusteringService`, `ClusterScanJob`'s `engine` and the per-chain fallback in "Job semantics", the
+`embedding_crc` invariant (NULL is unknown, never "no checksum"), open item 7 closed with C5's numbers (S6 and S7 named
+as what is left), and a pointer from "Current work". `docs/own-tables.md` points at this plan. `dev/run-all.sh` now
+runs the seven suites of this plan plus the clustering writers again under `exapp`: **28 of 28 passed** (443 s, without
+`--ui`).
+Getting there found two problems in the suites, not in the code: `rollback-drill.sh` expected version 0.10.0 by
+literal (now the installed version it reads), and `run-all.sh` ran `clustering-truth.sh` with its default 20 people,
+which deletes the 50-people detection cache that `cluster-compare.sh` needs (now `PEOPLE=50` in both runs).
 
 ### S6 Live: deploy, still on `php` (the user's go-ahead)
 

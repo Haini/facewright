@@ -16,8 +16,8 @@ the architecture, the invariants that are easy to break silently, and the operat
 were learned the hard way. It deliberately does not narrate how each of those was discovered.
 
 **Current work:** start at "Where things stand", the top of `docs/own-tables.md`. It says what runs on live and what is
-open next. The live instance's names, paths and exact commands are deliberately not in this repo: they are in the operator's
-private notes.
+open next, and points at the separate clustering track (`docs/exapp-clustering.md`). The live instance's names, paths
+and exact commands are deliberately not in this repo: they are in the operator's private notes.
 
 ## Architecture
 
@@ -75,10 +75,18 @@ our people service, and an upstream Memories change as the end state. It replace
 - `nc_py_api`'s `files.download` raises the base `NextcloudException` with `.status_code`, never
   the `NotFound` subclass — check the status code explicitly.
 - Only `/heartbeat` is exempt from signature checks; a bare `curl` at the container 401s.
-- `ex_app/lib/clustering.py`: an embedding cache (SQLite under `FACEWRIGHT_DATA_DIR`, a volume) and `/cluster`, the
-  NumPy twin of the PHP matching. Used by `occ facewright:cluster-compare` and, when the app config
-  `clustering_engine` is `exapp` (default `php`), by `ClusterScanJob`, which falls back to PHP for the rest of a chain
-  if the ExApp fails (`docs/exapp-clustering.md`, Part 2).
+- `ex_app/lib/clustering.py`: `/cluster`, the NumPy twin of the PHP matching, and the embedding cache it reads
+  (`docs/exapp-clustering.md`). The ExApp only computes; the data stays in Nextcloud's database, and the bridge writes
+  the answer through `persistAssignments()` like a PHP pass.
+  - **The cache** is SQLite under `FACEWRIGHT_DATA_DIR` (a volume), keyed by `facewright_faces.id`. It is disposable,
+    never a source of truth: losing it costs one slow first pass. **An entry counts only with the checksum the bridge
+    sends**: a face id's embedding can change (a forced re-detection updates in place), so `check` names the ids it
+    lacks *or holds with another checksum*, the bridge uploads those (`put` is all-or-nothing), and `/cluster` answers
+    409 naming any face it cannot match rather than using a stale one.
+  - Hygiene: the bridge sends `forget` after deleting faces (best-effort, one request per folder delete), `occ
+    facewright:reset` sends `clear`, and the ExApp prunes entries no `check` has seen for 30 days (at most once a day,
+    `FACEWRIGHT_CACHE_PRUNE_DAYS`).
+  - Endpoints are plain `def` (FastAPI's thread pool), so a pass of minutes does not stall `/heartbeat`.
   BLAS threads are capped at 2 in the `Dockerfile`, like ONNX Runtime's.
 - `make build` / `make run` rebuild and restart the deployed container; on dev, use `docker compose up -d --build
   facewright` instead.
@@ -103,7 +111,10 @@ Services (`lib/Service/`):
 - `UserSettingsService` — per-user config via `OCP\Config\IUserConfig`.
 - `AccessService` / `AccessSyncService` / `PruneService` / `MountFileService` — who can see a file
   and keeping rows in step with that (see "Multi-user fan-out").
-- `ClusteringService`, `ClusterTriggerService` — clustering.
+- `ClusteringService`, `ClusterTriggerService` — clustering. Two engines for the matching, same writer: `php`
+  (`clusterUserChunk()`, the pool with vectors in PHP, 300 attempts per job) and `exapp` (`clusterUserExApp()`, the
+  pool as ids and checksums, every pending face in one `/cluster` request through `ExAppClusteringClient`). App config
+  `facewright_bridge` / `clustering_engine`; anything but `exapp` is `php`, and so is unset.
 - `PeopleService` — the one seam every people-level operation (list with paging/search/covers,
   create, rename, merge, delete, detach, ignore, move, delete-empty) goes through, scoped to one
   user per call; the bulk forms (`moveFaces`, `detachFaces`, `ignoreFaces`, `mergeMany`,
@@ -125,8 +136,8 @@ Background jobs (`lib/BackgroundJob/`):
 - `DetectQueuedJob {fileId}` — the one detection pipeline, for every trigger path.
 - `BatchScanJob {chunkSize, userId?}` — self-requeuing: enqueues one chunk of candidates per cron
   tick, stops re-adding itself once a pass enqueues nothing.
-- `ClusterScanJob {userId, afterId, passProgress, ...}` — self-requeuing per-user clustering in
-  chunks (see invariants for the stop condition).
+- `ClusterScanJob {userId, afterId, passProgress, engine, ...}` — self-requeuing per-user clustering: in chunks under
+  `php`, one job per full pass under `exapp` (see invariants for the stop condition and the fallback).
 - `AccessSyncJob` / `FileAccessSyncJob` — reconcile rows after access changes.
 - `DetectionMaintenanceJob`, `ClusteringMaintenanceJob` — hourly `TimedJob`s that restart the
   respective chain if new work exists. These are the safety net when an event is missed.
@@ -202,8 +213,10 @@ copy Memories reads; `--hydrate` is the rollback).
   never `face_vector`.
 - `facewright_faces.embedding_crc` is the CRC32 of `embedding`, which the ExApp's embedding cache is validated by.
   **Every writer of `embedding` writes it in the same statement**: `setValues()` updates in place, and an update that
-  kept the old value makes it wrong, not unknown. NULL means unknown and is allowed (readers compute `CRC32(embedding)`
-  then); `own-tables --verify` fails on a stored value that differs.
+  kept the old value makes it wrong, not unknown. NULL means unknown, never "no checksum": readers compute
+  `CRC32(embedding)` then (`ExAppClusteringClient::checksums()`), and `occ facewright:embedding-checksums` fills it.
+  `own-tables --verify` fails on a stored value that differs. A wrong stored value is the one way to make the ExApp
+  match a stale embedding; MariaDB's `CRC32()`, PHP's `crc32()` and Python's `zlib.crc32` agree (tested).
 - `cluster_id` in Recognize's table and in the API is the sentinel form of `FaceState`, the state of a row of
   `facewright_user_faces` (`FaceState::fromSentinel()` / `toSentinel()`): `NULL` pending, `> 0` assigned, `-1` unassigned,
   `-2` unclusterable, `-3` ignored. `js/people.js` reads the sentinels. Only `> 0` and `-1` are written to Recognize's
@@ -311,7 +324,17 @@ Stage E; it has no reader and goes in Stage F.
   adding a format later picks them up naturally.
 - `ClusterScanJob`'s stop condition is "a full pass made no assignment", not "queue empty" —
   faces below `min-faces` never cluster, so the queue is never empty. Only at that point are
-  survivors marked unclusterable, by explicit id list.
+  survivors marked unclusterable, by explicit id list. Under `exapp` one job is one full pass; the rule is the same.
+- **`ClusterScanJob`'s `engine` is fixed when the chain starts** (`ClusterTriggerService` copies the config into the
+  argument; a missing one means `php`), so changing the config never switches a running chain. **The fallback is per
+  chain, not per call:** if an `exapp` run fails (`ExAppClusteringException`, or a `LogicException` from
+  `persistAssignments()` refusing what the path made of the answer, before anything is written), it logs a warning and
+  re-queues the chain as `php` from `afterId: 0`. The next chain (hourly) tries the ExApp again. Mixing engines inside
+  one chain would mix a whole-pass engine with a cursor-based one. `occ facewright:cluster --engine=exapp` has no
+  fallback: it exits 1 having written nothing.
+- People an `exapp` pass creates are allocated only after the ExApp answers, in the order it made them, and deleted
+  again if anything fails before the write. The answer is checked against the pool first: only rows that had no label,
+  each given an existing person of the pool or a label a "new" decision introduced.
 - `ClusteringService::persistAssignments()` writes only rows still pending or unclusterable, scoped to the user
   and only into clusters that still exist, and deletes clusters the pass created that ended up
   empty. A pass loads the pool, matches for seconds to minutes, then writes: anything a human did to
@@ -507,32 +530,16 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    per face, plus a per-face read-back query for `facewright_faces.id` — `IDBConnection::
    setValues()` has no id-returning mode), `AccessSyncService::copyToUsers()` and
    `ClusteringService::persistAssignments()`.
-7. **Clustering's matching runs in PHP; proposed: a `POST /cluster` endpoint in the ExApp.** Every
-   `ClusterScanJob` chunk reloads the user's whole pool (pending + unclusterable + ≤ 20 per person) as PHP float
-   arrays, about 12 KB per face against 2 KB stored, then compares each of up to 300 pending faces with all of it. At a
-   55k-face pool (measured 2026-11-07, synthetic vectors, PHP 8.5): 668 MB held, 0.63 s per face, about 3 min per chunk.
-   Reopening 31k unclusterable faces (a threshold change, `cluster --reset`) is then about 100 chunks, 5 to 6 hours.
-   Nothing breaks at today's sizes (the CLI limit is 4 GB). Packing pool vectors as strings cuts memory 4.3× for 17%
-   more time; the proposal below fixes the time as well.
-   - **The data stays where it is.** Moving our tables into the ExApp was rejected: every join with `oc_mounts` /
-     `oc_filecache` becomes an HTTP round trip, "write ours, commit, push" loses its transaction, Recognize's copy must
-     still be written inside Nextcloud's database, and the second store needs its own backup.
-   - **The ExApp only computes.** The bridge sends the pool's ids with each face's state, plus the pending ids and the
-     thresholds. The ExApp runs the same algorithm as `assignClusters()` (the same order, unclusterable faces matchable
-     but never attempted) as NumPy matrix products and returns proposed assignments, with temporary labels for new
-     people. The bridge allocates those people and writes everything through `persistAssignments()`, whose guards
-     (a human's change wins) stay the gate. The whole pass fits in one request, so chunking can go.
-   - **Embedding cache in the ExApp,** in its persistent storage, keyed by `facewright_faces.id`. It is disposable,
-     never a source of truth: losing it costs one slow first pass. **A face id's embedding is not immutable**:
-     `DetectionService::upsertFace()` updates in place on a forced re-detection. So each entry is validated by a checksum
-     of the embedding blob, stored in a new `facewright_faces` column at write time (a migration plus a resumable
-     backfill command). The bridge sends `(id, checksum)` pairs; the ExApp answers with the ids it lacks or holds
-     stale, the bridge sends those embeddings in batches, then the pass runs.
-   - **Before it ships:** the ExApp must run the pass off the event loop (see item 4, `/heartbeat` already stalls during
-     inference); `dev/clustering-truth.sh` must give the same assignments from both implementations; and the PHP path
-     should stay as a fallback for when the ExApp is down.
-   - **Plan:** `docs/exapp-clustering.md`, comparison first (`occ facewright:cluster-compare`, PHP stays the only
-     engine that writes); the switch-over is sketched there, not planned.
+7. **Closed (design and dev, 2026-11-09): clustering's matching in the ExApp.** It ran in PHP only: every chunk reloaded
+   the user's whole pool as PHP float arrays (about 12 KB per face against 2 KB stored) and compared up to 300 pending
+   faces with all of it. Now there is the `exapp` engine (see "Components" and "Job semantics"), with PHP kept as the
+   fallback by design. Why, measured on live with `occ facewright:cluster-compare --reopen` (2026-11-08), which found 0
+   differences of any class on both libraries: the 55k-face pool (31,126 attempts) took PHP 3 h 36 min at a peak of
+   786 MB, and the ExApp 4 min 42 s round trip (about 7.7 ms per attempt); the 22k pool (13,713 attempts) 38 min
+   against 48 s. Moving our tables into the ExApp was rejected: every join with `oc_mounts` / `oc_filecache` would
+   become an HTTP round trip, "write ours, commit, push" would lose its transaction, and the second store would need
+   its own backup. **Open:** deploying to live and switching it on (steps S6 and S7 of `docs/exapp-clustering.md`, each
+   with the user's go-ahead), and that document's later questions (the 20-per-person cap, threshold tuning).
 
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of
