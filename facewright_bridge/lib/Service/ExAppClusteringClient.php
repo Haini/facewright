@@ -33,6 +33,11 @@ class ExAppClusteringClient {
 	// about 55,000) took 2.26 s of compute per 300 attempts, about 7.5 ms each; a full reopen of user2 (about 31,000
 	// attempts) is then about 235 s, and twice that is under this. HaRP's own timeout is 1,800 s.
 	private const CLUSTER_TIMEOUT = 600;
+	// forget runs inside a file delete request: it must not hold one up for long when the ExApp hangs. A failure costs
+	// nothing lasting (the ExApp prunes entries no pass has seen for 30 days).
+	private const FORGET_TIMEOUT = 10;
+	// Ids per /cluster/cache/forget (a few bytes each).
+	private const FORGET_BATCH = 50000;
 
 	/** @var array{requests: int, bytesSent: int, ms: int} totals since the last takeStats() */
 	private array $stats = ['requests' => 0, 'bytesSent' => 0, 'ms' => 0];
@@ -126,6 +131,26 @@ class ExAppClusteringClient {
 		return $answer;
 	}
 
+	/**
+	 * Tells the ExApp to drop these faces' embeddings: called after the faces were deleted and committed (S4). Not tied
+	 * to a user. Throws like every call here; callers that delete treat it as best-effort.
+	 *
+	 * @param list<int> $faceIds
+	 * @return int entries the ExApp removed
+	 */
+	public function forget(array $faceIds): int {
+		$removed = 0;
+		foreach (array_chunk(array_values(array_unique($faceIds)), self::FORGET_BATCH) as $batch) {
+			$removed += (int)($this->post(null, '/cluster/cache/forget', ['faces' => $batch], false, self::FORGET_TIMEOUT)['removed'] ?? 0);
+		}
+		return $removed;
+	}
+
+	/** Empties the ExApp's whole cache (occ facewright:reset). */
+	public function clear(): void {
+		$this->post(null, '/cluster/cache/clear', []);
+	}
+
 	/** @return array{requests: int, bytesSent: int, ms: int} request totals since the last call, then resets them */
 	public function takeStats(): array {
 		$stats = $this->stats;
@@ -168,9 +193,10 @@ class ExAppClusteringClient {
 	 * @param bool $allowMissing return a 409's body (it names the faces the ExApp lacks) instead of throwing
 	 * @return array<string, mixed>
 	 */
-	private function post(string $userId, string $route, array $body, bool $allowMissing = false, int $timeout = self::TIMEOUT): array {
+	private function post(?string $userId, string $route, array $body, bool $allowMissing = false, int $timeout = self::TIMEOUT): array {
 		$started = microtime(true);
-		// The user is the one being clustered; the ExApp does not use it. AppAPI sends $body as JSON.
+		// The user is the one being clustered (null for forget and clear); the ExApp does not use it. AppAPI sends $body
+		// as JSON.
 		$response = $this->appAPI->exAppRequest(self::APP_ID, $route, $userId, 'POST', $body, ['timeout' => $timeout]);
 		$this->stats['requests']++;
 		$this->stats['bytesSent'] += strlen(json_encode($body));

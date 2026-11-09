@@ -6,6 +6,7 @@ namespace OCA\FacewrightBridge\Service;
 
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
+use Psr\Log\LoggerInterface;
 
 /**
  * Wipes facewright's own contributions to Recognize's tables (512-dim InsightFace detections,
@@ -31,10 +32,17 @@ class ResetService {
 	public function __construct(
 		private IDBConnection $db,
 		private FaceStore $faceStore,
+		private ExAppClusteringClient $exApp,
+		private LoggerInterface $logger,
 	) {
 	}
 
-	/** @return array{deletedDetections: int, deletedClusters: int, deletedFaces: int, clearedProcessed: int} */
+	/**
+	 * `cacheCleared` is false if the ExApp's embedding cache could not be emptied (logged; it is disposable, and the
+	 * ExApp prunes what no pass asks for within 30 days).
+	 *
+	 * @return array{deletedDetections: int, deletedClusters: int, deletedFaces: int, clearedProcessed: int, cacheCleared: bool}
+	 */
 	public function resetFacewrightData(): array {
 		[$detectionIds, $clusterIds, $faceIds] = $this->findOwnRows();
 
@@ -63,7 +71,17 @@ class ResetService {
 			$qb->executeStatement();
 		}
 
+		// Every face of ours is gone, so the whole cache is (docs/exapp-clustering.md, S4).
+		$cacheCleared = true;
+		try {
+			$this->exApp->clear();
+		} catch (ExAppClusteringException $e) {
+			$cacheCleared = false;
+			$this->logger->warning('facewright: reset could not empty the ExApp\'s embedding cache: ' . $e->getMessage(), ['app' => 'facewright_bridge']);
+		}
+
 		return [
+			'cacheCleared' => $cacheCleared,
 			'deletedDetections' => $deletedDetections,
 			'deletedClusters' => $deletedClusters,
 			'deletedFaces' => $deletedFaces,

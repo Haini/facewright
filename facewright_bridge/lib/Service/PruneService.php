@@ -51,6 +51,11 @@ class PruneService {
 	 * rather than needing the caller to know which kind of node it has.
 	 */
 	public function pruneTree(int $fileId): int {
+		// One forget to the ExApp's cache for the whole tree, after the walk.
+		return $this->accessSync->batchForgets(fn (): int => $this->walkTree($fileId));
+	}
+
+	private function walkTree(int $fileId): int {
 		$deleted = $this->accessSync->forgetFile($fileId);
 
 		$location = $this->mountFiles->locate($fileId);

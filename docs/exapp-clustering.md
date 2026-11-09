@@ -19,8 +19,8 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 `dev/exapp-client.sh` passes 12 of 12.
 
 **C5 is done on live (2026-11-08):** both libraries compared in full with `--reopen`, 0 differences of any class (user2:
-31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1, S2 and S3 are done on dev** (S3: the `exapp` engine,
-off unless `clustering_engine=exapp`).
+31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S4 are done on dev** (S3: the `exapp` engine,
+off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache).
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -539,6 +539,26 @@ the ExApp's log as served by `/cluster`); unchanged: `exapp-client.sh` 12 of 12,
 
 **Verify:** `dev/writers-files.sh` (a delete) and `dev/own-traps.sh` pass; after a file delete the ExApp's cache no longer
 holds its face ids (read the SQLite count by id); with the ExApp stopped, a delete still succeeds and logs one warning.
+
+**Done (2026-11-09), on dev only.** Specifics:
+- `ExAppClusteringClient::forget()` (timeout 10 s: it runs inside a file delete request) and `clear()`, both sent
+  without a user.
+- The one deleter of `facewright_faces` rows outside a reset is `AccessSyncService::pruneExceptUsers()` when nobody has
+  access left (`forgetFile()`). It reads the file's face ids, deletes, then forgets them. **Batched per delete:**
+  `PruneService` walks a deleted folder file by file inside the delete request, so it runs the walk in
+  `AccessSyncService::batchForgets()`, which sends one forget at the end (and every 10,000 ids). Outside it (the
+  access reconcile) a file's faces are forgotten at once. Failures are logged as a warning and never reach the caller.
+- `ResetService` empties the whole cache at the end (`clear()`), so no per-face forget there; `occ facewright:reset`
+  prints whether that worked.
+
+Verified with the new `dev/cache-hygiene.sh`, 20 of 20, on copies of the real portrait detected for admin: a file delete
+removes its face from the cache and leaves the others; a folder of two is forgotten in **one** request (counted in the
+ExApp's log); with the ExApp stopped a delete still answers 204, removes the face from our table and logs one warning;
+`forgetFile()` called outside a walk forgets at once; `occ facewright:reset` empties the cache. Planted: the batched
+forget removed, and the deleted face stays cached. Also `writers-files.sh` 21 of 21, `own-traps.sh` 11 of 11. Two
+things the suite had to learn: the delete runs in the web server, whose opcache keeps old code for up to 60 s (so it
+calls `reload_web` around the planted fault), and `docker logs --since` needs a nanosecond timestamp, or the previous
+step's request is counted.
 
 ### S5 Docs
 

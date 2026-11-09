@@ -7,6 +7,7 @@ namespace OCA\FacewrightBridge\Service;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 
 /**
  * Keeps detection rows in step with who can actually see a file, after the fact - the other half of
@@ -21,6 +22,12 @@ use OCP\IUserManager;
  *    really have no remaining path to the file.
  */
 class AccessSyncService {
+	// Inside batchForgets(), forgotten faces are sent once this many have gathered, and at the end.
+	private const FORGET_FLUSH = 10000;
+
+	/** @var list<int>|null face ids deleted inside batchForgets() and not yet sent; null outside it */
+	private ?array $forgetBuffer = null;
+
 	public function __construct(
 		private IDBConnection $db,
 		private AccessService $accessService,
@@ -29,7 +36,51 @@ class AccessSyncService {
 		private IUserManager $userManager,
 		private FaceStore $faceStore,
 		private ProjectionService $projection,
+		private ExAppClusteringClient $exApp,
+		private LoggerInterface $logger,
 	) {
+	}
+
+	/**
+	 * Runs $work and tells the ExApp's embedding cache to forget the faces it deleted in one call at the end, not one
+	 * per file: PruneService walks a deleted folder file by file, inside the delete request.
+	 *
+	 * @template T
+	 * @param callable(): T $work
+	 * @return T
+	 */
+	public function batchForgets(callable $work): mixed {
+		if ($this->forgetBuffer !== null) {
+			return $work();
+		}
+		$this->forgetBuffer = [];
+		try {
+			return $work();
+		} finally {
+			$faceIds = $this->forgetBuffer;
+			$this->forgetBuffer = null;
+			$this->forgetFaces($faceIds);
+		}
+	}
+
+	/**
+	 * Best-effort, after the delete committed (docs/exapp-clustering.md, S4): a failure is logged and never reaches the
+	 * caller. What it leaves behind is inert (a cache entry no pass asks for) and the ExApp prunes it after 30 days.
+	 *
+	 * @param list<int> $faceIds
+	 */
+	private function forgetFaces(array $faceIds): void {
+		if ($faceIds === []) {
+			return;
+		}
+		try {
+			$this->exApp->forget($faceIds);
+		} catch (ExAppClusteringException $e) {
+			$this->logger->warning(
+				'facewright: could not tell the ExApp to forget ' . count($faceIds) . ' deleted face(s); its cache prunes them later: ' . $e->getMessage(),
+				['app' => 'facewright_bridge'],
+			);
+		}
 	}
 
 	/**
@@ -412,10 +463,28 @@ class AccessSyncService {
 		// Nobody has any path to the file left (the forgetFile() case) - the physical faces
 		// themselves are orphaned too, not just this user's detection rows.
 		if ($keep === []) {
+			// Read first, for the ExApp's cache. A face added to the file between this read and the delete is deleted
+			// without being forgotten, which only leaves an inert cache entry until the ExApp's prune.
+			$idsQb = $this->db->getQueryBuilder();
+			$idsQb->select('id')
+				->from('facewright_faces')
+				->where($idsQb->expr()->eq('file_id', $idsQb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)));
+			$faceIds = array_map('intval', $idsQb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN));
+
 			$facesQb = $this->db->getQueryBuilder();
 			$facesQb->delete('facewright_faces')
 				->where($facesQb->expr()->eq('file_id', $facesQb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)));
 			$facesQb->executeStatement();
+
+			if ($this->forgetBuffer === null) {
+				$this->forgetFaces($faceIds);
+			} else {
+				array_push($this->forgetBuffer, ...$faceIds);
+				if (count($this->forgetBuffer) >= self::FORGET_FLUSH) {
+					$this->forgetFaces($this->forgetBuffer);
+					$this->forgetBuffer = [];
+				}
+			}
 		}
 
 		// facewright_processed is entirely ours, so no dimension question arises there.

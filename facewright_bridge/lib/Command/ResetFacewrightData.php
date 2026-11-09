@@ -66,6 +66,9 @@ class ResetFacewrightData extends Command {
 			$result['deletedFaces'],
 			$result['clearedProcessed'],
 		));
+		$output->writeln($result['cacheCleared']
+			? "Emptied the ExApp's embedding cache."
+			: "<comment>Could not empty the ExApp's embedding cache (logged); it is disposable and prunes itself.</comment>");
 
 		return 0;
 	}
