@@ -20,8 +20,9 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 
 **C5 is done on live (2026-11-08):** both libraries compared in full with `--reopen`, 0 differences of any class (user2:
 31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S5 are done on dev** (S3: the `exapp` engine,
-off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache; S5: CLAUDE.md). **Next: S6, on live,
-with the user's go-ahead** (and their decision on pending store updates before `occ upgrade`).
+off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache; S5: CLAUDE.md). **S6 is done on live
+(2026-11-09):** ExApp and bridge 0.11.0 deployed, checksums filled, still on `php`; see S6's "Done". **Next: S7, the
+switch, with the user's go-ahead.**
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -589,6 +590,22 @@ which deletes the 50-people detection cache that `cluster-compare.sh` needs (now
 3. Deploy the bridge, `occ upgrade`, delete Recognize's `MaintenanceJob` if it came back.
 4. `occ facewright:embedding-checksums --dry-run`, then for real; `own-tables --verify`.
 5. `cluster-compare --reopen --chunks=3` for user1 again: 0 differences (the checksums now come from the column).
+
+**Done (2026-11-09), with the user's go-ahead:**
+- Dump, the live bridge, the previous Memories and counts in the operator's backups (`facewright-pre-s6`); the previous
+  ExApp image tagged `facewright:pre-s6`.
+- Store updates pending: Memories 11.0.2 → 11.1.1 and three apps that are disabled. The user allowed `occ upgrade`,
+  which installed Memories only (disabled apps are skipped). Memories' coupling is unchanged: the DAV path shapes in its
+  frontend are identical, and on the PHP side only `Covers` changed (an equivalent cover join for integer ids).
+- ExApp: the secret in `deploy.env` matched `oc_ex_apps` and the running container; `make build run` with processing
+  paused, one signed `/detect` for a missing file answered 404. The first one, seconds after the start, timed out
+  (`exAppRequest`'s default 3 s while the model loaded); wait for the socket before judging.
+- Bridge: no file on live was missing from the repo; copied, `occ upgrade` (migration ran, 0.11.0). Recognize was not
+  upgraded, so no `MaintenanceJob` came back.
+- `embedding-checksums`: 131,879 filled in 3.4 s, 0 missing. `own-tables --verify`: `embedding_crc_wrong` 0, all
+  checks ok; projection A = C = D = 0, B = 44,815 (44,839 at C5).
+- user1 `--reopen --chunks=3`: 0 differences, 900 skip on both; PHP 48 s per chunk, ExApp 1.2 s. The cache sync
+  checked 22,097 and **uploaded 0**: the stored checksums match the cache C5 filled from computed ones.
 
 ### S7 Live: switch (the user's go-ahead)
 
