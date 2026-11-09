@@ -538,8 +538,8 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    786 MB, and the ExApp 4 min 42 s round trip (about 7.7 ms per attempt); the 22k pool (13,713 attempts) 38 min
    against 48 s. Moving our tables into the ExApp was rejected: every join with `oc_mounts` / `oc_filecache` would
    become an HTTP round trip, "write ours, commit, push" would lose its transaction, and the second store would need
-   its own backup. Live runs bridge 0.11.0 with the checksums filled, still on `php` (S6, 2026-11-09). **Open:**
-   switching it on (step S7 of `docs/exapp-clustering.md`, with the user's go-ahead), and that document's later questions (the 20-per-person cap, threshold tuning).
+   its own backup. Live runs bridge 0.11.0 on `exapp` since 2026-11-09 (S6, S7). **Open:** observing the
+   first real chain and a week without fallbacks (S7 of `docs/exapp-clustering.md`), and that document's later questions (the 20-per-person cap, threshold tuning).
 
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of

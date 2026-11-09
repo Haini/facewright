@@ -22,7 +22,8 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S5 are done on dev** (S3: the `exapp` engine,
 off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache; S5: CLAUDE.md). **S6 is done on live
 (2026-11-09):** ExApp and bridge 0.11.0 deployed, checksums filled, still on `php`; see S6's "Done". **Next: S7, the
-switch, with the user's go-ahead.**
+switch, with the user's go-ahead.** **S7: switched on live 2026-11-09**; the first real chain and the week without
+fallbacks are still to be observed (see S7's "Done").
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -616,6 +617,13 @@ which deletes the 50-people detection cache that `cluster-compare.sh` needs (now
    finishes on the engine it started with. Nothing written differs in kind, so there is nothing to undo; the column and
    the cache can stay.
 4. After a week without fallbacks in the log, record it here; leaving `php` as the fallback is permanent by design.
+
+**Done (2026-11-09), with the user's go-ahead:** `clustering_engine=exapp` set. `cluster-scan` started no chain, because
+no user had pending faces (the last detection was the day before), so the first `exapp` chain comes with the next new
+photos, through `ClusteringMaintenanceJob` (hourly). Live logs at Warning, so the per-pass info line does not appear
+there: watch the ExApp's `POST /cluster` lines and the bridge's "continuing this chain in PHP" warnings (0 at the
+switch). Projection at the switch: A = C = D = 0, B = 44,815. **Open:** the first real chain, and the week without
+fallbacks (no earlier than 2026-11-16).
 
 ## Open questions for later (not in S1 to S7)
 
