@@ -622,8 +622,13 @@ which deletes the 50-people detection cache that `cluster-compare.sh` needs (now
 no user had pending faces (the last detection was the day before), so the first `exapp` chain comes with the next new
 photos, through `ClusteringMaintenanceJob` (hourly). Live logs at Warning, so the per-pass info line does not appear
 there: watch the ExApp's `POST /cluster` lines and the bridge's "continuing this chain in PHP" warnings (0 at the
-switch). Projection at the switch: A = C = D = 0, B = 44,815. **Open:** the first real chain, and the week without
-fallbacks (no earlier than 2026-11-16).
+switch). Projection at the switch: A = C = D = 0, B = 44,815.
+
+**First real chains (2026-11-09):** 22 new photos left 32 pending faces per user; `ClusteringMaintenanceJob` started
+an `exapp` chain for each. Two passes per user (the second wrote nothing and ended the chain): 4 `/cluster` requests,
+all 200, one `put` for the new embeddings, 0 fallbacks. user1: 26 assigned, 6 unclusterable; user2: 29 assigned, 3
+unclusterable; one new person. Afterwards projection A = C = D = 0, `own-tables --verify` all ok, no bridge log
+entries. **Open:** the week without fallbacks (no earlier than 2026-11-16).
 
 ## Open questions for later (not in S1 to S7)
 
