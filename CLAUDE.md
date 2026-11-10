@@ -61,6 +61,9 @@ causes, and the stages already done are in `docs/independence.md` and
 `docs/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
 data in tables we own, a temporary one-way push to Recognize's tables with Memories' edits routed through
 our people service, and an upstream Memories change as the end state. It replaces the `recognize`-contract shim.
+The preferred upstream shape (Stage G, pulsejet/memories#1812, undecided) is a stand-in: a Memories setting names the
+app whose Recognize-format tables and WebDAV tree its Recognize backend uses, so the copy and the tree become ours and
+Recognize can go.
 
 ## Components
 

@@ -27,7 +27,12 @@
 >    writer: fix the writer. Rollback tiers are under "Rollback".
 > 3. **Stage F** (delete the hidden rows, blank vectors, drop transitional code) waits at least two weeks after the
 >    cutover, so not before 2026-11-20, and needs the user's explicit go-ahead.
-> 4. **Stage G** (the Memories pull request) posts publicly: only with the user's go-ahead.
+> 4. **Stage G** (the Memories change). The discussion is open: pulsejet/memories#1812. The maintainer answered on
+>    2026-11-09 that query logic must stay in Memories and third-party support is not his priority (a first-party
+>    detector, `lens/`, is in progress). The user replied with two options; **the preferred one is the stand-in**: Memories'
+>    Recognize backend reads a Recognize-format copy in tables of ours and sends its writes to a WebDAV tree of ours,
+>    selected by an admin setting, so Recognize need not be installed. Waiting for his choice; nothing is built. Anything
+>    posted publicly needs the user's go-ahead. See "Stage G".
 >
 > **A separate track: clustering in the ExApp** (`docs/exapp-clustering.md`, its own "Where things stand"). Compared on
 > live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene are built on dev (S1 to S5).
@@ -56,8 +61,9 @@ the plan. Where the parts differ, Part 2 wins. Where this plan differs from
 ## Goal
 
 - All face and people data lives in `facewright_*` tables, controlled by us alone.
-- **End state:** Memories gains a way to read people from our tables and write through our API, via
-  an upstream pull request. No push is needed then.
+- **End state** (revised 2026-11-09, see Stage G): Memories can be pointed at a Recognize-compatible app instead of
+  Recognize. It reads a Recognize-format copy in tables we own and writes through a WebDAV tree we serve, so Recognize
+  can be uninstalled and nothing of ours touches its tables. The copy stays, but it is ours alone.
 - **Until then:** a temporary one-way push keeps `oc_recognize_face_detections` and
   `oc_recognize_face_clusters` up to date for Memories. Memories' and Photos' people edits are
   answered by this app (a DAV router in front of Recognize's tree), so they reach the same code as the
@@ -72,6 +78,9 @@ the plan. Where the parts differ, Part 2 wins. Where this plan differs from
   calls. The cost is a deeper coupling than a refusal has: the path shapes, the `Destination` header and
   the status codes. Anything it does not recognise is still refused, never passed to Recognize.
 - **The Stage 2 shim is not planned.** Real Recognize stays passive.
+- **2026-11-09: the stand-in is the preferred upstream shape** (Stage G), over a generic people-backend API. The
+  maintainer wants query logic kept in Memories, and a third backend in Memories' frontend means touching about 35
+  files that branch on `recognize` / `facerecognition`. The stand-in reuses all of it.
 
 Conventions: `rfd` = `oc_recognize_face_detections`, `rfc` = `oc_recognize_face_clusters`. Paths are
 relative to `facewright_bridge/` unless they start with `docs/` or `/mnt/`.
@@ -91,7 +100,7 @@ As it stood before this work (`1ef8cc6`); the last column is where each table en
 | `rfc` | people, titles | Recognize | a copy since Stage E |
 | `memories_covers` | a detection id per cluster | Memories | read only by Memories; our ids must stay stable |
 | `filecache`, mounts | enumeration and access | core | read-only, stays |
-| appconfig `recognize/faces.enabled` | Memories' gate | Recognize | stays until the PR ships |
+| appconfig `recognize/faces.enabled` | Memories' gate | Recognize | stays until Memories reads ours (Stage G) |
 
 `js/people.js` reads the sentinels from `face.cluster_id`, so the API must keep emitting them.
 
@@ -223,7 +232,7 @@ re-projecting, instead of losing curation or forcing a rescan.
 - Recognize can still queue `ClusterFacesJob` directly from its `FsActionService` handlers. Reconcile
   removes the rows afterwards but cannot stop the job running.
 - Photos' People view uses the same tree, so its edits go through the router too. Not tested.
-- Upstream's reaction to the PR is unknown.
+- Upstream has not chosen a shape yet (pulsejet/memories#1812), and third-party support is not its priority.
 
 ---
 
@@ -875,49 +884,117 @@ uses) and `PeopleService::moveLegacyMembers()`.
 
 ---
 
-## Stage G: Memories pull request
+## Stage G: Memories as a Recognize stand-in
 
-**Do not start this without the user.** It is a proposal to another project, and it should start with a
-conversation. Writing code or posting anything publicly needs the user's explicit go-ahead.
+**Do not start a step without the user.** The discussion is on pulsejet/memories#1812, and anything posted there
+(comments, a pull request) needs the user's explicit go-ahead. Implement only the shape the maintainer agrees to.
 
-### G.1 Prepare the proposal
+### G.0 Where the discussion stands (2026-11-09)
 
-A new `docs/memories-people-backend.md` in this repo:
+- The user opened #1812 asking for third-party people backends. The maintainer's reply, in full: "Hey, the plan is to
+  build a first party face detection solution in Memories, with a WIP tree in `lens/` already, so third party support is
+  not highest priority. However, the backend is already pretty generalized, so it should not be too hard to add support
+  for another backend. The query logic should stay here in Memories rather than being in the backend provider."
+- The user answered with two options: **A, the stand-in** (below, preferred) and **B, a third backend**: a
+  `FacewrightBackend` in Memories reading our tables, plus a frontend people-backend abstraction with writes to our
+  OCS API (G.6).
+- **`lens/` gives us nothing to build on**, checked on Memories master `f77dbed`: a separate Python daemon (mainly
+  natural-language search) that detects faces (YuNet, 128-dim SFace) into Qdrant. Memories tells it what to index and
+  serves it files (`lib/Service/Lens.php`, `LensController`); there is no clusters backend, no People page wiring, no
+  write API.
 
-- **Today's blockers, verified on 10.1.0 and, for `BACKENDS`, on 11.0.2; recheck the rest on the current release:** `lib/ClustersBackend/Manager.php` holds a constant `BACKENDS`
-  map, with no way to add one at runtime. `OtherController` and `SystemConfig` expose `recognize_enabled` and
-  `facerecognition_enabled`. The frontend has separate routes and hardcoded write calls per backend.
-- **Precedent:** `FaceRecognitionBackend` already has a plain HTTP write API rather than DAV, so a
-  generic contract is a generalization of something Memories already does.
-- **Proposed shape:** a server-side registration point for third-party people backends; a capabilities
-  response telling the frontend which backend is active; write operations (rename, delete, create, move, remove)
-  dispatched through a backend-declared API.
-- **Our side:** the OCS API at `/ocs/v2.php/apps/facewright_bridge/api/v1/` as the reference.
-- **What we are asking:** whether maintainers would accept this, and in which shape, before any code is written.
+### G.1 Why the stand-in
 
-### G.2 Discussion, then PR
+Measured on Memories master `f77dbed`:
 
-The user opens the discussion. Implement only the shape agreed there. Target versions and timing are unknown.
+- **Server side.** `RecognizeBackend.php` reads only `rfc.id, user_id, title` and `rfd.id, user_id, cluster_id, file_id,
+  x, y, width, height`, with `-1` as the unassigned view; covers are in `memories_covers` by detection id. That is the
+  format the projection already writes. The tables are named in about six places.
+- **The frontend is not generalized.** About 180 references to `recognize` / `facerecognition` in about 35 files under
+  `src/` (routes, nav, Explore, config flags, every face modal, the selection manager). A third backend means touching
+  most of them; the stand-in touches two: the WebDAV root `/recognize/{user}/...` is spelled in `src/services/dav/face.ts`
+  and `src/components/modal/FaceMergeModal.vue`, and nowhere else.
+- It meets the maintainer's condition: the query logic stays in Memories and does not change.
+- To Memories' frontend we are the Recognize backend, so nothing else in its UI changes, and the default behaviour
+  (Recognize) is untouched.
 
-### G.3 Our backend
+### G.2 The proposed Memories change
 
-Once a Memories release has the hook: a new class in `facewright_bridge` reading `facewright_clusters`,
-`facewright_user_faces` and `facewright_faces`, mirroring `RecognizeBackend` (`transformDayQuery`,
-`getClustersInternal`, `getPhotos`, covers with `facewright_user_faces` as the object table). Ids stay valid
-because of "One id space", so `memories_covers` keeps working once `clustertype` is migrated.
+To be refined with the maintainer; the smallest shape is one admin setting, e.g. `memories.recognize.provider` (an
+app id, default `recognize`), and a naming convention derived from it:
+
+1. **`SystemConfig::recognizeIsInstalled()` / `recognizeIsEnabled()`** test the provider app. The `>= 3.8.0` version
+   check and Recognize's `faces.enabled` appconfig apply only when the provider is `recognize`.
+2. **`RecognizeBackend.php`** reads `{provider}_face_detections` and `{provider}_face_clusters` instead of the two
+   hardcoded names. Nextcloud's identifier limit is 63 characters including the prefix (`MigrationService`, checked on
+   dev), so `facewright_bridge_face_detections` fits.
+3. **The WebDAV root** comes from the server config (`/{provider}/...`), in `face.ts` and `FaceMergeModal.vue`.
+4. **`X-Recognize-Api-Key`** (new on master: `RecognizeController::apiKey()` gets a key from Recognize's
+   `ApiKeyManager`, the DAV client sends it): skipped when the provider is not `recognize`. It already tolerates a
+   missing key; confirm that no error is logged per page load.
+5. Admin UI: a field or a select in `src/components/admin/sections/Apps.vue`, if the maintainer wants one; an `occ
+   config:system:set` value may be enough.
+
+Before writing it, recheck every point above on the then-current Memories release, not master `f77dbed`.
+
+### G.3 Our side: a Recognize-format copy we own
+
+Can be built and tested on dev before Memories ships anything; it is inert until Memories points at it.
+
+1. **Two tables**, `facewright_bridge_face_detections` and `facewright_bridge_face_clusters` (or whatever the agreed
+   convention names), with exactly the columns of G.1: no `face_vector`, no `threshold`. Same ids as ours ("One id
+   space"), so `memories_covers` keeps pointing at the right rows once Memories reads them.
+2. **`ProjectionService` gains a target.** The same sparse projection (assigned and unassigned only, `-1` for
+   unassigned), written into our copy. During the switch it writes both targets; afterwards only ours. Writing into a
+   table only we write removes most of what reconcile exists for: no Recognize handlers, no `.noimage` mass delete, no
+   `MaintenanceJob` arming, no squatters, no 128-dim legacy rows, no vector-length bands. Reconcile keeps A (missing or
+   different) and D (people); C reduces to rows with no row of ours.
+3. **Our own WebDAV tree**, a Sabre root collection registered in `info.xml` (`<sabre><collections>`, as Recognize
+   does), named by the convention (`/remote.php/dav/{provider}/`). It must answer, scoped to the logged-in user:
+   - the five writes `RecognizeWriteRouterPlugin` already turns into `PeopleService` calls (MKCOL, MOVE rename, DELETE
+     person, DELETE face, MOVE face from `faces/{p}` or `unassigned-faces`), with the same status codes;
+   - **PROPFIND depth 1 on `faces/{p}`**, which the router never had to serve (Recognize did): `FaceMergeModal` lists the
+     person's folder and moves each child by its `basename`, which must be `{faceId}-{filename}` so the MOVE parses.
+   The router's parsing and `PeopleService` calls move into the collection's nodes; refuse everything else.
+4. **Tests on dev**, in `dev/`: Memories' exact requests (captured from its source, not hand-written) against our tree;
+   the copy against our tables (`project --dry-run` on the new target); a Memories build carrying the G.2 change, People
+   page and every edit, with Recognize disabled.
+
+### G.4 Switching live
+
+Only once a Memories release has the change, each step with the user's go-ahead and a fresh dump:
+
+1. Deploy the bridge with both targets and the WebDAV tree; `project --dry-run` on our copy is clean.
+2. Set Memories' provider to `facewright_bridge`. Check the People page, a rename, a move, a merge, a remove.
+3. Stop projecting into Recognize's tables. Rollback: set the provider back to `recognize` and project into its tables
+   again (`project` repairs whatever drifted meanwhile).
+
+### G.5 If upstream refuses, or takes long
+
+The temporary design stays (Recognize installed and passive, the projection, the DAV router), and it is good enough to
+live with. G.3 is then not built.
+
+### G.6 If the maintainer prefers option B
+
+The earlier plan, kept for that case: a `FacewrightBackend` in Memories' `lib/ClustersBackend/` reading
+`facewright_clusters`, `facewright_user_faces` and `facewright_faces` (our schema becomes the contract, including the
+rule that a query by `cluster_id` names `user_id`), modelled on `FaceRecognitionBackend` (about 400 lines), whose writes
+already go to an HTTP API rather than DAV. Ours would be the OCS API at `/ocs/v2.php/apps/facewright_bridge/api/v1/`.
+The frontend needs a people-backend abstraction across the files G.1 counts, which Lens would also need eventually, and
+Recognize and Face Recognition must be retested with it. Ask the maintainer whether he would take it in parts.
 
 ---
 
-## Stage H: Retire the bridge
+## Stage H: Retire the coupling to Recognize
 
-Only after G.3 runs on production.
+Only after G.4 runs on production.
 
-1. Stop calling `ProjectionService`; remove it, the job, the command and
-   `RecognizeWriteRouterPlugin`.
-2. Decide with the user whether Recognize can be uninstalled. Photos' People view stops working if it is.
-   If yes: `.noimage` markers become irrelevant, CLAUDE.md's coexistence section goes, and `rfd`/`rfc` can be
-   dropped only after a dump.
-3. If upstream refused: skip this stage. The projection stays, and this doc's "temporary" wording changes.
+1. Remove the projection into Recognize's tables, `RecognizeWriteRouterPlugin`, `project --hydrate` and the
+   reconcile classes that only Recognize's handlers made necessary. Our copy (G.3) and its reconcile stay.
+2. Decide with the user whether Recognize can be uninstalled. Photos' People view stops working if it is: Photos reads
+   Recognize's tables and tree directly and is not part of this change. If yes: `.noimage` markers become irrelevant,
+   CLAUDE.md's coexistence section goes, and `rfd`/`rfc` can be dropped only after a dump.
+3. If upstream refused: skip this stage (G.5).
 
 ---
 
