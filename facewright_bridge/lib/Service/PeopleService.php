@@ -407,12 +407,17 @@ class PeopleService {
 		}
 
 		if ($dryRun) {
-			$qb = $this->db->getQueryBuilder();
-			$qb->select($qb->func()->count('*'))
-				->from('facewright_user_faces')
-				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($mergeIds, IQueryBuilder::PARAM_INT_ARRAY)));
-			return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => (int)$qb->executeQuery()->fetchOne()];
+			$moved = 0;
+			// At most 1000 list entries per statement: the query builder refuses more.
+			foreach (array_chunk($mergeIds, 1000) as $batch) {
+				$qb = $this->db->getQueryBuilder();
+				$qb->select($qb->func()->count('*'))
+					->from('facewright_user_faces')
+					->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+					->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
+				$moved += (int)$qb->executeQuery()->fetchOne();
+			}
+			return ['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => $moved];
 		}
 
 		return $this->writeAndPush(function () use ($userId, $keepId, $mergeIds): array {
@@ -628,24 +633,29 @@ class PeopleService {
 	private function forgetClusters(string $userId, array $clusterIds): void {
 		$this->forgetCentroids($userId, $clusterIds);
 
-		$qb = $this->db->getQueryBuilder();
-		$ids = $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY);
-		$qb->delete('facewright_merge_dismissals')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->orX(
-				$qb->expr()->in('cluster_a', $ids),
-				$qb->expr()->in('cluster_b', $ids),
-			));
-		$qb->executeStatement();
+		// At most 1000 list entries per statement: the query builder refuses more.
+		foreach (array_chunk($clusterIds, 1000) as $batch) {
+			$qb = $this->db->getQueryBuilder();
+			$ids = $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY);
+			$qb->delete('facewright_merge_dismissals')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->orX(
+					$qb->expr()->in('cluster_a', $ids),
+					$qb->expr()->in('cluster_b', $ids),
+				));
+			$qb->executeStatement();
+		}
 	}
 
 	/** @param list<int> $clusterIds */
 	private function forgetCentroids(string $userId, array $clusterIds): void {
-		$qb = $this->db->getQueryBuilder();
-		$qb->delete('facewright_cluster_centroids')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($clusterIds, IQueryBuilder::PARAM_INT_ARRAY)));
-		$qb->executeStatement();
+		foreach (array_chunk($clusterIds, 1000) as $batch) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->delete('facewright_cluster_centroids')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)));
+			$qb->executeStatement();
+		}
 	}
 
 	/**

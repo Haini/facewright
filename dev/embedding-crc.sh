@@ -18,7 +18,14 @@ echo "== backfill"
 need "faces without a checksum" "$(missing)" 100
 total=$(one "SELECT COUNT(*) FROM oc_facewright_faces")
 check "dry run counts them, changes nothing" "$total face(s) without a stored checksum./$total" "$(occ facewright:embedding-checksums --dry-run | head -1)/$(missing)"
-occ facewright:embedding-checksums --chunk=1000 | tail -1 | sed 's/^/    /'
+# The default chunk (5000), above the 1000 entries a query builder list may hold. Nextcloud does not refuse such a query
+# on MariaDB, it logs "More than 1000 expressions in a list" as an error (live showed it from this command), so the
+# check is on the log. The 1000-row loop in fillInPhp() is not reachable on MariaDB; the range in fillInDatabase() is.
+need "faces, more than one IN list holds" "$total" 1001
+listerrs() { docker exec "$NC_CONTAINER" sh -c 'grep -c "More than 1000 expressions" /var/www/html/data/nextcloud.log 2>/dev/null || true' | tail -1; }
+before=$(listerrs)
+occ facewright:embedding-checksums | tail -1 | sed 's/^/    /'
+check "no over-long list logged by the backfill" 0 "$(( $(listerrs) - before ))"
 check "none missing" 0 "$(missing)"
 check "none wrong" 0 "$(wrong)"
 check "a second run has nothing to do" "0 face(s) without a stored checksum." "$(occ facewright:embedding-checksums | head -1)"

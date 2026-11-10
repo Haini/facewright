@@ -63,10 +63,13 @@ class EmbeddingChecksums extends Command {
 
 	/** @param list<int> $ids */
 	private function fillInDatabase(array $ids): int {
+		// A range, not an IN list: Nextcloud's query builder refuses more than 1000 list entries, and $ids is
+		// exactly the NULL rows from the cursor up to its maximum, so the range plus IS NULL selects the same rows.
 		$qb = $this->db->getQueryBuilder();
 		$qb->update('facewright_faces')
 			->set('embedding_crc', $qb->createFunction('CRC32(' . $qb->getColumnName('embedding') . ')'))
-			->where($qb->expr()->in('id', $qb->createNamedParameter($ids, IQueryBuilder::PARAM_INT_ARRAY)))
+			->where($qb->expr()->gte('id', $qb->createNamedParameter(min($ids), IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->lte('id', $qb->createNamedParameter(max($ids), IQueryBuilder::PARAM_INT)))
 			// A row a writer filled meanwhile keeps its own value.
 			->andWhere($qb->expr()->isNull('embedding_crc'));
 		return $qb->executeStatement();
@@ -74,23 +77,26 @@ class EmbeddingChecksums extends Command {
 
 	/** @param list<int> $ids */
 	private function fillInPhp(array $ids): int {
-		$qb = $this->db->getQueryBuilder();
-		$qb->select('id', 'embedding')
-			->from('facewright_faces')
-			->where($qb->expr()->in('id', $qb->createNamedParameter($ids, IQueryBuilder::PARAM_INT_ARRAY)))
-			->andWhere($qb->expr()->isNull('embedding_crc'));
-		$result = $qb->executeQuery();
 		$done = 0;
-		while ($row = $result->fetch()) {
-			$blob = is_resource($row['embedding']) ? stream_get_contents($row['embedding']) : (string)$row['embedding'];
-			$update = $this->db->getQueryBuilder();
-			$update->update('facewright_faces')
-				->set('embedding_crc', $update->createNamedParameter(crc32($blob), IQueryBuilder::PARAM_INT))
-				->where($update->expr()->eq('id', $update->createNamedParameter((int)$row['id'], IQueryBuilder::PARAM_INT)))
-				->andWhere($update->expr()->isNull('embedding_crc'));
-			$done += $update->executeStatement();
+		// Batches of 1000: the most an IN list may hold.
+		foreach (array_chunk($ids, 1000) as $batch) {
+			$qb = $this->db->getQueryBuilder();
+			$qb->select('id', 'embedding')
+				->from('facewright_faces')
+				->where($qb->expr()->in('id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
+				->andWhere($qb->expr()->isNull('embedding_crc'));
+			$result = $qb->executeQuery();
+			while ($row = $result->fetch()) {
+				$blob = is_resource($row['embedding']) ? stream_get_contents($row['embedding']) : (string)$row['embedding'];
+				$update = $this->db->getQueryBuilder();
+				$update->update('facewright_faces')
+					->set('embedding_crc', $update->createNamedParameter(crc32($blob), IQueryBuilder::PARAM_INT))
+					->where($update->expr()->eq('id', $update->createNamedParameter((int)$row['id'], IQueryBuilder::PARAM_INT)))
+					->andWhere($update->expr()->isNull('embedding_crc'));
+				$done += $update->executeStatement();
+			}
+			$result->closeCursor();
 		}
-		$result->closeCursor();
 		return $done;
 	}
 
