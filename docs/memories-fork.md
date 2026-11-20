@@ -106,7 +106,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**M10 (docs) is done. Next: M11, which needs the user (every live action, with a go-ahead and a fresh dump), and pushing the build script's commit in the fork.**
+**M10 (docs) is done. M11 items 1-5 are done on live (2026-11-20, see "M11 as run" below); the build script's commit is pushed. Next, each with its own go-ahead: M11 item 6 (drop `recognize` from `projection_targets`, disable Recognize, Stage H), after a day or two of normal use including new detections.**
 
 ## How to work this plan
 
@@ -532,6 +532,25 @@ Ask the user before each numbered item.
    - drop `recognize` from `projection_targets`;
    - disable Recognize;
    - Stage H.
+
+#### M11 as run (live, 2026-11-20)
+
+- **1 Dump:** the database, the installed Memories folder and the bridge folder, plus row counts (200,991 detections and
+  4,683 clusters in Recognize's tables). `occ app:update --showonly` did not list Recognize.
+- **2 Store update:** Memories 11.1.1 to 11.1.4 (live had not been on 11.0.2 as the plan assumed). People page fine.
+- **3 Swap:** the store build was saved first, then the fork tarball unpacked as `www-data`, an empty `.git/` added, Apache
+  restarted. The offer for Memories disappeared from `app:update --showonly`; the setting was still unset, so the
+  fork behaved as stock. People page fine.
+- **4 Bridge 0.12.1:** `occ upgrade` took 25 s. **It also applies every pending App Store update** (calendar, contacts, deck,
+  mail, notes, richdocuments, spreed were updated; the pinned Memories and Recognize, with no offer, were not). The plan
+  did not foresee that; the alternative, `appstoreenabled=false` for the duration, was not used (the user accepted the
+  updates). Take another dump right before the upgrade, and expect it. Then `projection_targets=recognize,own`:
+  `project --target=own --dry-run` found A 156,231 and D 4,681 (every visible face and person), the fill took **3.8 s**,
+  and a second dry run was 0 for both targets. The `EXCEPT` cross-check (faces and people, both directions) was 0/0/0/0
+  on 156,231 faces and 4,681 people.
+- **5 Provider set:** `memories.recognize.provider=facewright_bridge`. Rename, move, remove face and merge by the user in
+  Memories looked right; afterwards both targets reconciled at 0 and the `EXCEPT` check was 0/0/0/0, with no error in the
+  log.
 
 Rollback at any point: the provider back to `recognize` (Recognize must still be enabled and a target, and
 `occ facewright:project --target=recognize` repairs its copy), then the store build of the same version.
