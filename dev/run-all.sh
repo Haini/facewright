@@ -20,6 +20,12 @@ run() { local name=$1; shift
 # The suites that write clustering results, again under clustering_engine=exapp (docs/exapp-clustering.md, S3).
 with_exapp() { occ config:app:set facewright_bridge clustering_engine --value=exapp >/dev/null; "$@"; local rc=$?
   occ config:app:delete facewright_bridge clustering_engine >/dev/null; return $rc; }
+# The suites that write people and faces, again with the `own` projection target next to `recognize`
+# (docs/memories-fork.md, M6): the tables are filled first, and every verify_step then also compares the two targets.
+with_own() { occ config:app:set facewright_bridge projection_targets --value=recognize,own >/dev/null
+  occ facewright:project --target=own >/dev/null || { echo "could not fill the own tables"; occ config:app:delete facewright_bridge projection_targets >/dev/null; return 1; }
+  "$@"; local rc=$?
+  occ config:app:delete facewright_bridge projection_targets >/dev/null; return $rc; }
 echo "(a snapshot restore precedes every suite)"
 run reads-stable           "$DEV_DIR/reads.sh" stable
 run reads-direct-stable    "$DEV_DIR/reads-direct.sh" stable
@@ -52,6 +58,15 @@ run writers-cluster-exapp  with_exapp "$DEV_DIR/writers-cluster.sh"
 run chain-dangling-exapp   with_exapp "$DEV_DIR/chain-loop-test.sh" dangling
 run chain-assignable-exapp with_exapp "$DEV_DIR/chain-loop-test.sh" assignable
 run clustering-truth-exapp with_exapp env PEOPLE=50 "$DEV_DIR/clustering-truth.sh"
+# The `own` projection target (docs/memories-fork.md, M6): its own suite, then the suites that write people and
+# faces with `own` configured next to `recognize`, where every verify_step also compares the two targets.
+run project-own            "$DEV_DIR/project-own.sh"
+run writers-people-own     with_own "$DEV_DIR/writers-people.sh"
+run writers-cluster-own    with_own "$DEV_DIR/writers-cluster.sh"
+run writers-files-own      with_own "$DEV_DIR/writers-files.sh"
+run persist-guard-own      with_own "$DEV_DIR/persist-guard.sh"
+run project-concurrency-own with_own "$DEV_DIR/project-concurrency.sh"
+run dav-battery-own        with_own "$DEV_DIR/battery.sh"
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
 fail=0; for r in "${results[@]}"; do [ "$r" -ne 0 ] && fail=$((fail+1)); done

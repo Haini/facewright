@@ -43,4 +43,9 @@ check "the person the pass made and left empty is gone" 0 "$(one "SELECT COUNT(*
 check "and not in Recognize's table either"        0 "$(one "SELECT COUNT(*) FROM oc_recognize_face_clusters WHERE id=$created")"
 echo "== the copy follows"
 check "the assigned faces are in Recognize's table with the person" 2 "$(one "SELECT COUNT(*) FROM oc_recognize_face_detections WHERE id IN (${F[0]},${F[1]}) AND cluster_id=$target")"
+if own_configured; then   # run-all's with_own: the own projection target must have followed the pass too
+  # Not own_oracle: this suite plants "a human changed it" with direct SQL, which leaves a copy stale by design.
+  check "the assigned faces are in the own copy with the person" 2 "$(one "SELECT COUNT(*) FROM oc_facewright_bridge_face_detections WHERE id IN (${F[0]},${F[1]}) AND cluster_id=$target")"
+  check "and the person the pass left empty is not in the own copy" 0 "$(one "SELECT COUNT(*) FROM oc_facewright_bridge_face_clusters WHERE id=$created")"
+fi
 summary "persistAssignments guard"

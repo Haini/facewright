@@ -26,6 +26,11 @@ case "${1:-}" in
     occ facewright:own-tables --seed-ids >/dev/null 2>&1   # Stage E: our id counters above Recognize's (no-op on older code)
     occ config:app:delete facewright_bridge projection_dirty_seq >/dev/null 2>&1; occ config:app:delete facewright_bridge projection_clean_seq >/dev/null 2>&1
     occ config:app:delete facewright_bridge projection_last_error >/dev/null 2>&1
+    # The `own` projection target's tables are not part of a snapshot: they are always rebuilt from ours.
+    sql "TRUNCATE oc_facewright_bridge_face_detections" >/dev/null; sql "TRUNCATE oc_facewright_bridge_face_clusters" >/dev/null
+    if [[ ",$(occ config:app:get facewright_bridge projection_targets 2>/dev/null)," == *",own,"* ]]; then
+      occ facewright:project --target=own >/dev/null || { echo "restored $name but the own tables could not be filled"; exit 1; }
+    fi
     if occ facewright:own-tables --verify >/dev/null; then echo "restored $name; verify clean"; else echo "restored $name but VERIFY FAILED"; exit 1; fi ;;
   list) ls -l "$WORK_DIR/snapshots" | awk 'NR>1 {printf "%8s  %s\n", $5, $9}' ;;
   *) sed -n '2,12p' "$0"; exit 2 ;;

@@ -25,9 +25,27 @@ use Psr\Log\LoggerInterface;
  *   job (and `occ facewright:project`) repairs.
  * - MariaDB only, like the rest of the project's deployment.
  *
+ * Targets (docs/memories-fork.md, M6): the copy can be written to more than one pair of tables in Recognize's format.
+ * `recognize` is Recognize's own tables (all the columns, written as above). `own` is a pair of tables nothing else
+ * writes (`facewright_bridge_face_detections` / `_clusters`: only what Memories reads, no vector, no threshold), which
+ * the fork of Memories reads when its provider setting is this app. The app config `projection_targets` is a comma
+ * list; unset means `recognize`. Every target gets the same projection (sparse, same ids) and its own `try`, so a
+ * failure in one never stops the others; the dirty flag is shared. Reconcile is per target: `own` has no hidden-state
+ * remnants (B), no squatters and no legacy rows, because nothing else writes it. Hydrate is `recognize` only.
+ *
  * Column order trap: Recognize's physical order is x, y, height, width. Every statement names its columns.
  */
 class ProjectionService {
+	public const TARGET_RECOGNIZE = 'recognize';
+	public const TARGET_OWN = 'own';
+	/** App config key: comma list of targets to write; unset or empty means recognize. */
+	public const KEY_TARGETS = 'projection_targets';
+	/** Each target's pair of tables: detections, then people. */
+	private const TARGET_TABLES = [
+		self::TARGET_RECOGNIZE => ['recognize_face_detections', 'recognize_face_clusters'],
+		self::TARGET_OWN => ['facewright_bridge_face_detections', 'facewright_bridge_face_clusters'],
+	];
+
 	private const APP_ID = 'facewright_bridge';
 	/** Faces per statement. */
 	private const CHUNK = 500;
@@ -42,7 +60,10 @@ class ProjectionService {
 	public const KEY_ERROR_AT = 'projection_last_error_at';
 	public const KEY_OK_AT = 'projection_last_ok_at';
 
-	private ?bool $available = null;
+	/** @var array<string, bool> */
+	private array $availableFor = [];
+	/** @var ?list<string> */
+	private ?array $targets = null;
 
 	public function __construct(
 		private IDBConnection $db,
@@ -52,30 +73,92 @@ class ProjectionService {
 	}
 
 	// ---------------------------------------------------------------------------------------------------
-	// Availability and the dirty flag
+	// Targets, availability and the dirty flag
 	// ---------------------------------------------------------------------------------------------------
 
-	/** Probed once per process: MariaDB, our tables, and the columns of Recognize's that the statements name. */
-	public function available(): bool {
-		if ($this->available !== null) {
-			return $this->available;
+	/**
+	 * The targets to write, from the app config `projection_targets`. Read once per process. Unknown names are
+	 * ignored with a warning; unset, empty, or nothing left means `recognize`, which is what every install had before.
+	 *
+	 * @return list<string>
+	 */
+	public function targets(): array {
+		if ($this->targets !== null) {
+			return $this->targets;
 		}
+		$wanted = [];
+		foreach (explode(',', $this->appConfig->getValueString(self::APP_ID, self::KEY_TARGETS, '')) as $name) {
+			$name = trim($name);
+			if ($name === '') {
+				continue;
+			}
+			if (!self::isTarget($name)) {
+				$this->logger->warning("facewright: ignoring unknown projection target '{$name}' in " . self::KEY_TARGETS . ' (known: ' . implode(', ', array_keys(self::TARGET_TABLES)) . ')', ['app' => self::APP_ID]);
+				continue;
+			}
+			$wanted[$name] = true;
+		}
+		$list = array_keys($wanted);
+		return $this->targets = $list === [] ? [self::TARGET_RECOGNIZE] : $list;
+	}
+
+	public static function isTarget(string $name): bool {
+		return isset(self::TARGET_TABLES[$name]);
+	}
+
+	/** Every configured target can be written. */
+	public function available(): bool {
+		foreach ($this->targets() as $target) {
+			if (!$this->availableFor($target)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Probed once per process: MariaDB, our tables, and the columns of the target's tables that the statements name.
+	 * Any known target can be asked about, configured or not (`occ facewright:project --target=own` fills it first).
+	 */
+	public function availableFor(string $target): bool {
+		if (!self::isTarget($target)) {
+			return false;
+		}
+		if (isset($this->availableFor[$target])) {
+			return $this->availableFor[$target];
+		}
+		[$detections, $people] = self::TARGET_TABLES[$target];
 		try {
 			$ok = in_array($this->db->getDatabaseProvider(true), [IDBConnection::PLATFORM_MYSQL, IDBConnection::PLATFORM_MARIADB], true)
-				&& $this->db->tableExists('recognize_face_detections')
-				&& $this->db->tableExists('recognize_face_clusters')
+				&& $this->db->tableExists($detections)
+				&& $this->db->tableExists($people)
 				&& $this->db->tableExists('facewright_user_faces')
 				&& $this->db->tableExists('facewright_clusters');
 			if ($ok) {
-				$have = $this->columns('recognize_face_detections');
-				$ok = array_diff(['id', 'user_id', 'file_id', 'x', 'y', 'height', 'width', 'face_vector', 'cluster_id', 'threshold'], $have) === []
-					&& array_diff(['id', 'user_id', 'title'], $this->columns('recognize_face_clusters')) === [];
+				$wanted = $target === self::TARGET_OWN
+					? ['id', 'user_id', 'file_id', 'x', 'y', 'width', 'height', 'cluster_id']
+					: ['id', 'user_id', 'file_id', 'x', 'y', 'height', 'width', 'face_vector', 'cluster_id', 'threshold'];
+				$ok = array_diff($wanted, $this->columns($detections)) === []
+					&& array_diff(['id', 'user_id', 'title'], $this->columns($people)) === [];
 			}
 		} catch (\Throwable $e) {
-			$this->logger->error('facewright: projection availability check failed: ' . $e->getMessage(), ['app' => self::APP_ID]);
+			$this->logger->error("facewright: projection availability check failed for the {$target} target: " . $e->getMessage(), ['app' => self::APP_ID]);
 			$ok = false;
 		}
-		return $this->available = $ok;
+		return $this->availableFor[$target] = $ok;
+	}
+
+	/** How reports and logs name a target's tables. */
+	public static function label(string $target): string {
+		return $target === self::TARGET_RECOGNIZE ? "Recognize's tables" : "the '{$target}' tables";
+	}
+
+	private function detections(string $target): string {
+		return $this->table(self::TARGET_TABLES[$target][0]);
+	}
+
+	private function people(string $target): string {
+		return $this->table(self::TARGET_TABLES[$target][1]);
 	}
 
 	/** @return list<string> */
@@ -149,31 +232,51 @@ class ProjectionService {
 		if ($faceIds === [] && $clusterIds === []) {
 			return true;
 		}
-		if (!$this->available()) {
-			$this->markDirty('the projection is not available (unsupported database or Recognize\'s tables changed)');
+		// Every target, each on its own: a failure in one leaves the others written, and any failure leaves the
+		// shared dirty flag set for the repair job.
+		$ok = true;
+		foreach ($this->targets() as $target) {
+			if (!$this->pushTo($target, $faceIds, $clusterIds)) {
+				$ok = false;
+			}
+		}
+		return $ok;
+	}
+
+	/**
+	 * One target. Never throws: false has set the dirty flag and logged why, naming the target.
+	 *
+	 * @param list<int> $faceIds
+	 * @param list<int> $clusterIds
+	 */
+	private function pushTo(string $target, array $faceIds, array $clusterIds): bool {
+		if (!$this->availableFor($target)) {
+			$this->markDirty($target === self::TARGET_RECOGNIZE
+				? 'the projection is not available (unsupported database or Recognize\'s tables changed)'
+				: "the projection to the {$target} target is not available (unsupported database, or its tables are missing or changed)");
 			return false;
 		}
 		try {
 			foreach (array_chunk($clusterIds, self::CHUNK) as $chunk) {
-				DeadlockRetry::run(fn () => $this->upsertPeople($chunk));
+				DeadlockRetry::run(fn () => $this->upsertPeople($chunk, $target));
 			}
 			foreach (array_chunk($faceIds, self::CHUNK) as $chunk) {
-				DeadlockRetry::run(fn () => $this->upsertFaces($chunk));
+				DeadlockRetry::run(fn () => $target === self::TARGET_OWN ? $this->upsertFacesOwn($chunk) : $this->upsertFaces($chunk));
 			}
 			foreach (array_chunk($clusterIds, self::CHUNK) as $chunk) {
-				DeadlockRetry::run(fn () => $this->deleteGonePeople($chunk));
+				DeadlockRetry::run(fn () => $this->deleteGonePeople($chunk, $target));
 			}
 			return true;
 		} catch (\Throwable $e) {
-			$this->logger->error('facewright: projection push failed: ' . $e->getMessage(), ['app' => self::APP_ID, 'exception' => $e]);
-			$this->markDirty($e->getMessage());
+			$this->logger->error("facewright: projection push to the {$target} target failed: " . $e->getMessage(), ['app' => self::APP_ID, 'exception' => $e]);
+			$this->markDirty($target === self::TARGET_RECOGNIZE ? $e->getMessage() : "{$target}: " . $e->getMessage());
 			return false;
 		}
 	}
 
 	/** @param list<int> $ids */
-	private function upsertPeople(array $ids): void {
-		$rfc = $this->table('recognize_face_clusters');
+	private function upsertPeople(array $ids, string $target): void {
+		$rfc = $this->people($target);
 		$fc = $this->table('facewright_clusters');
 		$this->db->executeStatement(
 			"INSERT INTO {$rfc} (id, user_id, title) SELECT c.id, c.user_id, c.title FROM {$fc} c WHERE c.id IN (" . implode(',', $ids) . ') ORDER BY c.id '
@@ -182,9 +285,9 @@ class ProjectionService {
 	}
 
 	/** @param list<int> $ids */
-	private function deleteGonePeople(array $ids): void {
+	private function deleteGonePeople(array $ids, string $target): void {
 		$this->db->executeStatement(
-			'DELETE FROM ' . $this->table('recognize_face_clusters') . ' WHERE id IN (' . implode(',', $ids) . ') '
+			'DELETE FROM ' . $this->people($target) . ' WHERE id IN (' . implode(',', $ids) . ') '
 			. 'AND id NOT IN (SELECT id FROM ' . $this->table('facewright_clusters') . ')'
 		);
 	}
@@ -207,6 +310,38 @@ class ProjectionService {
 			);
 			$this->db->executeStatement(
 				"DELETE FROM {$rfd} WHERE id IN ({$list}) AND id NOT IN (SELECT id FROM {$uf} WHERE state IN ({$visible}))"
+			);
+			$this->db->commit();
+		} catch (\Throwable $e) {
+			$this->db->rollBack();
+			throw $e;
+		}
+	}
+
+	/**
+	 * The `own` target's version of upsertFaces(): the same projection into the tables only we write, so only the
+	 * columns Memories reads and no vector to protect. Kept after upsertFaces() on purpose: dev/project-failure.sh
+	 * edits the first statement it finds there.
+	 *
+	 * @param list<int> $ids
+	 */
+	private function upsertFacesOwn(array $ids): void {
+		$det = $this->detections(self::TARGET_OWN);
+		$uf = $this->table('facewright_user_faces');
+		$faces = $this->table('facewright_faces');
+		$list = implode(',', $ids);
+		$visible = implode(',', FaceState::VISIBLE);
+		$this->db->beginTransaction();
+		try {
+			$this->db->executeStatement(
+				"INSERT INTO {$det} (id, user_id, file_id, x, y, width, height, cluster_id) "
+				. 'SELECT u.id, u.user_id, f.file_id, f.x, f.y, f.width, f.height, ' . $this->visibleClusterExpr('u') . ' '
+				. "FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id WHERE u.id IN ({$list}) AND u.state IN ({$visible}) ORDER BY u.id "
+				. 'ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), file_id = VALUES(file_id), x = VALUES(x), y = VALUES(y), '
+				. 'width = VALUES(width), height = VALUES(height), cluster_id = VALUES(cluster_id)'
+			);
+			$this->db->executeStatement(
+				"DELETE FROM {$det} WHERE id IN ({$list}) AND id NOT IN (SELECT id FROM {$uf} WHERE state IN ({$visible}))"
 			);
 			$this->db->commit();
 		} catch (\Throwable $e) {
@@ -288,10 +423,18 @@ class ProjectionService {
 	 *     Recognize's references (stale)
 	 * Vectors are read only for rows with no row of ours (C), never for rows we own.
 	 *
+	 * Per target. For `own` there is no B and no legacy count, and C is any row that is not a visible face of ours:
+	 * nothing else writes those tables, so every such row is a stale copy, and D "stale" needs no check of what refers
+	 * to the person.
+	 *
 	 * @param int $limit repairs per category at most; 0 = unlimited
+	 * @param string $target one of the TARGET_ constants
 	 * @return array{A: int, B: int, C: int, legacy: int, D_missing: int, D_stale: int, repaired: array<string,int>, truncated: bool}
 	 */
-	public function reconcile(bool $dryRun, ?string $userId = null, int $limit = 0): array {
+	public function reconcile(bool $dryRun, ?string $userId = null, int $limit = 0, string $target = self::TARGET_RECOGNIZE): array {
+		if (!self::isTarget($target)) {
+			throw new \InvalidArgumentException("Unknown projection target '{$target}'");
+		}
 		$report = ['A' => 0, 'B' => 0, 'C' => 0, 'legacy' => 0, 'D_missing' => 0, 'D_stale' => 0, 'repaired' => ['A' => 0, 'C' => 0, 'D_missing' => 0, 'D_stale' => 0], 'truncated' => false];
 		$fix = ['A' => [], 'C' => [], 'D_missing' => [], 'D_stale' => []];
 		$found = function (string $category, int $id) use (&$report, &$fix, $limit): void {
@@ -304,20 +447,20 @@ class ProjectionService {
 		};
 
 		// People first, because the faces in A need theirs to exist.
-		$this->findPeopleDrift($userId, $found);
-		$this->findFaceDrift($userId, $found, $report);
-		$this->findStrayRows($userId, $found, $report);
+		$this->findPeopleDrift($userId, $found, $target);
+		$this->findFaceDrift($userId, $found, $report, $target);
+		$this->findStrayRows($userId, $found, $report, $target);
 
 		if (!$dryRun) {
-			$this->repair($report, $fix['D_missing'], $fix['A'], $fix['C'], $fix['D_stale']);
+			$this->repair($report, $target, $fix['D_missing'], $fix['A'], $fix['C'], $fix['D_stale']);
 		}
 		return $report;
 	}
 
 	/** @param callable(string, int): void $found */
-	private function findPeopleDrift(?string $userId, callable $found): void {
-		$rfd = $this->table('recognize_face_detections');
-		$rfc = $this->table('recognize_face_clusters');
+	private function findPeopleDrift(?string $userId, callable $found, string $target): void {
+		$rfd = $this->detections($target);
+		$rfc = $this->people($target);
 		$fc = $this->table('facewright_clusters');
 		$cu = $this->userFilter('c', $userId);
 		$ru = $this->userFilter('r', $userId);
@@ -332,7 +475,7 @@ class ProjectionService {
 			}
 			foreach ($this->column(
 				"SELECT r.id FROM {$rfc} r LEFT JOIN {$fc} c ON c.id = r.id WHERE r.id > {$after} AND r.id <= {$upper}{$ru} "
-				. "AND c.id IS NULL AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = r.id) ORDER BY r.id"
+				. 'AND c.id IS NULL' . $this->notReferenced($target, $rfd, 'r') . ' ORDER BY r.id'
 			) as $id) {
 				$found('D_stale', $id);
 			}
@@ -345,8 +488,8 @@ class ProjectionService {
 	 * @param callable(string, int): void $found
 	 * @param array<string, mixed> $report
 	 */
-	private function findFaceDrift(?string $userId, callable $found, array &$report): void {
-		$rfd = $this->table('recognize_face_detections');
+	private function findFaceDrift(?string $userId, callable $found, array &$report, string $target): void {
+		$rfd = $this->detections($target);
 		$uf = $this->table('facewright_user_faces');
 		$faces = $this->table('facewright_faces');
 		$visible = implode(',', FaceState::VISIBLE);
@@ -362,6 +505,9 @@ class ProjectionService {
 				. 'AND d.x <=> f.x AND d.y <=> f.y AND d.width <=> f.width AND d.height <=> f.height)) ORDER BY u.id'
 			) as $id) {
 				$found('A', $id);
+			}
+			if ($target !== self::TARGET_RECOGNIZE) {
+				continue; // no remnants and no squatters in tables only we write
 			}
 			// B: a hidden face of ours whose row in Recognize's table is the same face (a Stage D remnant).
 			$report['B'] += $this->count(
@@ -386,11 +532,25 @@ class ProjectionService {
 	 * @param callable(string, int): void $found
 	 * @param array<string, mixed> $report
 	 */
-	private function findStrayRows(?string $userId, callable $found, array &$report): void {
-		$rfd = $this->table('recognize_face_detections');
+	private function findStrayRows(?string $userId, callable $found, array &$report, string $target): void {
+		$rfd = $this->detections($target);
 		$uf = $this->table('facewright_user_faces');
 		$du = $this->userFilter('d', $userId);
 		$max = $this->count("SELECT COALESCE(MAX(id), 0) FROM {$rfd}");
+		if ($target === self::TARGET_OWN) {
+			// Every row that is not a visible face of ours. No vectors to read, no legacy kind to leave alone.
+			$visible = implode(',', FaceState::VISIBLE);
+			for ($after = 0; $after < $max; $after += self::PAGE) {
+				$upper = $after + self::PAGE;
+				foreach ($this->column(
+					"SELECT d.id FROM {$rfd} d LEFT JOIN {$uf} u ON u.id = d.id AND u.state IN ({$visible}) "
+					. "WHERE d.id > {$after} AND d.id <= {$upper}{$du} AND u.id IS NULL ORDER BY d.id"
+				) as $id) {
+					$found('C', $id);
+				}
+			}
+			return;
+		}
 		for ($after = 0; $after < $max; $after += self::PAGE) {
 			$upper = $after + self::PAGE;
 			$result = $this->db->executeQuery(
@@ -409,6 +569,11 @@ class ProjectionService {
 		}
 	}
 
+	/** The "nothing refers to this person" test of D-stale. `own` has no one else writing it, so it needs none. */
+	private function notReferenced(string $target, string $detections, string $alias): string {
+		return $target === self::TARGET_OWN ? '' : " AND NOT EXISTS (SELECT 1 FROM {$detections} d WHERE d.cluster_id = {$alias}.id)";
+	}
+
 	private function userFilter(string $alias, ?string $userId): string {
 		return $userId === null ? '' : " AND {$alias}.user_id = " . $this->quote($userId);
 	}
@@ -420,16 +585,17 @@ class ProjectionService {
 	 * @param list<int> $fixC
 	 * @param list<int> $fixDs
 	 */
-	private function repair(array &$report, array $fixDm, array $fixA, array $fixC, array $fixDs): void {
+	private function repair(array &$report, string $target, array $fixDm, array $fixA, array $fixC, array $fixDs): void {
 		if ($fixDm !== [] || $fixA !== []) {
-			if (!$this->push($fixA, $fixDm)) {
+			// Only this target: reconciling one target must not write the others.
+			if (!$this->pushTo($target, $fixA, $fixDm)) {
 				throw new \RuntimeException('Repair failed: ' . $this->status()['error']);
 			}
 			$report['repaired']['D_missing'] = count($fixDm);
 			$report['repaired']['A'] = count($fixA);
 		}
-		$rfd = $this->table('recognize_face_detections');
-		$rfc = $this->table('recognize_face_clusters');
+		$rfd = $this->detections($target);
+		$rfc = $this->people($target);
 		$uf = $this->table('facewright_user_faces');
 		$fc = $this->table('facewright_clusters');
 		foreach (array_chunk($fixC, self::CHUNK) as $chunk) {
@@ -442,8 +608,8 @@ class ProjectionService {
 		}
 		foreach (array_chunk($fixDs, self::CHUNK) as $chunk) {
 			$report['repaired']['D_stale'] += DeadlockRetry::run(fn () => $this->db->executeStatement(
-				"DELETE FROM {$rfc} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$fc}) "
-				. "AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = {$rfc}.id)"
+				"DELETE FROM {$rfc} WHERE id IN (" . implode(',', $chunk) . ") AND id NOT IN (SELECT id FROM {$fc})"
+				. $this->notReferenced($target, $rfd, $rfc)
 			));
 		}
 	}

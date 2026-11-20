@@ -16,8 +16,9 @@ use Psr\Log\LoggerInterface;
  * compares the two sets of tables hourly and repairs whatever differs, which also covers what Recognize's own
  * handlers do to its tables behind our back (an access sync copying rows, a `.noimage` marker deleting them).
  *
- * Capped per run; a larger backlog continues on the next. The dirty flag is cleared only if the run ended with
- * nothing left to repair and nothing newer had failed while it ran. Honours `processing_paused`, like every job here.
+ * Every configured target (`projection_targets`) is reconciled in turn, each in its own try. Capped per run; a larger
+ * backlog continues on the next. The dirty flag is cleared only if the run ended with nothing left to repair in any
+ * target and nothing newer had failed while it ran. Honours `processing_paused`, like every job here.
  */
 class ProjectionMaintenanceJob extends TimedJob {
 	/** Repairs per category per run. */
@@ -38,31 +39,41 @@ class ProjectionMaintenanceJob extends TimedJob {
 		if ($this->appConfig->getValueString('facewright_bridge', 'processing_paused', 'false') === 'true') {
 			return;
 		}
-		if (!$this->projection->available()) {
-			$this->logger->warning('facewright: the projection is not available, so Recognize\'s tables are not being kept in step', ['app' => 'facewright_bridge']);
-			return;
-		}
 		$seq = $this->projection->dirtySeq();
-		try {
-			$report = $this->projection->reconcile(false, null, self::LIMIT);
-			$repaired = array_sum($report['repaired']);
-			if ($repaired > 0) {
-				$this->logger->warning("facewright: repaired {$repaired} difference(s) between Recognize's tables and ours (A {$report['repaired']['A']}, C {$report['repaired']['C']}, D {$report['repaired']['D_missing']}+{$report['repaired']['D_stale']})", ['app' => 'facewright_bridge']);
+		$allClean = true;
+		foreach ($this->projection->targets() as $target) {
+			$label = ProjectionService::label($target);
+			if (!$this->projection->availableFor($target)) {
+				$this->logger->warning("facewright: the projection to {$label} is not available, so they are not being kept in step", ['app' => 'facewright_bridge']);
+				$allClean = false;
+				continue;
 			}
-			$left = $report['A'] + $report['C'] + $report['D_missing'] + $report['D_stale'];
-			if ($left > 0) {
-				// Something was found: count again rather than trust that the repair got all of it.
-				$after = $this->projection->reconcile(true);
-				$left = $after['A'] + $after['C'] + $after['D_missing'] + $after['D_stale'];
+			try {
+				$report = $this->projection->reconcile(false, null, self::LIMIT, $target);
+				$repaired = array_sum($report['repaired']);
+				if ($repaired > 0) {
+					$this->logger->warning("facewright: repaired {$repaired} difference(s) between {$label} and ours (A {$report['repaired']['A']}, C {$report['repaired']['C']}, D {$report['repaired']['D_missing']}+{$report['repaired']['D_stale']})", ['app' => 'facewright_bridge']);
+				}
+				$left = $report['A'] + $report['C'] + $report['D_missing'] + $report['D_stale'];
+				if ($left > 0) {
+					// Something was found: count again rather than trust that the repair got all of it.
+					$after = $this->projection->reconcile(true, null, 0, $target);
+					$left = $after['A'] + $after['C'] + $after['D_missing'] + $after['D_stale'];
+				}
+				if ($left > 0) {
+					$allClean = false;
+					$this->logger->warning("facewright: {$left} difference(s) between {$label} and ours remain after a repair run; the next run continues", ['app' => 'facewright_bridge']);
+				}
+			} catch (\Throwable $e) {
+				// One target failing must not stop the next one from being repaired.
+				$allClean = false;
+				$this->logger->error("facewright: projection maintenance of {$label} failed: " . $e->getMessage(), ['app' => 'facewright_bridge', 'exception' => $e]);
+				$this->projection->markDirty($e->getMessage());
 			}
-			if ($left === 0) {
-				$this->projection->markClean($seq);
-			} else {
-				$this->logger->warning("facewright: {$left} difference(s) between Recognize's tables and ours remain after a repair run; the next run continues", ['app' => 'facewright_bridge']);
-			}
-		} catch (\Throwable $e) {
-			$this->logger->error('facewright: projection maintenance failed: ' . $e->getMessage(), ['app' => 'facewright_bridge', 'exception' => $e]);
-			$this->projection->markDirty($e->getMessage());
+		}
+		// The flag is shared: cleared only when every target ended with nothing left and nothing newer had failed.
+		if ($allClean) {
+			$this->projection->markClean($seq);
 		}
 	}
 }
