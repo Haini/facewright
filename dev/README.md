@@ -24,7 +24,8 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 |---|---|---|
 | `reads.sh capture\|compare\|stable` | ~50 outputs of the People code (commands, API); `stable` proves two captures equal | no |
 | `reads-direct.sh` (+ `reads_direct.php`, `compare_direct.py`) | the access-sync, detection and reset readers on a sample of files | no |
-| `battery.sh` | the DAV write router: what is applied, refused, left alone | restores itself |
+| `battery.sh` (`TREE=recognize\|facewright_bridge`) | the DAV router and the reads of one tree: what is applied, refused, left alone; a person's listing against SQL, a face file's bytes against the Files tree, nothing moving between the two trees (`CROSS_TREE=no` skips that part) | restores itself |
+| `project-own.sh` | the `own` projection target: an empty copy, the fill, one planted fault per category, Recognize's tables untouched, a broken `own` statement isolated (docs/memories-fork.md, M6) | yes (restore) |
 | `writers-people.sh` | every People API write | yes (restore) |
 | `writers-cluster.sh` | reopen, assign, mark unclusterable, clear marks, resets | yes (restore) |
 | `persist-guard.sh` (+ `persist_guard.php`) | a clustering pass writing after a human changed the rows: the human wins, and a person the pass left empty goes | yes (restore) |

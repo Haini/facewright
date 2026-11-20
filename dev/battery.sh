@@ -72,11 +72,14 @@ check "$BOB_USER deletes it" 204 "$(bob_dav DELETE "$TREE/$BOB_USER/faces/BobBat
 check "unauthenticated MKCOL" 401 "$(docker exec "$NC_CONTAINER" curl -s -o /dev/null -w '%{http_code}' -X MKCOL "$DAV_BASE/$TREE/$u/faces/Anon")"
 check "Files DAV unaffected (PUT)" 201 "$(admin_dav PUT "files/$u/battery-test.txt" --data hi)"
 check "Files DAV unaffected (DELETE)" 204 "$(admin_dav DELETE "files/$u/battery-test.txt")"
+# CROSS_TREE=no skips this section: dev/rollback-drill.sh runs the battery against Stage D's router, which predates the rule.
+if [ "${CROSS_TREE:-yes}" = yes ]; then
 echo "== refused: nothing moves between the two trees"
 check "MOVE a person into the other tree" 403 "$(admin_dav MOVE "$TREE/$u/faces/$A_URL" -H "Destination: $DAV_BASE/$OTHER/$u/faces/Crossed")"
 check "   the person keeps its name" 1 "$(count_people "$TITLE_A")"
 check "   and nothing of that name was made" 0 "$(count_people Crossed)"
 check "MOVE a face into the other tree" 403 "$(admin_dav MOVE "$TREE/$u/unassigned-faces/$FACE_URL" -H "Destination: $DAV_BASE/$OTHER/$u/faces/$A_URL/$FACE_URL")"
+fi
 
 echo "== leave the data as found"
 check "move the face back to A" 201 "$(admin_dav MOVE "$TREE/$u/unassigned-faces/$FACE_URL" -H "Destination: $(dest "$TITLE_A")/$FACE_URL")"

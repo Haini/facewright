@@ -59,7 +59,7 @@ reads=$("$DEV_DIR/reads.sh" stable 2>&1 | tail -1); echo "    $reads"
 check "the read capture is stable under Stage D code" 1 "$(grep -c STABLE <<<"$reads")"
 check "People API writes work under Stage D code" 200 "$(admin_ocs POST /faces/move "{\"ids\":[${F[0]},${F[1]}],\"clusterId\":$P}" | status)"
 check "   and Stage D's --verify still holds after them" 0 "$(occ facewright:own-tables --verify >/dev/null 2>&1; echo $?)"
-check "the DAV router works under Stage D code (a rename through Memories' path)" 1 "$("$DEV_DIR/battery.sh" 2>&1 | grep -c 'failed 0')"
+check "the DAV router works under Stage D code (a rename through Memories' path)" 1 "$(CROSS_TREE=no "$DEV_DIR/battery.sh" 2>&1 | grep -c 'failed 0')"
 check "the Stage E job row left in the job list does not break cron" 0 "$(occ background-job:list >/dev/null 2>&1; echo $?)"
 # Nextcloud drops a job whose class is missing when cron walks the job list: whether that happened inside this short
 # window is chance, so it is reported, not asserted. What must hold is the state after rolling forward (below).
