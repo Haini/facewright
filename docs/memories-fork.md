@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M5 are done (2026-11-20); the bridge is at 0.12.0 with the two `own` tables, nothing writes them.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M6 are done (2026-11-20); the bridge (0.12.0) writes the `own` target when `projection_targets` names it; it is not configured anywhere yet.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -48,10 +48,24 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
   bigint NOT NULL, the keys `fwb_fdet_cluster` / `_user` / `_file` and `fwb_fclust_user`, `utf8mb4_bin` like
   Recognize's tables, 0 rows in both. After the re-save the snapshot `original` equals `original-pre-m5` and
   `original-m0` (the own tables are not in it). `dev/run-all.sh --ui`: `29 of 29 suites passed`.
+- **M6 (measured):** `ProjectionService` writes every configured target (`projection_targets`, unset = `recognize`);
+  `occ facewright:project` has `--target` and prints a `Target: <name>` line first; the hourly job and `--verify` cover
+  every configured target. Existing suites with the default config, **unchanged**: `project-drift` 24 passed,
+  `project-failure` 15, `project-recognize-trap` 21, `project-recognize-copies` 26. New `dev/project-own.sh`: 49 passed
+  (an empty copy reports 2790 visible faces and 311 people and writes nothing; the fill; planted drift reported as
+  exactly A 6, C 2, D 1 and 1; the repair; Recognize's `CHECKSUM TABLE` equal before and after; `--hydrate --target=own`
+  and an unknown target exit 2; a broken `own` column leaves Recognize's copy written, the flag set with `own: ...
+  cluster_idx`, one error logged, and the job repairs it). With `own` configured: `writers-people` 55, `writers-cluster`
+  23, `persist-guard` 13, `project-concurrency` 4, `battery` 45 passed. `dev/run-all.sh --ui`: `36 of 36 suites passed`
+  (the 29 before and `project-own` plus six `-own` runs).
+  - **Planted faults, both caught:** push skipping `own` entirely for people: the fill itself failed (`could not fill
+    own`, reconcile cannot repair people). Push skipping `own` people only for a push with no faces (renames, creates):
+    `writers-people` under `with_own` printed `FAIL verify after create` and `FAIL own oracle after create ... 0/0/1/0`,
+    the same after rename and after an empty person exists (49 passed, 6 failed). Code restored byte for byte.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M6.**
+**Next: M7.**
 
 ## How to work this plan
 
@@ -328,7 +342,7 @@ leave an old one next to its error:
 - `SHOW CREATE TABLE` on both matches the design: columns, NOT NULL, the four indexes, no autoincrement.
 - `occ facewright:own-tables --verify` is clean, and the run passes. Nothing writes the tables yet.
 
-### M6 Bridge: projection targets
+### M6 Bridge: projection targets — done 2026-11-20
 
 - **`ProjectionService` with targets**, as in "The design". Keep the SQL of the `recognize` target byte-for-byte where
   it does not need the table name as a parameter. `dev/project-concurrency.sh` fails on a degraded upsert, so the
@@ -341,10 +355,17 @@ leave an old one next to its error:
 - **`ProjectionMaintenanceJob`** reconciles every configured target. Its log line names the target.
 - **The admin page's "Memories sync" line** stays one line over the shared flag.
 - **`dev/lib.sh`.**
-  - `verify_step` also runs the **independent oracle** when `own` is configured. Two `EXCEPT` queries must both be
-    empty: `(SELECT id, user_id, file_id, x, y, width, height, cluster_id FROM oc_recognize_face_detections WHERE id IN
-    (SELECT id FROM oc_facewright_user_faces)) EXCEPT (SELECT ... FROM oc_facewright_bridge_face_detections)`, and the
-    same the other way round. Do the same for people, with `title`.
+  - `verify_step` also runs the **independent oracle** (`own_oracle`, `own_oracle_counts`) when `own` is configured. Two
+    `EXCEPT` queries must both be empty: `(SELECT id, user_id, file_id, x, y, width, height, cluster_id FROM
+    oc_recognize_face_detections WHERE id IN (SELECT id FROM oc_facewright_user_faces WHERE state IN (1,2))) EXCEPT
+    (SELECT ... FROM oc_facewright_bridge_face_detections)`, and the same the other way round, with the second side
+    **not** restricted (a row in `own` that is not a visible face of ours is an error). Do the same for people, with
+    `title`, the Recognize side restricted to ids in `facewright_clusters`.
+    - **Why `state IN (1,2)` and not every row of ours:** Recognize's table still holds the hidden-state remnants of
+      category B (6 on dev's snapshot), which `own` never has, so the plan's first wording failed at the baseline.
+    - **`own_oracle` is not used by `persist-guard`:** that suite plants "a human changed it" with direct SQL, which
+      leaves both copies stale by design (Recognize tolerates it as B, `own` repairs it as C). It checks the same two
+      things for `own` that it checks for Recognize instead.
   - MariaDB 10.11 has `EXCEPT`. This checks the targets against each other without going through reconcile.
 - **`dev/snapshot.sh restore`** truncates the two `own` tables if they exist. If `own` is configured, it then runs
   `occ facewright:project --target=own` and requires it to exit 0.
