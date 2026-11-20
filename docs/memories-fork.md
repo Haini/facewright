@@ -258,8 +258,8 @@ leave an old one next to its error:
    - If a Memories UI flow fails because 11.1.4 changed its UI, fix `dev/memories-ui/flows.py` first. That is stock
      behaviour, not ours; commit it on its own.
 6. **The oracle for every later step:** `dev/memories-api.py stable` must print `STABLE`, then `dev/memories-api.py
-   capture dev/.work/fork/stock.json`. It captures, as Memories' API returns them, the people and each person's photos
-   (`days`) for admin. Bob is not captured: he has no Memories timeline folder, so Memories refuses him. Ids are ours in every target, so the captures compare directly. **Take
+   capture dev/.work/fork/stock.json`. It captures, as Memories' API returns them, the people, each person's photos
+   (`days`) and the unassigned faces (key `NULL`), for admin. Bob is not captured: he has no Memories timeline folder, so Memories refuses him. Ids are ours in every target, so the captures compare directly. **Take
    every capture in this plan right after `dev/snapshot.sh restore original`**, so that they all start from the same
    data. With `own` configured (M6 on), restore also refills the `own` tables.
 
