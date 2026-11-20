@@ -30,8 +30,9 @@
 > 4. **Stage G** (the Memories change), **decided 2026-11-19: a fork** of Memories on the user's GitHub account, since
 >    pulsejet/memories#1812 got no answer. Its Recognize backend reads a Recognize-format copy in tables of ours and sends
 >    its writes to a WebDAV tree of ours, selected by a system setting, so Recognize need not be installed. The fork's
->    change is prototyped (`docs/memories-fork.patch`, 9 files, +70/-20). The fork repository exists
->    (https://github.com/Haini/memories, 2026-11-20) without the change yet; our tables and our tree are not built. Dev first. **The plan is `docs/memories-fork.md`** (steps M0 to M12).
+>    change is prototyped (`docs/memories-fork.patch`, 9 files, +70/-20). The fork carries it
+>    (https://github.com/Haini/memories, branch `facewright`, pushed 2026-11-20: M1 done); our tables and our tree are
+>    not built. Dev first. **The plan is `docs/memories-fork.md`** (steps M0 to M12).
 >
 > **A separate track: clustering in the ExApp** (`docs/exapp-clustering.md`, its own "Where things stand"). Compared on
 > live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene are built on dev (S1 to S5).

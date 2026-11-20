@@ -7,11 +7,21 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**Nothing is built (2026-11-19).** The decisions are in `docs/own-tables.md`, Stage G.0. The fork's change exists as a
-patch, `docs/memories-fork.patch` (against Memories v11.1.4: 9 files, +70/-20). It typechecks with Memories' own
-`vue-tsc`, passes `prettier --check`, and its PHP passes `php -l`. It has never been run. Dev runs Memories 11.0.2,
-Recognize 12.0.3 and bridge 0.11.0. The App Store offers Memories 11.1.4. The fork exists (2026-11-20):
-https://github.com/Haini/memories, so M1 starts at step 2. **Next: M0.**
+**M1 is done (2026-11-20); nothing else is built.** The decisions are in `docs/own-tables.md`, Stage G.0.
+
+- **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
+  `facewright` is pushed. It is v11.1.4 plus one commit, `bbb4f38c`, "Recognize provider setting: read
+  Recognize-format tables and DAV tree of another app". That commit is exactly `docs/memories-fork.patch` (9 files,
+  +70/-20).
+- **Checks run on that content:**
+  - `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1 greps on the commit.
+  - The planted fault was caught.
+  - The code has never run in Nextcloud.
+- **There is no clone of the fork in or next to this repository.** Clone it first (M1 step 2 says how), and set
+  `$FORK` to that clone.
+- **Dev** runs Memories 11.0.2, Recognize 12.0.3 and bridge 0.11.0. The App Store offers Memories 11.1.4.
+
+**Next: M0, then M2.**
 
 ## How to work this plan
 
@@ -156,12 +166,20 @@ plugin, which learns this second prefix.
 
 **Verify:** the run's last line reads `N of N suites passed`, and the versions are recorded in "Where things stand".
 
-### M1 The fork repository
+### M1 The fork repository — done 2026-11-20
 
-1. **Done (2026-11-20):** the user created the fork in GitHub's web UI; it is at https://github.com/Haini/memories.
-   `gh` is not installed here; do not install tools to work around anything that needs the user on GitHub.
-2. Clone it **outside this repository**, e.g. next to it, at `$FORK`. Add the upstream as a remote:
-   `git remote add upstream https://github.com/pulsejet/memories.git`, then `git fetch upstream --tags`.
+Done: steps 1, 3, 4 (on the identical prototype), 5, 6 and the planted fault. The branch `facewright` (`bbb4f38c`)
+is pushed. A cold session does only step 2, to get a working clone, and keeps the rest as the reference for M12's
+rebases.
+
+1. The user created the fork in GitHub's web UI: https://github.com/Haini/memories. `gh` is not installed here. Do
+   not install tools to work around anything that needs the user on GitHub.
+2. Clone it **outside this repository**, e.g. next to it, at `$FORK`: `git clone -b facewright
+   git@github.com:Haini/memories.git "$FORK"`. Add the upstream as a remote, `git remote add upstream
+   https://github.com/pulsejet/memories.git`, then run `git fetch upstream --tags`. The fork carries no tags, and
+   M2 and M12 need them.
+   - Check: `git log --oneline -2` shows `bbb4f38c` on top of "chore(release): bump to v11.1.4".
+   - Check: `git diff v11.1.4 facewright` is byte-identical to `docs/memories-fork.patch`.
 3. `git switch -c facewright v11.1.4`, `git apply /path/to/facewright/docs/memories-fork.patch`.
 4. Checks: `npx vue-tsc --noEmit -p .`, `npx prettier --check` on the five changed `src/` files, and `php -l` on the
    four changed PHP files.
@@ -169,9 +187,13 @@ plugin, which learns this second prefix.
      /src node:24 ...` after `npm ci --ignore-scripts`.
    - Run `php -l` through the dev Nextcloud container: `docker exec -i recognaize-nextcloud-1 php -l < file`.
 5. **The two greps** that prove nothing escaped the setting:
-   - `grep -rn "recognize_face_" lib | grep -v lib/Migration` names only the two helpers.
-   - `grep -rn "/recognize/" src` names only `src/services/router.ts`'s `/recognize/:user/:name`, which is Memories'
-     own page URL, not the DAV tree.
+   - `grep -rn "recognize_face_" lib | grep -v lib/Migration` prints **nothing**.
+     - The two helpers in `RecognizeBackend.php` build the names as `recognizeProvider().'_face_detections'`.
+     - `grep -rn "_face_detections\|_face_clusters" lib | grep -v lib/Migration` shows the helpers and a docblock in
+       `SystemConfig.php`.
+   - `grep -rn "/recognize/" src` names exactly two lines, and neither is the DAV tree:
+     - `src/services/router.ts`'s `/recognize/:user/:name` is Memories' own page URL.
+     - `src/services/API.ts`'s `` `${BASE}/recognize/api-key` `` is Memories' own API route (`appinfo/routes.php`).
 6. Commit as **one** commit, "Recognize provider setting: read Recognize-format tables and DAV tree of another app".
    Push the branch with the user's go-ahead.
 
