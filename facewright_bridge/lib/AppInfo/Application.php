@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\AppInfo;
 
+use OCA\DAV\Connector\Sabre\Principal;
 use OCA\DAV\Events\SabrePluginAddEvent;
 use OCA\FacewrightBridge\Listener\FileAccessListener;
 use OCA\FacewrightBridge\Listener\FileCreatedListener;
@@ -46,6 +47,11 @@ class Application extends App implements IBootstrap {
 
 		// Refuses writes to Recognize's DAV tree - see RecognizeWriteRouterPlugin.
 		$context->registerEventListener(SabrePluginAddEvent::class, SabrePluginListener::class);
+
+		// The collection of our own DAV tree (Dav\Tree\RootCollection, registered in info.xml) takes the principal
+		// backend by constructor parameter name, which is how Nextcloud's container resolves it; Recognize's
+		// RootCollection does the same.
+		$context->registerServiceAlias('principalBackend', Principal::class);
 	}
 
 	public function boot(IBootContext $context): void {

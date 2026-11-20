@@ -245,6 +245,32 @@ class PeopleService {
 	}
 
 	/**
+	 * One of $userId's faces: its file and where it sits. The DAV tree needs it to address a face by the id in a path
+	 * and to check that the path names the right person.
+	 *
+	 * @return array{id: int, file_id: int, state: int, cluster_id: ?int}
+	 * @throws \InvalidArgumentException if $detectionId isn't $userId's
+	 */
+	public function getFace(string $userId, int $detectionId): array {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('u.id', 'f.file_id', 'u.state', 'u.cluster_id')
+			->from('facewright_user_faces', 'u')
+			->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
+			->where($qb->expr()->eq('u.id', $qb->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)));
+		$row = $qb->executeQuery()->fetchAssociative();
+		if ($row === false) {
+			throw new \InvalidArgumentException("Face {$detectionId} does not exist for {$userId}.");
+		}
+		return [
+			'id' => (int)$row['id'],
+			'file_id' => (int)$row['file_id'],
+			'state' => (int)$row['state'],
+			'cluster_id' => $row['cluster_id'] !== null ? (int)$row['cluster_id'] : null,
+		];
+	}
+
+	/**
 	 * Faces in one state, and in one person when the state is ASSIGNED. Geometry and file come from
 	 * the physical face (facewright_faces).
 	 *

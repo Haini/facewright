@@ -66,7 +66,11 @@ run writers-cluster-own    with_own "$DEV_DIR/writers-cluster.sh"
 run writers-files-own      with_own "$DEV_DIR/writers-files.sh"
 run persist-guard-own      with_own "$DEV_DIR/persist-guard.sh"
 run project-concurrency-own with_own "$DEV_DIR/project-concurrency.sh"
-run dav-battery-own        with_own "$DEV_DIR/battery.sh"
+run dav-battery-recognize-own with_own "$DEV_DIR/battery.sh"
+# The bridge's own DAV tree (docs/memories-fork.md, M7): the same requests as dav-battery, answered by Dav\Tree, once with
+# only the recognize target and once with own next to it.
+run dav-battery-bridge     env TREE=facewright_bridge "$DEV_DIR/battery.sh"
+run dav-battery-own        with_own env TREE=facewright_bridge "$DEV_DIR/battery.sh"
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
 fail=0; for r in "${results[@]}"; do [ "$r" -ne 0 ] && fail=$((fail+1)); done

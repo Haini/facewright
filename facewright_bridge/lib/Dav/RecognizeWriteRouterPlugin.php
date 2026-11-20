@@ -20,6 +20,11 @@ use Sabre\HTTP\ResponseInterface;
  * (`recognize/{user}/faces/...`) and runs them through PeopleService instead, so they land in the
  * data this app owns rather than in Recognize's code (docs/own-tables.md).
  *
+ * The same requests are accepted under a second root, `facewright_bridge/`, which is this app's own tree
+ * (Dav\Tree\RootCollection) and the one the fork of Memories writes to when its provider setting names this app
+ * (docs/memories-fork.md). The two trees have the same shape and the same behaviour, and a request stays inside one
+ * of them: a `Destination` under the other root is refused, so nothing moves from one tree into the other.
+ *
  * The five requests those apps send, and what they become:
  *
  *   MKCOL   faces/{name}                          create a person
@@ -46,7 +51,8 @@ use Sabre\HTTP\ResponseInterface;
  * `occ facewright:project --hydrate` plus the Stage D files (docs/own-tables.md, Rollback).
  */
 class RecognizeWriteRouterPlugin extends ServerPlugin {
-	private const PATH_PREFIX = 'recognize/';
+	/** The two trees this class answers writes for. The fork of Memories uses the second. */
+	private const ROOTS = ['recognize', 'facewright_bridge'];
 
 	/** Methods this class turns into PeopleService calls. */
 	private const ROUTED_METHODS = ['MKCOL', 'MOVE', 'DELETE'];
@@ -123,7 +129,12 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 	}
 
 	private function applies(RequestInterface $request): bool {
-		return str_starts_with($request->getPath(), self::PATH_PREFIX);
+		foreach (self::ROOTS as $root) {
+			if (str_starts_with($request->getPath(), $root . '/')) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -134,7 +145,7 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 	 */
 	private function parse(RequestInterface $request): ?array {
 		$source = explode('/', trim($request->getPath(), '/'));
-		if (count($source) < 4 || $source[0] !== 'recognize' || $source[1] === '') {
+		if (count($source) < 4 || !in_array($source[0], self::ROOTS, true) || $source[1] === '') {
 			return null;
 		}
 		$user = $source[1];
@@ -158,7 +169,8 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 
 			case 'MOVE':
 				$destination = $this->destination($request);
-				if ($destination === null || count($destination) < 4 || $destination[1] !== $user || $destination[2] !== 'faces') {
+				// The destination stays in the tree the request came in on: nothing moves between the two roots.
+				if ($destination === null || count($destination) < 4 || $destination[0] !== $source[0] || $destination[1] !== $user || $destination[2] !== 'faces') {
 					return null;
 				}
 				if ($count === 4 && $source[2] === 'faces' && count($destination) === 4) {
