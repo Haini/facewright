@@ -66,6 +66,10 @@ class Session:
     def take_dav(self):
         out, self.dav = self.dav, []; return out
     def face_ids_on_page(self):
+        # Memories 11.1.4 draws the tiles later than 11.0.2 did (a fixed 4.5 s was not enough); wait for the first one.
+        # A page that really has none still ends in the caller's `need`, with "have 0".
+        try: self.page.wait_for_selector(".p-outer", timeout=20000)
+        except Exception: pass
         classes = self.page.eval_on_selector_all(".p-outer", "els=>els.map(e=>e.className)")
         return [int(m.group(1)) for c in classes for m in [re.search(r"p-outer--(\d+)", c)] if m]
     def select_tile(self, face_id=None):

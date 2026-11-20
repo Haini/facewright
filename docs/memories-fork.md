@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0, M1 and M2 are done (2026-11-20); the bridge is unchanged.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M3 are done (2026-11-20); the bridge is unchanged.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -23,10 +23,17 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
   `bin-ext/` is identical, the version is 11.1.4. The rebuilt `js/` contains `recognize_provider` in 3 files and the
   release's in none. The build is **not reproducible byte for byte** (two runs gave different sha256), so record the
   hash of the one you deploy.
+- **M3 (measured):** the `.git/` pin works. `--showonly` printed `memories new version available: 11.1.4`, then with
+  `custom_apps/memories/.git` present `All apps are up-to-date or no updates could be found`, then after `rmdir` the
+  `memories` line again. `occ app:update memories` printed `memories updated`; dev now runs **Memories 11.1.4** (bridge
+  0.11.0, recognize 12.0.3) and migration `900008Date20261104000000` is recorded. `dev/run-all.sh --ui` on it:
+  `29 of 29 suites passed`, after one fix to `dev/memories-ui/flows.py` (11.1.4 draws the person page's tiles later;
+  the flow now waits for the first tile instead of a fixed 4.5 s). The oracle `dev/.work/fork/stock.json`:
+  `STABLE: two captures identical`, then `captured admin: 297 people, 2713 photo entries`.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M3.**
+**Next: M4.**
 
 ## How to work this plan
 
@@ -236,7 +243,7 @@ leave an old one next to its error:
 - `bin-ext/` is identical.
 - **Planted fault:** in step 4, copy `appinfo/` over the release without the `rm -rf`. Step 5 must abort. Restore it.
 
-### M3 Dev: prove the pin, then the store update to v11.1.4
+### M3 Dev: prove the pin, then the store update to v11.1.4 — done 2026-11-20
 
 1. `occ app:update --showonly` lists `memories` (11.1.4 on 2026-11-19).
 2. `docker exec -u www-data recognaize-nextcloud-1 mkdir /var/www/html/custom_apps/memories/.git`. `--showonly` no
@@ -251,8 +258,8 @@ leave an old one next to its error:
    - If a Memories UI flow fails because 11.1.4 changed its UI, fix `dev/memories-ui/flows.py` first. That is stock
      behaviour, not ours; commit it on its own.
 6. **The oracle for every later step:** `dev/memories-api.py stable` must print `STABLE`, then `dev/memories-api.py
-   capture dev/.work/fork/stock.json`. It captures, as Memories' API returns them, the people, each person's photos and
-   the unassigned faces, for admin and bob. Ids are ours in every target, so the captures compare directly. **Take
+   capture dev/.work/fork/stock.json`. It captures, as Memories' API returns them, the people and each person's photos
+   (`days`) for admin. Bob is not captured: he has no Memories timeline folder, so Memories refuses him. Ids are ours in every target, so the captures compare directly. **Take
    every capture in this plan right after `dev/snapshot.sh restore original`**, so that they all start from the same
    data. With `own` configured (M6 on), restore also refills the `own` tables.
 
