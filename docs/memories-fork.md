@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M8 are done (2026-11-20). Dev runs the fork with the provider setting unset (stock behaviour); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. With both on and the provider set, Memories works with Recognize disabled.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M9 are done (2026-11-20). Dev runs the fork with the provider setting unset (stock behaviour); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. With both on and the provider set, Memories works with Recognize disabled.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -94,10 +94,19 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
     `faces.enabled` `true`.
   - `dev/run-all.sh --ui` now also runs `memories-ui-bridge` and `memories-ui-bridge-off` (`with_provider`,
     `with_recognize_off`); the full run is at the end of M9.
+- **M9 (measured), the rollback drill, each step followed by `snapshot.sh restore original`, a capture and a compare
+  with `stock.json`:** fork with provider ours `identical`; provider setting removed (0.3 s) `identical`, flows with
+  `PROVIDER=recognize` 21 passed; **store build back** (swap 0.8 s, not pinned, `signature.json` present, no
+  `recognizeProvider` in it) `identical`; **fork forward** (swap 2.2 s, setting back 0.3 s) `identical`, flows with
+  `PROVIDER=facewright_bridge` 21 passed. `dev/run-all.sh --ui`: **`40 of 40 suites passed`** (the 38 before, plus
+  `memories-ui-bridge` and `memories-ui-bridge-off`).
+  - **Order matters on the way back:** the store build ignores the provider setting and reads Recognize's tables. So
+    the setting is removed first (while the fork is still there), then the folder swapped; with the setting left in
+    place the store build would show Recognize's copy, which is only right while Recognize is enabled and a target.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M9.**
+**Next: M10 (docs). M11 needs the user.**
 
 ## How to work this plan
 
@@ -480,7 +489,7 @@ leave an old one next to its error:
 - **Planted fault:** delete one row from the `own` detections table while the provider is ours. The capture must
   differ: Memories reads ours. Then repair with `project --target=own`.
 
-### M9 Dev: rollback drill
+### M9 Dev: rollback drill — done 2026-11-20
 
 1. Provider back to `recognize` (`occ config:system:delete memories.recognize.provider`). Capture and compare: identical.
    Flows with `PROVIDER=recognize` pass.
