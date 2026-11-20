@@ -9,7 +9,9 @@ from what the People page lists and from the database, so the flows work on any 
 Needs the virtualenv (dev/setup-venv.sh) and a People page that lists at least five titled people.
 Run:   dev/.work/venv/bin/python dev/memories-ui/flows.py        (restore a snapshot afterwards: flows 4 and 5 change data)
 Environment: MEMORIES_URL (default http://127.0.0.1:8080), ADMIN_USER, ADMIN_PASS, DB_CONTAINER, DB_USER, DB_PASS,
-DB_NAME, NC_CONTAINER.
+DB_NAME, NC_CONTAINER, and PROVIDER (default recognize): the app the fork of Memories is set to read (`occ config:system:set
+memories.recognize.provider`). With `facewright_bridge` the database checks look at the `own` projection target's tables,
+and every flow also asserts that no request went to the other DAV tree (docs/memories-fork.md, M8).
 """
 import json, os, re, subprocess, sys, urllib.parse
 from playwright.sync_api import sync_playwright
@@ -19,6 +21,13 @@ USER = os.environ.get("ADMIN_USER", "admin"); PASSWORD = os.environ.get("ADMIN_P
 DB = [os.environ.get("DB_CONTAINER", "recognaize-db-1"), os.environ.get("DB_USER", "nextcloud"), os.environ.get("DB_PASS", "dev-nextcloud-password"), os.environ.get("DB_NAME", "nextcloud")]
 NC = os.environ.get("NC_CONTAINER", "recognaize-nextcloud-1")
 PASS = FAIL = 0
+PROVIDER = os.environ.get("PROVIDER", "recognize")
+# The tables Memories reads for each provider: Recognize's own, or the bridge's `own` projection target.
+TABLES = {"recognize": ("oc_recognize_face_detections", "oc_recognize_face_clusters"),
+          "facewright_bridge": ("oc_facewright_bridge_face_detections", "oc_facewright_bridge_face_clusters")}
+if PROVIDER not in TABLES: sys.exit(f"PROVIDER must be one of {', '.join(TABLES)}")
+DET, CLU = TABLES[PROVIDER]
+OTHER = next(t for t in TABLES if t != PROVIDER)   # the DAV tree no request may go to
 
 def sql(q):
     r = subprocess.run(["docker", "exec", DB[0], "mariadb", "-u" + DB[1], "-p" + DB[2], DB[3], "-N", "-e", q], capture_output=True, text=True)
@@ -49,8 +58,9 @@ def need(label, actual, minimum):
 
 class Session:
     def __init__(self, p):
-        self.browser = p.chromium.launch(); self.page = self.browser.new_context(viewport={"width": 1300, "height": 900}).new_page(); self.dav = []
-        self.page.on("response", lambda r: self.dav.append((r.request.method, r.status)) if "/dav/recognize" in r.url else None)
+        self.browser = p.chromium.launch(); self.page = self.browser.new_context(viewport={"width": 1300, "height": 900}).new_page(); self.dav = []; self.stray = []
+        self.page.on("response", lambda r: self.dav.append((r.request.method, r.status)) if f"/dav/{PROVIDER}/" in r.url else None)
+        self.page.on("response", lambda r: self.stray.append((r.request.method, r.status, r.url)) if f"/dav/{OTHER}/" in r.url else None)
         self.page.goto(BASE + "/login"); self.page.fill("input[name=user]", USER); self.page.fill("input[name=password]", PASSWORD)
         self.page.click("button[type=submit]"); self.page.wait_for_url("**/apps/**", timeout=60000)
     def goto(self, path, wait=4500): self.page.goto(BASE + path); self.page.wait_for_timeout(wait)
@@ -65,6 +75,8 @@ class Session:
         return sorted({t.split("\n")[0] for t in self.page.eval_on_selector_all(".toastify, [class*=toast]", "els=>els.map(e=>e.innerText.trim()).filter(Boolean)")})
     def take_dav(self):
         out, self.dav = self.dav, []; return out
+    def no_stray(self):
+        out, self.stray = self.stray, []; check(f"   no request went to the {OTHER} tree", [], out)
     def face_ids_on_page(self):
         # Memories 11.1.4 draws the tiles later than 11.0.2 did (a fixed 4.5 s was not enough); wait for the first one.
         # A page that really has none still ends in the caller's `need`, with "have 0".
@@ -77,8 +89,8 @@ class Session:
         tile.hover(); self.page.wait_for_timeout(300); tile.locator(".select").click(); self.page.wait_for_timeout(700)
 
 def person_url(name): return f"/apps/memories/recognize/{USER}/" + urllib.parse.quote(name)
-def title_of(pid): return one(f"SELECT title FROM oc_recognize_face_clusters WHERE id={pid}")
-def cluster_of(face): return one(f"SELECT IFNULL(cluster_id,'NULL') FROM oc_recognize_face_detections WHERE id={face}")
+def title_of(pid): return one(f"SELECT title FROM {CLU} WHERE id={pid}")
+def cluster_of(face): return one(f"SELECT IFNULL(cluster_id,'NULL') FROM {DET} WHERE id={face}")
 def n_in(pid): return int(one(f"SELECT COUNT(*) FROM oc_facewright_user_faces WHERE cluster_id={pid}"))
 
 def main():
@@ -89,8 +101,8 @@ def main():
         hrefs = s.page.eval_on_selector_all(f"a[href*='/recognize/{USER}/']", "els=>els.map(e=>e.getAttribute('href'))")
         names = [urllib.parse.unquote(h.rstrip('/').split('/')[-1]) for h in hrefs]
         names = [n for n in dict.fromkeys(names) if n and n != "NULL" and not n.isdigit()]
-        ids = {n: one(f"SELECT id FROM oc_recognize_face_clusters WHERE user_id='{USER}' AND title='{esc(n)}'") for n in names}
-        names = [n for n in names if ids[n] and int(one(f"SELECT COUNT(*) FROM oc_recognize_face_clusters WHERE user_id='{USER}' AND title='{esc(n)}'")) == 1]
+        ids = {n: one(f"SELECT id FROM {CLU} WHERE user_id='{USER}' AND title='{esc(n)}'") for n in names}
+        names = [n for n in names if ids[n] and int(one(f"SELECT COUNT(*) FROM {CLU} WHERE user_id='{USER}' AND title='{esc(n)}'")) == 1]
         print("== data"); need("titled people listed by Memories' People page", len(names), 5)
         X, Y, M1, M2, R = names[:5]; xi, yi, m1i, m2i, ri = (int(ids[n]) for n in (X, Y, M1, M2, R))
         print(f"  rename [{X}], remove/move a face of [{Y}], merge [{M1}] into [{M2}], remove [{R}]")
@@ -98,7 +110,7 @@ def main():
         print("== 1. rename a person (and back)")
         s.goto(person_url(X)); s.actions(); s.menu("Rename person")
         s.page.locator(".modal-container input").first.fill("UI Renamed"); s.page.keyboard.press("Enter"); s.page.wait_for_timeout(3000)
-        check("Memories sent one MOVE and it succeeded", [("MOVE", 201)], s.take_dav())
+        check("Memories sent one MOVE and it succeeded", [("MOVE", 201)], s.take_dav()); s.no_stray()
         check("   no error toast", [], [t for t in s.toasts() if re.search("fail|error", t, re.I)])
         check("   the name in the database", "UI Renamed", title_of(xi))
         s.goto(person_url("UI Renamed")); s.actions(); s.menu("Rename person")
@@ -110,7 +122,7 @@ def main():
         face = on_page[0]; check("   the face is in the person to begin with", str(yi), cluster_of(face))
         s.select_tile(face); s.page.locator("button[aria-label=Actions]").last.click(); s.page.wait_for_timeout(600); s.menu("Remove from person")
         s.page.wait_for_timeout(3000)
-        check("Memories sent one DELETE and it succeeded", [("DELETE", 204)], s.take_dav())
+        check("Memories sent one DELETE and it succeeded", [("DELETE", 204)], s.take_dav()); s.no_stray()
         check("   no error toast", [], [t for t in s.toasts() if re.search("fail|error", t, re.I)])
         check("   the face is unassigned (-1) in the database", "-1", cluster_of(face))
 
@@ -120,7 +132,7 @@ def main():
         s.select_tile(moving); s.page.locator("button[aria-label='Move to person'], button:has-text('Move to person')").first.click(); s.page.wait_for_timeout(900)
         s.page.locator(".modal-container").get_by_text(Y, exact=True).first.click(force=True); s.page.wait_for_timeout(1200); s.press("Move", "Continue")
         s.page.wait_for_timeout(3500)
-        check("Memories sent one MOVE and it succeeded", [("MOVE", 201)], s.take_dav())
+        check("Memories sent one MOVE and it succeeded", [("MOVE", 201)], s.take_dav()); s.no_stray()
         check("   the face moved to the person (database)", str(yi), cluster_of(moving))
         restore.append(([moving], int(before)) if before.lstrip("-").isdigit() and int(before) > 0 else ([], 0))
         restore.append(([face], yi))
@@ -130,16 +142,16 @@ def main():
         before_m2 = n_in(m2i); s.actions(); s.menu("Merge with different person")
         s.page.locator(".modal-container").get_by_text(M2, exact=True).first.click(force=True); s.page.wait_for_timeout(1200); s.press("Continue")
         s.page.wait_for_timeout(5000); dav = [d for d in s.take_dav() if d[0] == "MOVE"]   # the merge also PROPFINDs the list
-        check("every MOVE Memories sent succeeded", True, bool(dav) and all(c == 201 for m, c in dav))
+        check("every MOVE Memories sent succeeded", True, bool(dav) and all(c == 201 for m, c in dav)); s.no_stray()
         check("   one MOVE per face on the page", len(moved), len(dav))
         check("   the other person grew by that many", before_m2 + len(moved), n_in(m2i))
         restore.append((moved, m1i))
 
         print("== 5. remove a person (changes data)")
         faces_r = n_in(ri); s.goto(person_url(R)); s.actions(); s.menu("Remove person"); s.press("Delete"); s.page.wait_for_timeout(3000)
-        check("Memories sent one DELETE and it succeeded", [("DELETE", 204)], s.take_dav())
-        check("   the person is gone", "0", one(f"SELECT COUNT(*) FROM oc_recognize_face_clusters WHERE id={ri}"))
-        check("   its faces are unassigned", str(faces_r), one(f"SELECT COUNT(*) FROM oc_facewright_user_faces WHERE state=2 AND id IN (SELECT id FROM oc_recognize_face_detections WHERE cluster_id=-1)") if faces_r == 0 else
+        check("Memories sent one DELETE and it succeeded", [("DELETE", 204)], s.take_dav()); s.no_stray()
+        check("   the person is gone", "0", one(f"SELECT COUNT(*) FROM {CLU} WHERE id={ri}"))
+        check("   its faces are unassigned", str(faces_r), one(f"SELECT COUNT(*) FROM oc_facewright_user_faces WHERE state=2 AND id IN (SELECT id FROM {DET} WHERE cluster_id=-1)") if faces_r == 0 else
               one(f"SELECT COUNT(*) FROM oc_facewright_user_faces WHERE state=2") and str(faces_r) if int(one("SELECT COUNT(*) FROM oc_facewright_user_faces WHERE state=2")) >= faces_r else "fewer than expected")
         s.browser.close()
     for faces, pid in restore:                      # put the data back where the flows found it

@@ -26,6 +26,16 @@ with_own() { occ config:app:set facewright_bridge projection_targets --value=rec
   occ facewright:project --target=own >/dev/null || { echo "could not fill the own tables"; occ config:app:delete facewright_bridge projection_targets >/dev/null; return 1; }
   "$@"; local rc=$?
   occ config:app:delete facewright_bridge projection_targets >/dev/null; return $rc; }
+# The fork of Memories pointed at this app (docs/memories-fork.md, M8): its provider setting, and optionally Recognize
+# disabled. Both put everything back, Recognize's jobs included (CLAUDE.md, "Coexisting with Recognize").
+with_provider() { occ config:system:set memories.recognize.provider --value=facewright_bridge >/dev/null
+  "$@"; local rc=$?
+  occ config:system:delete memories.recognize.provider >/dev/null; return $rc; }
+with_recognize_off() { occ app:disable recognize >/dev/null; reload_web
+  "$@"; local rc=$?
+  occ app:enable recognize >/dev/null
+  for id in $(sql "SELECT id FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'"); do echo y | docker exec -i -u www-data "$NC_CONTAINER" php occ background-job:delete "$id" >/dev/null 2>&1; done
+  return $rc; }
 echo "(a snapshot restore precedes every suite)"
 run reads-stable           "$DEV_DIR/reads.sh" stable
 run reads-direct-stable    "$DEV_DIR/reads-direct.sh" stable
@@ -72,6 +82,9 @@ run dav-battery-recognize-own with_own "$DEV_DIR/battery.sh"
 run dav-battery-bridge     env TREE=facewright_bridge "$DEV_DIR/battery.sh"
 run dav-battery-own        with_own env TREE=facewright_bridge "$DEV_DIR/battery.sh"
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
+# The same flows with the fork reading the own tables and writing to the bridge's tree, then with Recognize disabled too.
+[ $ui = yes ] && run memories-ui-bridge     with_own with_provider env PROVIDER=facewright_bridge "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
+[ $ui = yes ] && run memories-ui-bridge-off with_own with_provider with_recognize_off env PROVIDER=facewright_bridge "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
 fail=0; for r in "${results[@]}"; do [ "$r" -ne 0 ] && fail=$((fail+1)); done
 echo "$((${#results[@]}-fail)) of ${#results[@]} suites passed"; [ $fail -eq 0 ]

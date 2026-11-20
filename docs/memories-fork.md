@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M7 are done (2026-11-20); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. Neither is switched on for Memories: the provider setting is still unset.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M8 are done (2026-11-20). Dev runs the fork with the provider setting unset (stock behaviour); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. With both on and the provider set, Memories works with Recognize disabled.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -78,10 +78,26 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
   - `dev/run-all.sh --ui`: 37 of 38 suites passed; the one failure was `rollback-drill`, whose Stage D router predates the
     cross-tree rule that the battery now checks. The battery takes `CROSS_TREE=no` for it; the drill alone then passed
     24 of 24. A full run is repeated at the end of M8.
+- **M8 (measured), provider `facewright_bridge`, `projection_targets=recognize,own`:**
+  - Capture right after `snapshot.sh restore original`: `identical` to `stock.json` (297 people, 2713 photo entries), with
+    Recognize enabled, **disabled**, and enabled again. The frontend config carries `recognize_provider:
+    facewright_bridge`; the API-key endpoint returns `{"apiKey":""}`; Memories' settings page and app page answer 200.
+  - `dev/memories-ui/flows.py` with `PROVIDER=facewright_bridge` (database checks on the `own` tables, and every flow asserts
+    that no request went to `/dav/recognize`): **21 passed**, with Recognize enabled and again with it disabled (merge:
+    one PROPFIND of our tree and 11 MOVEs). The log held no warning or error from `memories` or `facewright_bridge`
+    during the disabled run.
+  - **Planted faults:** one row deleted from the `own` detections made the capture differ (`person 100001 ... count 4 ->
+    3`) and `project --target=own` repaired it, `identical` again. The flows run with `PROVIDER=recognize` while the
+    fork was set to the bridge: 11 of 21 failed, with `no request went to the facewright_bridge tree` listing the stray
+    MOVE, DELETE and PROPFIND requests.
+  - `app:enable recognize` re-added its `MaintenanceJob`; deleting it in the same chain left 0 Recognize jobs and
+    `faces.enabled` `true`.
+  - `dev/run-all.sh --ui` now also runs `memories-ui-bridge` and `memories-ui-bridge-off` (`with_provider`,
+    `with_recognize_off`); the full run is at the end of M9.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M8.**
+**Next: M9.**
 
 ## How to work this plan
 
@@ -439,11 +455,12 @@ leave an old one next to its error:
   - Make `UserHome` skip the user check: the other-user PROPFIND check fails.
   - Name children by file id instead of face id: the merge-listing check fails.
 
-### M8 Dev: point the fork at the bridge
+### M8 Dev: point the fork at the bridge — done 2026-11-20
 
 1. `projection_targets=recognize,own` and `occ facewright:project --target=own` clean. Then `occ config:system:set
    memories.recognize.provider --value=facewright_bridge`.
-2. Capture, and compare with `stock.json`: identical.
+2. Capture, and compare with `stock.json`: identical. **Restore the snapshot first**: UI flows delete a person and make
+   Memories write cover rows, so a capture taken after them differs for reasons that have nothing to do with the provider.
 3. **`dev/memories-ui/flows.py` takes `PROVIDER`** (default `recognize`). Its DAV filter (`"/dav/recognize"`) and its
    SQL use `oc_{PROVIDER}_face_detections`/`_clusters`, except that `facewright_bridge` maps to the `own` tables. Each
    flow also asserts that **no** request went to `/dav/recognize` when the provider is ours. Run it with
