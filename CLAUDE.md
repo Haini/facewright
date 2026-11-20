@@ -64,7 +64,9 @@ our people service, and a Memories change (now in a fork, Stage G) as the end st
 `recognize`-contract shim. Stage G (decided 2026-11-19, since pulsejet/memories#1812 got no answer) is a fork of
 Memories, same app id, replacing the store app: a system setting names the app whose Recognize-format tables and WebDAV
 tree its Recognize backend uses, so the copy and the tree become ours and Recognize can go. Its plan is
-`docs/memories-fork.md`.
+`docs/memories-fork.md`. With the setting `memories.recognize.provider` set to `facewright_bridge`, Memories reads the
+`own` projection target's tables and writes to this app's DAV tree (`/remote.php/dav/facewright_bridge/`), and works with
+Recognize disabled; unset, it is stock Memories. Built and verified on the dev stack; not on live yet.
 
 ## Components
 
@@ -131,9 +133,15 @@ Services (`lib/Service/`):
   (default 0.6, uncalibrated). Dismissed pairs live in `facewright_merge_dismissals`.
 - `BatchTriggerService` — enumerates unprocessed candidates for enabled users and enqueues jobs.
 - `FaceStore` — the only writer of `facewright_user_faces` / `facewright_clusters` (see "Our own tables").
-- `ProjectionService` — copies them into Recognize's tables for Memories, and reconciles drift; the one place that
-  writes `recognize_face_detections` / `_clusters` (plus the deliberate direct statements in `ResetService`,
-  `PeopleService::moveLegacyMembers` and `VectorCompactionService`).
+- `ProjectionService` — copies them into the tables Memories reads, and reconciles drift. It writes every configured
+  **target** (app config `projection_targets`, a comma list, unset = `recognize`): `recognize` is `recognize_face_detections`
+  / `_clusters` (the one place that writes them, plus the deliberate direct statements in `ResetService`,
+  `PeopleService::moveLegacyMembers` and `VectorCompactionService`), `own` is `facewright_bridge_face_detections` /
+  `_clusters`, which the fork of Memories reads and nothing but this class writes. Each target has its own `try` and its
+  own reconcile (`own` has no hidden-state remnants, squatters or legacy rows); the dirty flag is shared.
+- `lib/Dav/` — `RecognizeWriteRouterPlugin` (the writes, for both roots) and `Tree/`: the read-only DAV tree
+  `facewright_bridge/{user}/faces/{person}/{faceId}-{file}` and `unassigned-faces/{faceId}-{file}` (a listing of the latter is
+  405), registered through `info.xml` (`<types><dav/>`, `<sabre>`) and a `principalBackend` alias in `Application`.
 - `ResetService`, `VectorCompactionService` — maintenance.
 
 Background jobs (`lib/BackgroundJob/`):
@@ -145,7 +153,7 @@ Background jobs (`lib/BackgroundJob/`):
 - `AccessSyncJob` / `FileAccessSyncJob` — reconcile rows after access changes.
 - `DetectionMaintenanceJob`, `ClusteringMaintenanceJob` — hourly `TimedJob`s that restart the
   respective chain if new work exists. These are the safety net when an event is missed.
-- `ProjectionMaintenanceJob` — hourly reconcile of Recognize's tables against ours, capped per run.
+- `ProjectionMaintenanceJob` — hourly reconcile of every configured target against ours, capped per run.
 
 Listeners (`lib/Listener/`):
 - `FileCreatedListener` — `NodeCreatedEvent`, `CacheEntryInsertedEvent` and `NodeRenamedEvent`
@@ -191,8 +199,8 @@ writes nothing, for measuring against a database that must not change), `facewri
 see "Schema mapping").
 `facewright:own-tables --precheck | --migrate | --verify | --seed-ids` (the move into our own tables; `--migrate`
 needs processing paused and refuses once our tables hold faces, as does `migrate-faces`; `--verify` checks ours internally and Recognize's copy through the projection's reconcile;
-`docs/own-tables.md`), `facewright:project [--dry-run] [--hydrate] [--user=<uid>] [--limit=<n>]` (report and repair the
-copy Memories reads; `--hydrate` is the rollback).
+`docs/own-tables.md`), `facewright:project [--dry-run] [--hydrate] [--user=<uid>] [--limit=<n>] [--target=recognize|own]` (report and repair the
+copy Memories reads, one report per configured target; `--hydrate` is the rollback and `recognize` only).
 
 ## Invariants — read before touching the tables
 
@@ -282,6 +290,9 @@ ignored) are the source of truth for people and face assignments (`docs/own-tabl
   such legacy rows with the person (`PeopleService::moveLegacyMembers`).
 - **A read and the guard on the write that follows it must test the same table**, and a chain's progress must mean
   rows *written*, not matches found.
+- **Every target is written by `ProjectionService` only, and the `own` tables by nothing else at all.** A second writer
+  would make `own` a table with two sources of truth, and the fork of Memories reads it as if it had one. Nothing
+  else reads it except that fork (and `--verify`, the oracle in `dev/lib.sh`).
 - The DAV router has no off switch. Rolling back is `occ facewright:project --hydrate` plus the Stage D files, with
   `info.xml`'s version kept at the installed one (a lower one makes Nextcloud demand an upgrade and take the site
   down); see "Rollback" in `docs/own-tables.md`.
@@ -451,6 +462,27 @@ that are easy to get wrong:
 
 Large data rewrites belong in resumable `occ` commands, not migrations — `occ upgrade`'s
 maintenance window is the wrong place for gigabytes of `UPDATE`s.
+
+Two more that bit with the DAV tree: Nextcloud reads `<sabre>` collections only from apps that declare `<types><dav/>`,
+and the collection's `$principalBackend` constructor parameter resolves only through `registerServiceAlias('principalBackend',
+...)`; without the alias every DAV request of the instance answers 500, Files included.
+
+### Memories (the fork)
+
+`docs/memories-fork.md` has the design, the steps and what was measured. What is easy to get wrong:
+
+- **It is a build, not a checkout.** `scripts/facewright-build.sh` in the fork takes the official release tarball of the tag
+  and replaces `lib/ appinfo/ templates/ l10n/ img/` and a rebuilt `js/`; `bin-ext/` stays as released, and the build has no
+  `appinfo/signature.json`. Record the sha256 of the tarball you deploy: two builds of the same commit differ.
+- **The folder is swapped, not updated** (remove `custom_apps/memories`, unpack as `www-data`), and carries an empty `.git/`:
+  Nextcloud then treats it as installed from git and never offers a store update over it. Its version is the upstream
+  tag's exactly. `dev/fork-swap.sh` does this on dev.
+- **A rollback is the same version.** Remove the system setting first (`occ config:system:delete
+  memories.recognize.provider`, while the fork is still there), then swap the store build of the same version back. The
+  store build ignores the setting and reads Recognize's tables, which is right only while Recognize is enabled and a
+  target.
+- **Security fixes reach the fork only by rebasing it** on each release (`docs/memories-fork.md`, M12).
+- **After `occ app:enable recognize`, delete its `MaintenanceJob`** in the same chain, as everywhere.
 
 ### Database
 

@@ -54,6 +54,18 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `make-shared-fixture.sh`, `check-fixture.sh` | shared-file fixture and the preconditions the suites need | fixture only |
 | `setup-venv.sh`, `make-portrait.py` | Playwright/Chromium and a real-face test photo (`dev/.work/venv`) | no |
 
+## The Memories fork (docs/memories-fork.md)
+
+- `run-all.sh` has wrappers that set one thing up and put it back: `with_own` (app config `projection_targets=recognize,own`
+  and the own tables filled; every `verify_step` then also runs the cross-target oracle in `lib.sh`), `with_provider`
+  (system config `memories.recognize.provider=facewright_bridge`) and `with_recognize_off` (`occ app:disable recognize`, then
+  enable and delete its jobs). The suites run under them have the suffix `-own`, `-bridge`, `-bridge-off`.
+- `memories-ui/flows.py` takes `PROVIDER=recognize|facewright_bridge`; `battery.sh` takes `TREE=recognize|facewright_bridge`.
+- **Take every `memories-api.py capture` right after `snapshot.sh restore original`**: the UI flows delete a person and make
+  Memories write cover rows, so a capture after them differs for reasons that are not the change under test.
+- `snapshot.sh restore` empties the two own tables and, when `own` is configured, refills them.
+- `rollback-drill.sh` refuses to start with uncommitted changes in `facewright_bridge/`: commit before `run-all.sh`.
+
 ## Why it is not slower
 
 - **App passwords.** `lib.sh` replaces the suites' passwords with app passwords (`fast_pass`, kept in `.work/tokens`), because

@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M9 are done (2026-11-20). Dev runs the fork with the provider setting unset (stock behaviour); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. With both on and the provider set, Memories works with Recognize disabled.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M10 are done (2026-11-20). Dev runs the fork with the provider setting unset (stock behaviour); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. With both on and the provider set, Memories works with Recognize disabled.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -106,7 +106,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M10 (docs). M11 needs the user.**
+**M10 (docs) is done. Next: M11, which needs the user (every live action, with a go-ahead and a fresh dump), and pushing the build script's commit in the fork.**
 
 ## How to work this plan
 
@@ -499,7 +499,7 @@ leave an old one next to its error:
 
 **Verify:** all four compares are identical and the run passes. Record the time each swap took.
 
-### M10 Docs
+### M10 Docs — done 2026-11-20
 
 - **`CLAUDE.md`:**
   - Architecture: the fork, the provider setting, Recognize optional once the provider is ours.

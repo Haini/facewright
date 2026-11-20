@@ -84,6 +84,19 @@ full design history and every incident/gotcha hit building this, if you want the
   are pinned exactly in `requirements.txt`, so a clean build gets the versions known to work.
 - For a real instance: an AppAPI manual-install daemon behind HaRP (see below).
 
+## Optional: running without Recognize (a fork of Memories)
+
+Everything above keeps Recognize installed, because stock Memories only reads Recognize's tables and writes to its DAV
+tree. There is a fork of Memories, [Haini/memories](https://github.com/Haini/memories) (branch `facewright`), that takes
+the app to read from as a system setting (`memories.recognize.provider`). Set to `facewright_bridge`, Memories reads a
+copy of the people data that this project's bridge keeps in tables of its own (app config `projection_targets=recognize,own`)
+and sends its edits to the bridge's DAV tree, so Recognize can be disabled. Unset, the fork behaves like stock Memories.
+
+The fork is installed by building it (`scripts/facewright-build.sh` in the fork: the official release plus its changes), swapping the
+folder in `custom_apps` and pinning it so the App Store does not replace it. **Status: built and checked on the development
+stack against Memories 11.1.4; not yet run on a production instance.** The plan, the steps and what was measured are in
+`docs/memories-fork.md`. Nextcloud's own Photos app still reads Recognize's tables directly and is not covered.
+
 ## Quickstart: try it locally
 
 A `docker-compose.yml` spins up a throwaway Nextcloud + DB for testing the PHP side

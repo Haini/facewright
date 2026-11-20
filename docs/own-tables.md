@@ -30,9 +30,12 @@
 > 4. **Stage G** (the Memories change), **decided 2026-11-19: a fork** of Memories on the user's GitHub account, since
 >    pulsejet/memories#1812 got no answer. Its Recognize backend reads a Recognize-format copy in tables of ours and sends
 >    its writes to a WebDAV tree of ours, selected by a system setting, so Recognize need not be installed. The fork's
->    change is prototyped (`docs/memories-fork.patch`, 9 files, +70/-20). The fork carries it
->    (https://github.com/Haini/memories, branch `facewright`, pushed 2026-11-20: M1 done); our tables and our tree are
->    not built. Dev first. **The plan is `docs/memories-fork.md`** (steps M0 to M12).
+>    change is `docs/memories-fork.patch` (9 files, +70/-20); the fork carries it
+>    (https://github.com/Haini/memories, branch `facewright`). **Built and verified on dev (2026-11-20, steps M0 to M10):**
+>    the bridge (0.12.1) writes the `own` projection target and serves the DAV tree `facewright_bridge/`, the fork reads and
+>    writes them, and Memories works with Recognize disabled; rollback to the store build is rehearsed. **Not on live.**
+>    What is left is M11 (live, each action with the user's go-ahead) and M12 (rebasing the fork on each Memories release).
+>    **The plan and everything measured is `docs/memories-fork.md`.**
 >
 > **A separate track: clustering in the ExApp** (`docs/exapp-clustering.md`, its own "Where things stand"). Compared on
 > live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene are built on dev (S1 to S5).
@@ -928,8 +931,10 @@ fork's change is `docs/memories-fork.patch`. That document wins where the two di
 
 Only after M11 of `docs/memories-fork.md` runs on production.
 
-1. Remove the projection into Recognize's tables, `RecognizeWriteRouterPlugin`, `project --hydrate` and the
-   reconcile classes that only Recognize's handlers made necessary. Our copy (the `own` target) and its reconcile stay.
+1. Remove the `recognize` projection target (its tables are written no more), `project --hydrate`, and the reconcile
+   categories that only Recognize's handlers made necessary (B, squatters, the legacy band). Our copy (the `own`
+   target), its reconcile and the DAV tree `facewright_bridge/` stay. `RecognizeWriteRouterPlugin` stays too, because it
+   applies the writes sent to the bridge's tree: only its `recognize` root goes, and with it the name (rename it then).
 2. Decide with the user whether Recognize can be uninstalled. Photos' People view stops working if it is: Photos reads
    Recognize's tables and tree directly and is not part of this change. If yes: `.noimage` markers become irrelevant,
    CLAUDE.md's coexistence section goes, and `rfd`/`rfc` can be dropped only after a dump.
