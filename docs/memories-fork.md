@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M3 are done (2026-11-20); the bridge is unchanged.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M4 are done (2026-11-20); the bridge is unchanged.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -30,10 +30,22 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
   `29 of 29 suites passed`, after one fix to `dev/memories-ui/flows.py` (11.1.4 draws the person page's tiles later;
   the flow now waits for the first tile instead of a fixed 4.5 s). The oracle `dev/.work/fork/stock.json`:
   `STABLE: two captures identical`, then `captured admin: 297 people, 2713 photo entries`.
+- **M4 (measured), dev now runs the fork:** the build deployed is `build/memories-v11.1.4-facewright.tar.gz`,
+  sha256 `d540449f018bcc46215f8bdc801a9718e206e0ff5a7fac694a77dea3bd4d225c`, pinned with `.git/`, no `signature.json`.
+  - `occ app:list`: `memories: 11.1.4`. `--showonly`: `All apps are up-to-date or no updates could be found`.
+  - `occ setupchecks`: `Code integrity: No altered files` (the store build said the same). `occ integrity:check-app
+    memories`: `App signature not found, skipping app integrity check`.
+  - `/apps/memories/api/config` has `recognize_provider: recognize`; the API-key endpoint returns a key (292 characters).
+  - `compare stock.json m4.json`: `identical`. `dev/run-all.sh --ui`: `29 of 29 suites passed`.
+  - **Planted fault:** `recognizeProvider()` returning `'nonexistent'` made the capture stop with `people list is not a
+    list: {'message': 'Recognize app not enabled or not the required version.'}` and no file. The restored fork
+    captured `identical` again.
+  - **Rollback rehearsal:** store build back (not pinned, with `signature.json`, no `recognizeProvider` in it): capture
+    `identical`; fork forward again: `identical`. A swap takes about 2 s including the web server restart.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M4.**
+**Next: M5.**
 
 ## How to work this plan
 
@@ -266,11 +278,13 @@ leave an old one next to its error:
 **Verify:** steps 1 to 3 printed as described (paste the three outputs into "Where things stand"), `occ app:list` shows
 `memories: 11.1.4`, and the run passes.
 
-### M4 Dev: the fork with the default provider changes nothing
+### M4 Dev: the fork with the default provider changes nothing — done 2026-11-20
 
-1. **Keep the store build.** `docker cp recognaize-nextcloud-1:/var/www/html/custom_apps/memories
-   dev/.work/fork/memories-store-11.1.4`. It is kept on the host, not inside the container's apps directory: a second
-   folder with the id `memories` under an apps path conflicts.
+1. **Keep the store build.** `dev/fork-swap.sh save-store dev/.work/fork/memories-store-11.1.4.tar` (a tar, so the
+   ownership survives; `docker cp` of a folder would give the files the host user's id). It is kept on the host, not
+   inside the container's apps directory: a second folder with the id `memories` under an apps path conflicts.
+   `dev/fork-swap.sh` also does the swaps below (`fork TARBALL`, `store TAR`, `status`) and refuses a tarball that
+   carries `signature.json`.
 2. **Swap in the fork.** Remove the folder in the container. Unpack M2's tarball into
    `/var/www/html/custom_apps/` as `www-data`, then `mkdir .../memories/.git`.
    - This needs no `occ upgrade`: the version is unchanged.
