@@ -60,10 +60,11 @@ Photos app has the same three dependencies. The full coupling inventory, the wri
 causes, and the stages already done are in `docs/independence.md` and
 `docs/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
 data in tables we own, a temporary one-way push to Recognize's tables with Memories' edits routed through
-our people service, and an upstream Memories change as the end state. It replaces the `recognize`-contract shim.
-The preferred upstream shape (Stage G, pulsejet/memories#1812, undecided) is a stand-in: a Memories setting names the
-app whose Recognize-format tables and WebDAV tree its Recognize backend uses, so the copy and the tree become ours and
-Recognize can go.
+our people service, and a Memories change (now in a fork, Stage G) as the end state. It replaces the
+`recognize`-contract shim. Stage G (decided 2026-11-19, since pulsejet/memories#1812 got no answer) is a fork of
+Memories, same app id, replacing the store app: a system setting names the app whose Recognize-format tables and WebDAV
+tree its Recognize backend uses, so the copy and the tree become ours and Recognize can go. Its plan is
+`docs/memories-fork.md`.
 
 ## Components
 
