@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M6 are done (2026-11-20); the bridge (0.12.0) writes the `own` target when `projection_targets` names it; it is not configured anywhere yet.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M7 are done (2026-11-20); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. Neither is switched on for Memories: the provider setting is still unset.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -62,10 +62,26 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
     own`, reconcile cannot repair people). Push skipping `own` people only for a push with no faces (renames, creates):
     `writers-people` under `with_own` printed `FAIL verify after create` and `FAIL own oracle after create ... 0/0/1/0`,
     the same after rename and after an empty person exists (49 passed, 6 failed). Code restored byte for byte.
+- **M7 (measured):** `lib/Dav/Tree/` (`RootCollection`, `UserHome`, `FacesHome`, `PersonCollection`,
+  `UnassignedFacesHome`, `FaceFile`, and a `ReadOnlyCollection` base that refuses every write), `PeopleService::getFace()`,
+  `info.xml` with `<types><dav/></types>` and the `<sabre>` collection (version **0.12.1**), a
+  `registerServiceAlias('principalBackend', Principal::class)` in `Application` (without it every DAV request answered 500
+  `Could not resolve Sabre\DAVACL\PrincipalBackend\BackendInterface`), and the router's second root with the same-tree
+  rule. `dev/battery.sh` takes `TREE`: **Recognize's own tree 58 passed, the bridge's tree 59 passed** (the one extra is the
+  405 for the unassigned listing, which Recognize does not give), the same status codes for the same requests. The
+  listing check compares the 27 face ids of one person with SQL; Recognize's tree gives the same set, which is what
+  shows the expectation is right and not shaped to our code. The bytes of a face file equal the Files tree's (sha256).
+  - **Planted faults, each caught:** no same-tree rule: 11 checks failed, among them `MOVE a person into the other tree
+    expected [403] got [201]`, and the person had really been renamed in the other tree. A root without the user check:
+    `PROPFIND on bob's tree as admin expected [403] got [207]`. Children named by file id: `PROPFIND depth 1 on a
+    person lists exactly its faces` got `244,244,...`.
+  - `dev/run-all.sh --ui`: 37 of 38 suites passed; the one failure was `rollback-drill`, whose Stage D router predates the
+    cross-tree rule that the battery now checks. The battery takes `CROSS_TREE=no` for it; the drill alone then passed
+    24 of 24. A full run is repeated at the end of M8.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M7.**
+**Next: M8.**
 
 ## How to work this plan
 
@@ -391,15 +407,18 @@ leave an old one next to its error:
   - Break one `own` statement (a wrong column name): the push must still write `recognize`, set the dirty flag and log
     one error naming the target, and a People API write must still succeed.
 
-### M7 Bridge: the WebDAV tree
+### M7 Bridge: the WebDAV tree — done 2026-11-20
 
 - `lib/Dav/Tree/`: `RootCollection`, `UserHome`, `FacesHome`, `PersonCollection`, `UnassignedFacesHome`, `FaceFile`,
   as in "The design". They read through `PeopleService` and `IRootFolder`.
   - `PeopleService` gets a read for one face by id (user, state, cluster, file id) if no existing method fits;
     `faceAssignment()` returns only the assignment.
   - Reads take `user_id` from the session, never from the path.
-- `info.xml`: the `<sabre>` block. Bump to **0.12.1**, `occ upgrade`, restart the web container (a new DAV collection
-  behaves like a new route).
+- `info.xml`: the `<sabre>` block, **and `<types><dav/></types>`**: Nextcloud's `PluginManager` reads collections only
+  from apps that declare the `dav` type. Bump to **0.12.1**, `occ upgrade`, restart the web server (`reload_web`).
+  - The collection's constructor takes `$principalBackend` by parameter name; register it in `Application::register()`
+    as `$context->registerServiceAlias('principalBackend', \OCA\DAV\Connector\Sabre\Principal::class)`, as Recognize
+    does. Without it every DAV request of the instance, Files included, answers 500.
 - `RecognizeWriteRouterPlugin`: the second root and the same-tree rule for `Destination`. Update its docblock.
 - **`dev/battery.sh`** takes `TREE` (default `recognize`) for every DAV path. The tables it reads stay our own or
   Recognize's as now, since it checks the writes, which are the same in both trees. New checks:
