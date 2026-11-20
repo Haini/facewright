@@ -7,7 +7,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M4 are done (2026-11-20); the bridge is unchanged.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M5 are done (2026-11-20); the bridge is at 0.12.0 with the two `own` tables, nothing writes them.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -41,11 +41,17 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
     list: {'message': 'Recognize app not enabled or not the required version.'}` and no file. The restored fork
     captured `identical` again.
   - **Rollback rehearsal:** store build back (not pinned, with `signature.json`, no `recognizeProvider` in it): capture
-    `identical`; fork forward again: `identical`. A swap takes about 2 s including the web server restart.
+    `identical`; fork forward again: `identical`. The swap to the fork took 2.2 s including the web server restart (the swap back was not timed).
+- **M5 (measured):** migration `Version000009000Date20261120000000`, bridge **0.12.0**, `occ upgrade` printed `Updated
+  <facewright_bridge> to 0.12.0`. `SHOW CREATE TABLE` on `oc_facewright_bridge_face_detections` and `_clusters` shows
+  exactly the design: `id` bigint NOT NULL without AUTO_INCREMENT, `x y width height` double NOT NULL, `cluster_id`
+  bigint NOT NULL, the keys `fwb_fdet_cluster` / `_user` / `_file` and `fwb_fclust_user`, `utf8mb4_bin` like
+  Recognize's tables, 0 rows in both. After the re-save the snapshot `original` equals `original-pre-m5` and
+  `original-m0` (the own tables are not in it). `dev/run-all.sh --ui`: `29 of 29 suites passed`.
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**Next: M5.**
+**Next: M6.**
 
 ## How to work this plan
 
@@ -305,12 +311,18 @@ leave an old one next to its error:
 - **Planted fault:** in the deployed fork, make `recognizeProvider()` return `'nonexistent'`. The capture must differ:
   the People list is empty or errors. Restore it.
 
-### M5 Bridge: the `own` tables
+### M5 Bridge: the `own` tables — done 2026-11-20
 
 - Migration `Version000009000Date2026MMDD000000` creating the two tables exactly as in "The design". No data. Bump the
   bridge's version to **0.12.0**.
 - Dev: `dev/snapshot.sh restore original`, `occ upgrade`, `dev/snapshot.sh save original`. Keep the old file as
   `original-pre-m5`.
+  - **The bridge is bind-mounted from this repository, so editing `info.xml`'s version takes effect at once**, and
+    until `occ upgrade` has run, `occ facewright:*` does not exist: a restore then fails with `VERIFY FAILED`. Do the
+    first restore **before** bumping the version, or restore again after the upgrade (done here: `restored original;
+    verify clean`).
+  - **Commit the step's code before `dev/run-all.sh`.** `rollback-drill` swaps the tracked files of `facewright_bridge`
+    and refuses to start unless that directory is clean (`facewright_bridge has uncommitted changes`).
 
 **Verify:**
 - `SHOW CREATE TABLE` on both matches the design: columns, NOT NULL, the four indexes, no autoincrement.
