@@ -7,21 +7,26 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M1 is done (2026-11-20); nothing else is built.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0, M1 and M2 are done (2026-11-20); the bridge is unchanged.** The decisions are in `docs/own-tables.md`, Stage G.0.
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
-  `facewright` is pushed. It is v11.1.4 plus one commit, `bbb4f38c`, "Recognize provider setting: read
-  Recognize-format tables and DAV tree of another app". That commit is exactly `docs/memories-fork.patch` (9 files,
-  +70/-20).
-- **Checks run on that content:**
-  - `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1 greps on the commit.
-  - The planted fault was caught.
-  - The code has never run in Nextcloud.
-- **There is no clone of the fork in or next to this repository.** Clone it first (M1 step 2 says how), and set
-  `$FORK` to that clone.
-- **Dev** runs Memories 11.0.2, Recognize 12.0.3 and bridge 0.11.0. The App Store offers Memories 11.1.4.
+  `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
+  tree of another app", exactly `docs/memories-fork.patch`, 9 files, +70/-20) and the commit `2adf50b6`
+  (`scripts/facewright-build.sh`, M2). **`bbb4f38c` is pushed; `2adf50b6` is not, it waits for the user's go-ahead.**
+- **The clone is `/home/constantin/memories-fork`** (`$FORK`), with the remote `upstream` and its tags. Its `build/`
+  holds the release tarball, the unpacked release and the fork build.
+- **M0 (measured):** `dev/run-all.sh --ui` printed `29 of 29 suites passed`. Versions on dev: bridge 0.11.0, memories
+  11.0.2, recognize 12.0.3. `occ app:update --showonly` offers `memories` 11.1.4 only. The snapshot `original-m0` is
+  byte-identical to `original` (apart from the dump's own date line).
+- **M2 (measured):** the build takes about 40 s and produces `build/memories-v11.1.4-facewright.tar.gz` (58 MB). Against
+  the unpacked release only the four patched `lib/` files and `js/` (rebuilt) differ, `signature.json` is missing,
+  `bin-ext/` is identical, the version is 11.1.4. The rebuilt `js/` contains `recognize_provider` in 3 files and the
+  release's in none. The build is **not reproducible byte for byte** (two runs gave different sha256), so record the
+  hash of the one you deploy.
+- **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
+  greps on the commit. The code has never run in Nextcloud.
 
-**Next: M0, then M2.**
+**Next: M3.**
 
 ## How to work this plan
 
@@ -179,7 +184,9 @@ rebases.
    https://github.com/pulsejet/memories.git`, then run `git fetch upstream --tags`. The fork carries no tags, and
    M2 and M12 need them.
    - Check: `git log --oneline -2` shows `bbb4f38c` on top of "chore(release): bump to v11.1.4".
-   - Check: `git diff v11.1.4 facewright` is byte-identical to `docs/memories-fork.patch`.
+   - Check: `git diff --abbrev=8 v11.1.4 facewright` is byte-identical to `docs/memories-fork.patch`. Without
+     `--abbrev=8` only the `index` lines differ, because Git abbreviates hashes to a length that depends on the
+     clone.
 3. `git switch -c facewright v11.1.4`, `git apply /path/to/facewright/docs/memories-fork.patch`.
 4. Checks: `npx vue-tsc --noEmit -p .`, `npx prettier --check` on the five changed `src/` files, and `php -l` on the
    four changed PHP files.
@@ -203,10 +210,13 @@ rebases.
 - **Planted fault:** add a `'recognize_face_clusters'` literal back into `RecognizeBackend.php`. The first grep must
   show it. Remove it again.
 
-### M2 The build script, in the fork
+### M2 The build script, in the fork — done 2026-11-20
 
 `scripts/facewright-build.sh` in the fork; commit it as a second commit, which is also rebased in M12. It takes no
-arguments and builds the tag the branch sits on (`git describe --tags --abbrev=0`):
+arguments and builds the tag the branch sits on (`git describe --tags --abbrev=0`). It also keeps `build/release/`
+(the release, untouched, for the comparison below), refuses to start when `lib/ appinfo/ templates/ l10n/ img/ src/`
+or the package files differ from `HEAD`, and deletes the previous package first, so a run that stops part-way cannot
+leave an old one next to its error:
 
 1. **The tarball.** Download `https://github.com/pulsejet/memories/releases/download/$TAG/memories.tar.gz` into
    `build/` (gitignored), unless it is already there. Print its sha256.
