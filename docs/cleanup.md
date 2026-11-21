@@ -25,7 +25,7 @@ stock Memories (Option 1), or remove it with Stages F and H (Option 2). **The us
 not a data rollback: it is the code at the tag `pre-stage-f` on a database rebuilt from scratch, with detection run
 again over the whole library. Losing the curation (names, merges, moves, ignores) on that path is accepted.
 
-- **Tags (local, not pushed yet):** `pre-stage-f` on this repo (`beb5488`, bridge 0.12.1: the `recognize` target,
+- **Tags (pushed 2026-11-21):** `pre-stage-f` on this repo (`beb5488`, bridge 0.12.1: the `recognize` target,
   `--hydrate`, reconcile B/squatters/legacy, the router's `recognize` root, the Stage D rollback code), and
   `facewright-v11.1.4` on the fork (`2adf50b6`). The older local tag `stable` (`cf5c4ad`, 2026-09-15) is unrelated.
 - **What this changes in the plan:** Option 1's items drop out (no warm standby, no rollback-from-disabled-Recognize
@@ -89,7 +89,7 @@ These close out tracks that are done in code but whose evidence was never record
 
 ## 2. Repository hygiene **[either option]**
 
-1. **Unpushed commit** `beb5488` (docs of the open decision). Push with the user's go-ahead, together with this file.
+1. **Unpushed commit** `beb5488` (docs of the open decision). Pushed 2026-11-21 (`171634f`), with both tags.
 2. **Stray root-owned directory `php-php2shell.ini/`** at the repo root (empty, owned by root, 2026-11-03). Almost
    certainly a Docker bind mount of a file that did not exist, which Docker then created as a directory. Find which
    compose or `docker run` line referenced it, fix that, then `sudo rmdir` it.
@@ -238,7 +238,7 @@ Kept here so this list is the one place to look; the source of truth stays where
 
 ## Suggested order
 
-1. Section 1 (read-only, closes two tracks) and 2.1–2.3; push the tags with the user's go-ahead.
+1. Section 1 (read-only, closes two tracks) and 2.1–2.3; tags pushed.
 2. 3.1 and 3.2 (stale status).
 3. 6.1 (three small bugs, one bridge release + one ExApp image).
 4. Stages F and H: 4.1 with the first step of 4.2 (bridge 0.13.0), soak, the dev rehearsal (5.2), then the one-way
