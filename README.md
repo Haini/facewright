@@ -1,10 +1,10 @@
 # Facewright
 
-An InsightFace-based replacement for the face-detection half of [Nextcloud
-Recognize](https://github.com/nextcloud/recognize)'s pipeline, built as a companion app rather
-than a fork.
+An InsightFace-based replacement for [Nextcloud Recognize](https://github.com/nextcloud/recognize)'s face pipeline,
+feeding the People page of [Memories](https://github.com/pulsejet/memories). It started as a companion app to Recognize;
+together with a small fork of Memories it now runs without Recognize.
 
-**Status: early public alpha.** This is a single-user-tested prototype, not a finished product -
+**Status: early public alpha.** This is a prototype tested on one instance with two users, not a finished product -
 see "Current limitations" below before relying on it. But it **does show** that **proper** face 
 recognition for Nextcloud is actually very feasible and easily implementable in a flexible way
 using an ExApp that deploys the actual image recognition library. In this case we use the same 
@@ -15,19 +15,23 @@ lots of architectural decisions that come with using an ExApp setup (e.g., split
 Nextcloud App and external Docker container for image recognition).
 It actually does work for my setup and produces great results with the CPU only build on over
 54000 pictures that span over 15 years.
-But since I directly build upon recognizes tables there is no guarantee that past results will
-actually survive properly. Expect to perform some (should only be one table) manual table 
-cleanup when you delploy this to your productive instance.
+The face and people data live in this project's own tables; Recognize's tables are only a copy kept for stock
+Memories, and with the Memories fork they are not used at all. Versions before November 2026 wrote straight into
+Recognize's tables, so if you ran one of those, expect some manual cleanup of `oc_recognize_face_detections` when
+you deploy this to your production instance.
 
 ## What this is
 
 Nextcloud's [Memories](https://github.com/pulsejet/memories) app has a People page, but no
-face-detection logic of its own - it just reads two tables that Recognize's PHP side populates:
-`oc_recognize_face_detections` (bounding boxes + embeddings) and `oc_recognize_face_clusters`
-(the grouped "people"). Recognize's own detector uses face-api.js/tfjs-node; this project
-replaces that one piece with [InsightFace](https://github.com/deepinsight/insightface), while
-leaving Recognize installed (so its migrations still create the schema, and Memories keeps
-working normally for everything else Recognize does).
+face-detection logic of its own - it reads two Recognize-format tables, one of faces (bounding boxes) and one of
+"people", and sends every edit as a WebDAV request to a Recognize tree. Recognize's own detector uses
+face-api.js/tfjs-node; this project replaces it with [InsightFace](https://github.com/deepinsight/insightface) and
+provides those tables and that tree itself, in one of two ways:
+
+- **With stock Memories**, it keeps a copy of its data in Recognize's own tables and answers Memories' edits on
+  Recognize's DAV paths. Recognize has to stay installed and enabled, with its own face detection kept off.
+- **With the Memories fork** (see "Running without Recognize" below), Memories reads a copy in tables of this project
+  and sends its edits to this project's DAV tree. Recognize can be disabled.
 
 Two apps live in this repo to make that possible:
 
@@ -38,7 +42,7 @@ Two apps live in this repo to make that possible:
 - **`facewright_bridge`** - a regular Nextcloud PHP app. ExApps have no sanctioned path to raw
   database access, and per-user fan-out needs real Nextcloud-side APIs
   (`IUserMountCache` etc.), so this small app is what actually calls `facewright`, keeps the
-  results in its own tables, and copies what Memories shows into Recognize's tables. It also owns clustering
+  results in its own tables, and copies what Memories shows into the tables Memories reads. It also owns clustering
   (turning raw detections into "people"), file-event/background-job triggers, and an admin
   settings page.
 
@@ -64,12 +68,11 @@ full design history and every incident/gotcha hit building this, if you want the
   [Immich](https://github.com/immich-app/immich)'s InsightFace defaults (cosine distance 0.5,
   min 3 faces), since Immich uses the same `buffalo_l` model. Spot-checked against real photos
   from one library and looked correct, but not yet validated against a large, diverse dataset.
-- **Memories still needs Recognize's tables.** The data lives in this project's own tables, but
-  Memories reads a copy in Recognize's internal tables and sends its edits to Recognize's DAV paths,
-  which this app answers. Both are undocumented and could change in a future release (Recognize 10
-  already renamed the vector column once); a change there breaks Memories' People page, not the
-  data. `docs/archive/independence.md` reviews the coupling, and `docs/own-tables.md` is the plan, ending in
-  a change to Memories itself.
+- **Stock Memories needs Recognize, and the fork needs keeping up.** With stock Memories, the copy sits in
+  Recognize's internal tables and edits go to Recognize's DAV paths; both are undocumented and could change in a
+  future release, which would break Memories' People page (not the data). The fork removes that dependency but has to
+  be rebased onto each Memories release, security fixes included (`docs/memories-fork.md`, M12). Nextcloud's own
+  Photos app has no fork and loses its People view without Recognize.
 - **The People page has only been tried by hand, on a throwaway instance with generated data,**
   not yet on a real library. A face marked "not a face" is forgotten by a full reset
   (`occ facewright:reset`).
@@ -78,24 +81,27 @@ full design history and every incident/gotcha hit building this, if you want the
 
 ## Requirements
 
-- Nextcloud 33 to 35, with AppAPI (shipped enabled on recent versions), Recognize ≥ 3.8 and
-  Memories. Recognize must stay installed and enabled: Memories only shows its People page when it is.
+- Nextcloud 33 to 35, with AppAPI (shipped enabled on recent versions) and Memories. With stock Memories also
+  Recognize ≥ 3.8, installed and enabled: stock Memories only shows its People page when it is. With the Memories
+  fork, Recognize is not needed.
 - Docker with BuildKit (the default since Docker 23) to build the ExApp image. Python dependencies
   are pinned exactly in `requirements.txt`, so a clean build gets the versions known to work.
 - For a real instance: an AppAPI manual-install daemon behind HaRP (see below).
 
-## Optional: running without Recognize (a fork of Memories)
+## Running without Recognize (a fork of Memories)
 
-Everything above keeps Recognize installed, because stock Memories only reads Recognize's tables and writes to its DAV
-tree. There is a fork of Memories, [Haini/memories](https://github.com/Haini/memories) (branch `facewright`), that takes
-the app to read from as a system setting (`memories.recognize.provider`). Set to `facewright_bridge`, Memories reads a
-copy of the people data that this project's bridge keeps in tables of its own (app config `projection_targets=recognize,own`)
-and sends its edits to the bridge's DAV tree, so Recognize can be disabled. Unset, the fork behaves like stock Memories.
+Stock Memories only reads Recognize's tables and writes to its DAV tree. The fork of Memories,
+[Haini/memories](https://github.com/Haini/memories) (branch `facewright`), takes the app to read from as a system
+setting (`memories.recognize.provider`). Set to `facewright_bridge`, Memories reads a copy of the people data that this
+project's bridge keeps in tables of its own (app config `projection_targets=own`; `recognize,own` keeps Recognize's
+copy current as well, for as long as Recognize is still enabled) and sends its edits to the bridge's DAV tree, so
+Recognize can be disabled. Unset, the fork behaves like stock Memories.
 
 The fork is installed by building it (`scripts/facewright-build.sh` in the fork: the official release plus its changes), swapping the
-folder in `custom_apps` and pinning it so the App Store does not replace it. **Status: built and checked on the development
-stack against Memories 11.1.4; not yet run on a production instance.** The plan, the steps and what was measured are in
-`docs/memories-fork.md`. Nextcloud's own Photos app still reads Recognize's tables directly and is not covered.
+folder in `custom_apps` and pinning it so the App Store does not replace it. **Status: running on one production
+instance since 2026-11-20 (Memories 11.1.4), with Recognize disabled since 2026-11-21.** The plan is to make this the
+only mode (`docs/cleanup.md`). The steps and what was measured are in `docs/memories-fork.md`. Nextcloud's own Photos
+app still reads Recognize's tables directly and is not covered.
 
 ## Quickstart: try it locally
 
@@ -129,6 +135,9 @@ Then open <http://localhost:8080> (`admin` / `dev-admin-password`) and:
    Memories.
 
 ## Keeping Recognize's own face detection off
+
+Only needed while Recognize is enabled (stock Memories). With the fork and Recognize disabled, none of this runs; do
+it before Recognize is ever enabled again.
 
 Turning on the People page sets Recognize's `faces.enabled` to `true`, because Memories reads it.
 Recognize also uses that same setting to decide whether to run its **own** face detection on new
@@ -194,5 +203,5 @@ project sits in, not because it's strictly required by depending on Recognize's 
 
 `CLAUDE.md` is the developer reference: the architecture, the invariants that are easy to break
 silently (dimension bands, cluster-id sentinels, job dedup semantics, column order), the rules for
-coexisting with Recognize, and the deployment mechanics. Read it before changing anything that
+coexisting with Recognize, and the deployment mechanics. `docs/README.md` indexes the design documents. Read it before changing anything that
 touches the tables or the job queue.

@@ -12,7 +12,7 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
   tree of another app", exactly `docs/memories-fork.patch`, 9 files, +70/-20) and the commit `2adf50b6`
-  (`scripts/facewright-build.sh`, M2). **`bbb4f38c` is pushed; `2adf50b6` is not, it waits for the user's go-ahead.**
+  (`scripts/facewright-build.sh`, M2). Both are pushed; the tag `facewright-v11.1.4` marks `2adf50b6`, the build on live.
 - **The clone is `/home/constantin/memories-fork`** (`$FORK`), with the remote `upstream` and its tags. Its `build/`
   holds the release tarball, the unpacked release and the fork build.
 - **M0 (measured):** `dev/run-all.sh --ui` printed `29 of 29 suites passed`. Versions on dev: bridge 0.11.0, memories

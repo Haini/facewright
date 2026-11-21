@@ -1,33 +1,16 @@
 # Clustering in the ExApp: comparison first
 
-The plan for CLAUDE.md's open item 7, written for a session that has not seen this repository before. It builds a
-second clustering engine in the ExApp next to the PHP one and a command that runs both on the same input and reports
-where they differ. **PHP stays the only engine that writes.** Switching over (an `exapp` mode, dropping chunking, a
-stored checksum) is sketched at the end and is not part of this plan.
+The plan for CLAUDE.md's open item 7, written for a session that had not seen this repository before. Part 1 (C1 to
+C5) built a second clustering engine in the ExApp next to the PHP one and a command that runs both on the same input and
+reports where they differ; Part 2 (S1 to S7) made the ExApp engine the one that writes, with PHP as the fallback.
 
 ## Where things stand
 
-**C1 is done (2026-11-08), on dev only.** The ExApp has the cache and `/cluster`; `dev/exapp-cluster.sh` passes 20 of
-20 (with a planted fault caught), `dev/writers-files.sh` still passes (detection unchanged). Measured on dev: 300 attempts
-against a 50,000-face pool take 2.4 s of compute (about 3 s round trip), against about 190 s in PHP; `/heartbeat`
-stayed under 40 ms meanwhile. Nothing is deployed to live.
-
-**C2 is done (2026-11-08), on dev only.** `ClusteringService` takes the "create a person" step as a callable and has
-`loadPoolForComparison()` / `assignInMemory()`; production behaviour is unchanged (see C2's "Done").
-
-**C3 is done (2026-11-08), on dev only.** `ExAppClusteringClient` syncs the cache and calls `/cluster`;
-`dev/exapp-client.sh` passes 12 of 12.
-
-**C5 is done on live (2026-11-08):** both libraries compared in full with `--reopen`, 0 differences of any class (user2:
-31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S5 are done on dev** (S3: the `exapp` engine,
-off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache; S5: CLAUDE.md). **S6 is done on live
-(2026-11-09):** ExApp and bridge 0.11.0 deployed, checksums filled, still on `php`; see S6's "Done". **Next: S7, the
-switch, with the user's go-ahead.** **S7: switched on live 2026-11-09, closed 2026-11-21**: real chains ran on `exapp`
-with no fallback in two weeks (see S7's "Done").
-
-**C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
-`dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
-ExApp is about 20× faster even on dev's small pools. **Next: C5, on live, with the user's go-ahead for each action.**
+**Done and live; closed 2026-11-21.** Live clusters with `clustering_engine=exapp` since 2026-11-09, with PHP as the
+per-chain fallback by design. Two weeks on, 27 `/cluster` passes had all answered 200 and no chain had fallen back to PHP
+(S7's "Done"). The case for it was C5 on live: both libraries compared in full, 0 differences of any class, user2's
+31,126 attempts in 4 min 42 s against PHP's 3 h 36 min. Each step below keeps its "Done" with what was measured. What
+is still open is under "Open questions for later" at the end: the 20-per-person cap and threshold tuning.
 
 ## Why
 

@@ -1,15 +1,17 @@
 # Facewright
 
-A replacement backend for Nextcloud Recognize's face-detection pipeline, built as a Nextcloud
-AppAPI ExApp. Uses InsightFace instead of Recognize's face-api.js/tfjs-node stack, but keeps
-Recognize installed as a companion app rather than forking it.
+Face recognition for Nextcloud's Memories, replacing Recognize's face pipeline: InsightFace in a Nextcloud AppAPI
+ExApp instead of Recognize's face-api.js/tfjs-node stack, with the face and people data in tables of our own.
 
 This repo holds two apps:
 - `appinfo/`, `ex_app/` etc. at the top level — `facewright`, the Python AppAPI ExApp (InsightFace
   detection).
 - `facewright_bridge/` — a small, separate, regular Nextcloud PHP app. It exists because ExApps
   have no path to real database access; it calls `facewright`, keeps the results in its own tables
-  and copies what Memories needs into Recognize's.
+  and copies what Memories needs into Recognize-format tables (its own, or Recognize's).
+
+A third piece lives elsewhere: a fork of Memories (https://github.com/Haini/memories, branch `facewright`,
+`docs/memories-fork.md`) that reads our copy instead of Recognize's.
 
 `README.md` is the user-facing overview and quickstart. This file is for anyone changing the code:
 the architecture, the invariants that are easy to break silently, and the operational rules that
@@ -21,16 +23,24 @@ and exact commands are deliberately not in this repo: they are in the operator's
 
 ## Architecture
 
-Memories' People page has no face-detection logic of its own — it reads two tables Recognize's PHP
-side populates: `oc_recognize_face_detections` and `oc_recognize_face_clusters`. So this is a
-**companion app**, not a fork:
+Memories' People page has no face-detection logic of its own: its Recognize backend reads two Recognize-format tables
+(detections and clusters) and sends every edit as a WebDAV request to a Recognize tree. Facewright provides both, in
+one of two modes, chosen by the Memories system setting `memories.recognize.provider`:
 
-- Recognize stays installed and enabled (its migrations create the schema, Memories keeps
-  working), but its own classifier is kept off so it doesn't fight our writes.
+- **Fork mode (live since 2026-11-20, Recognize disabled since 2026-11-21).** Our fork of Memories (same app id, pinned
+  against store updates, `docs/memories-fork.md`) with `memories.recognize.provider=facewright_bridge` reads the `own`
+  projection target (`facewright_bridge_face_detections` / `_clusters`) and writes to this app's DAV tree
+  (`/remote.php/dav/facewright_bridge/`). Recognize need not be enabled or installed.
+- **Stock mode (the setting unset, or the store build of Memories).** Memories reads Recognize's
+  `oc_recognize_face_detections` / `_clusters`, which the `recognize` projection target writes, and needs Recognize
+  installed and **enabled** (see below), with its own classifier kept off so it does not fight our writes. Stages F and
+  H (`docs/own-tables.md`, `docs/cleanup.md`) remove this mode; the tag `pre-stage-f` is the code that still has it.
+
+In both:
 - `facewright` owns detection + embedding (InsightFace `buffalo_l`, CPU, via AppAPI).
 - `facewright_bridge` owns everything Nextcloud-side: triggers, queueing, per-user fan-out,
-  clustering, settings, the face and people data in its own tables, and the copy of it in
-  Recognize's tables that Memories reads.
+  clustering, settings, the face and people data in its own tables (the source of truth), and the copy
+  that Memories reads.
 - Rejected: patching Recognize to call the ExApp. Smaller diff, but inherits clustering thresholds
   tuned for a different embedding space and means an ongoing rebase against upstream.
 
@@ -38,9 +48,19 @@ Clustering follows Immich's algorithm (its default model is the same `buffalo_l`
 nearest-neighbour assignment, cosine distance ≤ 0.5, ≥ 3 matches before a face joins/starts a
 cluster. Recognize's own HDBSCAN thresholds do not transfer (128-dim, Euclidean, different model).
 
-### Why Recognize cannot simply be uninstalled
+### Writes from Memories
 
-Three hard dependencies on the app being **enabled**, not just on its tables existing:
+`RecognizeWriteRouterPlugin` turns the five DAV requests Memories (and, in stock mode, Photos) sends (create, rename,
+delete person; remove or move a face) into `PeopleService` calls, scoped to the logged-in user, and refuses any other
+change. It serves two roots: `facewright_bridge/` (fork mode; the read side is `lib/Dav/Tree/`) and `recognize/` (stock
+mode, in front of Recognize's own tree), and never moves anything from one tree into the other. It has no off switch
+(it had `block_recognize_writes` until Stage E; rollback is in `docs/own-tables.md`). The coupling is the path shapes,
+the `Destination` header and the status codes; see `docs/own-tables.md`, Stage B.
+
+### Stock mode: why Recognize must be enabled
+
+Three hard dependencies of stock Memories on the app being **enabled**, not just on its tables existing (the fork
+replaces all three with the provider setting):
 
 1. `Memories\Util::recognizeIsInstalled()` requires `isEnabledForUser('recognize')` and version
    ≥ 3.8.0; `recognizeIsEnabled()` additionally requires Recognize's own `faces.enabled` appconfig
@@ -49,24 +69,9 @@ Three hard dependencies on the app being **enabled**, not just on its tables exi
    against Recognize's `OCA\Recognize\Dav\RootCollection` at `/remote.php/dav/recognize/...`.
 3. Memories' frontend hardcodes `recognize` and `facerecognition` as the only people backends.
 
-Writes from Memories and Photos are answered by this app, not by Recognize: `RecognizeWriteRouterPlugin`
-turns the five DAV requests they send (create, rename, delete person; remove or move a face) into
-`PeopleService` calls, scoped to the logged-in user, and refuses any other change under `recognize/`.
-The router has no off switch (it had `block_recognize_writes` until Stage E; rollback is in `docs/own-tables.md`).
-The coupling is the path shapes, the `Destination` header and the status codes; see `docs/own-tables.md`, Stage B.
-
-Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
-Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
-causes, and the stages already done are in `docs/archive/independence.md` and
-`docs/archive/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
-data in tables we own, a temporary one-way push to Recognize's tables with Memories' edits routed through
-our people service, and a Memories change (now in a fork, Stage G) as the end state. It replaces the
-`recognize`-contract shim. Stage G (decided 2026-11-19, since pulsejet/memories#1812 got no answer) is a fork of
-Memories, same app id, replacing the store app: a system setting names the app whose Recognize-format tables and WebDAV
-tree its Recognize backend uses, so the copy and the tree become ours and Recognize can go. Its plan is
-`docs/memories-fork.md`. With the setting `memories.recognize.provider` set to `facewright_bridge`, Memories reads the
-`own` projection target's tables and writes to this app's DAV tree (`/remote.php/dav/facewright_bridge/`), and works with
-Recognize disabled; unset, it is stock Memories. Built and verified on the dev stack; not on live yet.
+Nextcloud's own Photos app has the same three dependencies and is not forked, so its People view is gone while
+Recognize is disabled. The coupling inventory is `docs/archive/independence.md`; how we got from there to our own tables
+and the fork is `docs/own-tables.md` (Stages A to H) and `docs/memories-fork.md`.
 
 ## Components
 
@@ -392,6 +397,10 @@ enabled users. Array-typed keys cannot be searched by value; use `getValuesByUse
 admin overview (one query, not N+1). A user with no stored preference is off.
 
 ## Coexisting with Recognize
+
+This section applies **only while Recognize is enabled** (stock mode, or on the way back from the tag `pre-stage-f`).
+On live it is disabled, so none of its jobs or listeners run; the rules below are what to do before it is ever
+enabled again.
 
 - `faces.enabled` must stay `'true'` (Memories reads it) but must be written **directly via
   `IAppConfig`**, never through Recognize's `SettingsService::setSetting()`, which also schedules

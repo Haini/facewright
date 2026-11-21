@@ -2,7 +2,7 @@
 
 An inventory of what is left to tidy now that live runs the fork of Memories against our own copy (`docs/memories-fork.md`,
 M11) and Recognize is disabled. Assessed 2026-11-21 against `master` at `beb5488`. Each item says where, what, and whether
-it waits on something. Done so far: the decision and the tags (section 0), the archive (3.3).
+it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stale statements (3.1), the archive (3.3).
 
 **State this assumes:** live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
 `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize 12.0.3
@@ -124,19 +124,19 @@ These close out tracks that are done in code but whose evidence was never record
 The docs were written as handoffs, step by step, and their status blocks have accreted. Stale status lines are the main
 risk: a cold session acts on them.
 
-### 3.1 Stale statements to fix now **[either option]**
+### 3.1 Stale statements — done 2026-11-21
 
-| Where | Says | True since |
-|---|---|---|
-| `CLAUDE.md:69` | the fork is "Built and verified on the dev stack; not on live yet." | live 2026-11-20 |
-| `CLAUDE.md`, "Architecture" and "Why Recognize cannot simply be uninstalled" | Recognize "stays installed and enabled", Memories depends on it being enabled | with the fork and provider set, Recognize is disabled; this is now the stock-Memories story only |
-| `CLAUDE.md`, "Coexisting with Recognize" | written for an enabled Recognize | still needed for a rollback, but should say it applies only while Recognize is enabled |
-| `docs/own-tables.md:44` | Stage G "**Not on live.**" | live 2026-11-20 |
-| `docs/own-tables.md`, "Where things stand" | ExApp track "Open: S6 … and S7"; last full suite run "28 of 28" | S6/S7 done 2026-11-09; run-all is 40 of 40 (M9) |
-| `docs/memories-fork.md:15` | "`2adf50b6` is not [pushed], it waits for the user's go-ahead" | the same section's end says it is pushed |
-| `docs/exapp-clustering.md`, "Where things stand" | paragraphs in mixed order (C1, C2, C3, C5/S1-S7, then C4), "Next: S7" next to "S7: switched" | rewrite as one current paragraph |
-| `README.md`, "Current limitations" | "Memories still needs Recognize's tables" | not with the fork; say both modes |
-| `README.md`, intro | "built as a companion app rather than a fork", "Status: early public alpha … single-user-tested", disclaimer typos (`delploy`, `recognizes`) and "directly build upon recognizes tables" | the data is in our tables since Stage E |
+Fixed: `CLAUDE.md`'s intro and "Architecture" now describe the two modes (fork mode, live; stock mode, until Stages F
+and H, kept at the tag `pre-stage-f`), with "Writes from Memories" and "Stock mode: why Recognize must be enabled" as
+subsections, and "Coexisting with Recognize" says it applies only while Recognize is enabled. `docs/own-tables.md`:
+Stage G live, the ExApp track closed, the last full suite run 40 of 40. `docs/memories-fork.md`: both fork commits
+pushed and tagged. `docs/exapp-clustering.md`: one current status paragraph. `README.md`: the intro, the status and
+disclaimer (typos fixed; the data is in our own tables), both modes in "What this is", limitations and requirements,
+the fork section (live, `projection_targets=own`), and "Keeping Recognize's own face detection off" scoped to an
+enabled Recognize.
+
+Not changed, for the user: whether "early public alpha" and the README's People-page limitation ("only tried by hand,
+on a throwaway instance") still describe it; the page has been in use on live since 0.8.0.
 
 ### 3.2 Shorten the status blocks **[either option]**
 

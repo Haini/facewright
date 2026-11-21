@@ -42,17 +42,18 @@
 >    change is `docs/memories-fork.patch` (9 files, +70/-20); the fork carries it
 >    (https://github.com/Haini/memories, branch `facewright`). **Built and verified on dev (2026-11-20, steps M0 to M10):**
 >    the bridge (0.12.1) writes the `own` projection target and serves the DAV tree `facewright_bridge/`, the fork reads and
->    writes them, and Memories works with Recognize disabled; rollback to the store build is rehearsed. **Not on live.**
->    What is left is M11 (live, each action with the user's go-ahead) and M12 (rebasing the fork on each Memories release).
+>    writes them, and Memories works with Recognize disabled; rollback to the store build is rehearsed. **Live since
+>    2026-11-20 (M11)**; Recognize disabled since 2026-11-21. What is left is M12 (rebasing the fork on each Memories
+>    release).
 >    **The plan and everything measured is `docs/memories-fork.md`.**
 >
 > **A separate track: clustering in the ExApp** (`docs/exapp-clustering.md`, its own "Where things stand"). Compared on
-> live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene are built on dev (S1 to S5).
-> Open: S6 (deploy to live, still on `php`) and S7 (switch), each with the user's go-ahead.
+> live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene (S1 to S5) are live since
+> 2026-11-09 (S6, S7), and S7 closed on 2026-11-21 after two weeks without a fallback.
 >
 > **Verification tooling** is under `dev/` (`dev/README.md`; `dev/run-all.sh --ui` on the compose stack, which takes a
-> lock because the dev DB is shared). The last full run passed 28 of 28 suites (2026-11-09, without `--ui`, including
-> the ExApp clustering suites). The ground-truth clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from
+> lock because the dev DB is shared). The last full run passed 40 of 40 suites (2026-11-20, with `--ui`, M9 of
+> `docs/memories-fork.md`, including the ExApp clustering suites and the fork's UI flows). The ground-truth clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from
 > the Georgia Tech set, which is fetched, never committed) passed 15 of 15.
 >
 > **Things that bit and will again:** Apache's opcache revalidates every 60 s (`reload_web` after editing source in
