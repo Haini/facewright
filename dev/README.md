@@ -80,3 +80,6 @@ Capture on the old code, run `stable` to prove the capture deterministic, change
 Planting a fault and seeing the checker fail is part of the work, not an extra.
 
 Flow 4 (merge) is the regression for the parallel-MOVE deadlock; it fails if the router stops retrying.
+
+Things that bit: Apache's opcache revalidates every 60 s, so after editing source a test must call `reload_web`
+(`lib.sh`) or it runs the old code; `docker exec` needs `-i` for piped stdin (a `y` for `occ background-job:delete`).

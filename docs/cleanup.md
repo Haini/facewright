@@ -2,7 +2,7 @@
 
 An inventory of what is left to tidy now that live runs the fork of Memories against our own copy (`docs/memories-fork.md`,
 M11) and Recognize is disabled. Assessed 2026-11-21 against `master` at `beb5488`. Each item says where, what, and whether
-it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stale statements (3.1), the archive (3.3).
+it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3).
 
 **State this assumes:** live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
 `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize 12.0.3
@@ -108,12 +108,10 @@ These close out tracks that are done in code but whose evidence was never record
 ## 2. Repository hygiene **[either option]**
 
 1. **Unpushed commit** `beb5488` (docs of the open decision). Pushed 2026-11-21 (`171634f`), with both tags.
-2. **Stray root-owned directory `php-php2shell.ini/`** at the repo root (empty, owned by root, 2026-11-03). Almost
-   certainly a Docker bind mount of a file that did not exist, which Docker then created as a directory. Find which
-   compose or `docker run` line referenced it, fix that, then `sudo rmdir` it.
-3. **Stray `.work/` at the repo root** (empty `snapshots/`, `tokens/admin`, `tokens/bob`, 2026-11-10). The dev
-   tooling uses `dev/.work/`; this one looks like a run from the wrong directory. Check nothing reads it, delete it.
-   It is gitignored, so this is local only.
+2. **Stray root-owned directory `php-php2shell.ini/`** — removed 2026-11-21 (empty; no container, compose file or
+   script referenced it any more, so its origin, probably a one-off `docker run -v` of a missing file, stays unknown).
+3. **Stray `.work/` at the repo root** — removed 2026-11-21 (two dev app-password tokens from 2026-11-20, a run with
+   `WORK_DIR` pointing there; `dev/lib.sh` defaults to `dev/.work`).
 4. **`docs/memories-fork.patch`** duplicates the fork's commit `bbb4f38c`. Decide: keep it as the reviewable diff
    (then it must be refreshed on every M12 rebase, add that to M12), or replace it with a link to the commit.
 
@@ -138,10 +136,14 @@ enabled Recognize.
 Not changed, for the user: whether "early public alpha" and the README's People-page limitation ("only tried by hand,
 on a throwaway instance") still describe it; the page has been in use on live since 0.8.0.
 
-### 3.2 Shorten the status blocks **[either option]**
+### 3.2 Shorten the status blocks — done 2026-11-21
 
-`docs/own-tables.md` "Where things stand" is ~50 lines of which most is 2026-11-07 history it itself declares stale.
-Replace each doc's "Where things stand" with a short current-state paragraph and a pointer; the history is in git.
+`docs/own-tables.md`: "Where things stand" is three short paragraphs; the day-after check moved to the end of Stage E as
+a standing procedure, updated for the `own` target and `--verify`'s check of the frozen table. `docs/memories-fork.md`:
+each step's measured results moved from the status block into the step's own section ("Done (measured)"), checked line
+by line against the old text; the status is one paragraph plus the fork, clone and build facts. The dev gotchas that
+were only in `own-tables.md`'s status block are now at the end of `dev/README.md`. (`docs/exapp-clustering.md` was done
+in 3.1.)
 
 ### 3.3 Archive finished plans — done 2026-11-21
 

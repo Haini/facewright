@@ -7,7 +7,11 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 ## Where things stand
 
-**M0 to M10 are done (2026-11-20). Dev runs the fork with the provider setting unset (stock behaviour); the bridge (0.12.1) writes the `own` target when `projection_targets` names it, and serves `/remote.php/dav/facewright_bridge/`. With both on and the provider set, Memories works with Recognize disabled.** The decisions are in `docs/own-tables.md`, Stage G.0.
+**M0 to M11 are done; the fork is live since 2026-11-20, and Recognize is disabled since 2026-11-21.** Live runs bridge
+0.12.1 and the pinned fork build of Memories 11.1.4 with `memories.recognize.provider=facewright_bridge` and
+`projection_targets=own`. Decided 2026-11-21: the Recognize-side machinery goes (Stages F and H of `docs/own-tables.md`,
+see "Decision after M11" below and `docs/cleanup.md`). What stays is M12: rebasing the fork on each Memories release.
+Each step below keeps what was measured under its "Done".
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
@@ -15,101 +19,8 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
   (`scripts/facewright-build.sh`, M2). Both are pushed; the tag `facewright-v11.1.4` marks `2adf50b6`, the build on live.
 - **The clone is `/home/constantin/memories-fork`** (`$FORK`), with the remote `upstream` and its tags. Its `build/`
   holds the release tarball, the unpacked release and the fork build.
-- **M0 (measured):** `dev/run-all.sh --ui` printed `29 of 29 suites passed`. Versions on dev: bridge 0.11.0, memories
-  11.0.2, recognize 12.0.3. `occ app:update --showonly` offers `memories` 11.1.4 only. The snapshot `original-m0` is
-  byte-identical to `original` (apart from the dump's own date line).
-- **M2 (measured):** the build takes about 40 s and produces `build/memories-v11.1.4-facewright.tar.gz` (58 MB). Against
-  the unpacked release only the four patched `lib/` files and `js/` (rebuilt) differ, `signature.json` is missing,
-  `bin-ext/` is identical, the version is 11.1.4. The rebuilt `js/` contains `recognize_provider` in 3 files and the
-  release's in none. The build is **not reproducible byte for byte** (two runs gave different sha256), so record the
-  hash of the one you deploy.
-- **M3 (measured):** the `.git/` pin works. `--showonly` printed `memories new version available: 11.1.4`, then with
-  `custom_apps/memories/.git` present `All apps are up-to-date or no updates could be found`, then after `rmdir` the
-  `memories` line again. `occ app:update memories` printed `memories updated`; dev now runs **Memories 11.1.4** (bridge
-  0.11.0, recognize 12.0.3) and migration `900008Date20261104000000` is recorded. `dev/run-all.sh --ui` on it:
-  `29 of 29 suites passed`, after one fix to `dev/memories-ui/flows.py` (11.1.4 draws the person page's tiles later;
-  the flow now waits for the first tile instead of a fixed 4.5 s). The oracle `dev/.work/fork/stock.json`:
-  `STABLE: two captures identical`, then `captured admin: 297 people, 2713 photo entries`.
-- **M4 (measured), dev now runs the fork:** the build deployed is `build/memories-v11.1.4-facewright.tar.gz`,
-  sha256 `d540449f018bcc46215f8bdc801a9718e206e0ff5a7fac694a77dea3bd4d225c`, pinned with `.git/`, no `signature.json`.
-  - `occ app:list`: `memories: 11.1.4`. `--showonly`: `All apps are up-to-date or no updates could be found`.
-  - `occ setupchecks`: `Code integrity: No altered files` (the store build said the same). `occ integrity:check-app
-    memories`: `App signature not found, skipping app integrity check`.
-  - `/apps/memories/api/config` has `recognize_provider: recognize`; the API-key endpoint returns a key (292 characters).
-  - `compare stock.json m4.json`: `identical`. `dev/run-all.sh --ui`: `29 of 29 suites passed`.
-  - **Planted fault:** `recognizeProvider()` returning `'nonexistent'` made the capture stop with `people list is not a
-    list: {'message': 'Recognize app not enabled or not the required version.'}` and no file. The restored fork
-    captured `identical` again.
-  - **Rollback rehearsal:** store build back (not pinned, with `signature.json`, no `recognizeProvider` in it): capture
-    `identical`; fork forward again: `identical`. The swap to the fork took 2.2 s including the web server restart (the swap back was not timed).
-- **M5 (measured):** migration `Version000009000Date20261120000000`, bridge **0.12.0**, `occ upgrade` printed `Updated
-  <facewright_bridge> to 0.12.0`. `SHOW CREATE TABLE` on `oc_facewright_bridge_face_detections` and `_clusters` shows
-  exactly the design: `id` bigint NOT NULL without AUTO_INCREMENT, `x y width height` double NOT NULL, `cluster_id`
-  bigint NOT NULL, the keys `fwb_fdet_cluster` / `_user` / `_file` and `fwb_fclust_user`, `utf8mb4_bin` like
-  Recognize's tables, 0 rows in both. After the re-save the snapshot `original` equals `original-pre-m5` and
-  `original-m0` (the own tables are not in it). `dev/run-all.sh --ui`: `29 of 29 suites passed`.
-- **M6 (measured):** `ProjectionService` writes every configured target (`projection_targets`, unset = `recognize`);
-  `occ facewright:project` has `--target` and prints a `Target: <name>` line first; the hourly job and `--verify` cover
-  every configured target. Existing suites with the default config, **unchanged**: `project-drift` 24 passed,
-  `project-failure` 15, `project-recognize-trap` 21, `project-recognize-copies` 26. New `dev/project-own.sh`: 49 passed
-  (an empty copy reports 2790 visible faces and 311 people and writes nothing; the fill; planted drift reported as
-  exactly A 6, C 2, D 1 and 1; the repair; Recognize's `CHECKSUM TABLE` equal before and after; `--hydrate --target=own`
-  and an unknown target exit 2; a broken `own` column leaves Recognize's copy written, the flag set with `own: ...
-  cluster_idx`, one error logged, and the job repairs it). With `own` configured: `writers-people` 55, `writers-cluster`
-  23, `persist-guard` 13, `project-concurrency` 4, `battery` 45 passed. `dev/run-all.sh --ui`: `36 of 36 suites passed`
-  (the 29 before and `project-own` plus six `-own` runs).
-  - **Planted faults, both caught:** push skipping `own` entirely for people: the fill itself failed (`could not fill
-    own`, reconcile cannot repair people). Push skipping `own` people only for a push with no faces (renames, creates):
-    `writers-people` under `with_own` printed `FAIL verify after create` and `FAIL own oracle after create ... 0/0/1/0`,
-    the same after rename and after an empty person exists (49 passed, 6 failed). Code restored byte for byte.
-- **M7 (measured):** `lib/Dav/Tree/` (`RootCollection`, `UserHome`, `FacesHome`, `PersonCollection`,
-  `UnassignedFacesHome`, `FaceFile`, and a `ReadOnlyCollection` base that refuses every write), `PeopleService::getFace()`,
-  `info.xml` with `<types><dav/></types>` and the `<sabre>` collection (version **0.12.1**), a
-  `registerServiceAlias('principalBackend', Principal::class)` in `Application` (without it every DAV request answered 500
-  `Could not resolve Sabre\DAVACL\PrincipalBackend\BackendInterface`), and the router's second root with the same-tree
-  rule. `dev/battery.sh` takes `TREE`: **Recognize's own tree 58 passed, the bridge's tree 59 passed** (the one extra is the
-  405 for the unassigned listing, which Recognize does not give), the same status codes for the same requests. The
-  listing check compares the 27 face ids of one person with SQL; Recognize's tree gives the same set, which is what
-  shows the expectation is right and not shaped to our code. The bytes of a face file equal the Files tree's (sha256).
-  - **Planted faults, each caught:** no same-tree rule: 11 checks failed, among them `MOVE a person into the other tree
-    expected [403] got [201]`, and the person had really been renamed in the other tree. A root without the user check:
-    `PROPFIND on bob's tree as admin expected [403] got [207]`. Children named by file id: `PROPFIND depth 1 on a
-    person lists exactly its faces` got `244,244,...`.
-  - `dev/run-all.sh --ui`: 37 of 38 suites passed; the one failure was `rollback-drill`, whose Stage D router predates the
-    cross-tree rule that the battery now checks. The battery takes `CROSS_TREE=no` for it; the drill alone then passed
-    24 of 24. A full run is repeated at the end of M8.
-- **M8 (measured), provider `facewright_bridge`, `projection_targets=recognize,own`:**
-  - Capture right after `snapshot.sh restore original`: `identical` to `stock.json` (297 people, 2713 photo entries), with
-    Recognize enabled, **disabled**, and enabled again. The frontend config carries `recognize_provider:
-    facewright_bridge`; the API-key endpoint returns `{"apiKey":""}`; Memories' settings page and app page answer 200.
-  - `dev/memories-ui/flows.py` with `PROVIDER=facewright_bridge` (database checks on the `own` tables, and every flow asserts
-    that no request went to `/dav/recognize`): **21 passed**, with Recognize enabled and again with it disabled (merge:
-    one PROPFIND of our tree and 11 MOVEs). The log held no warning or error from `memories` or `facewright_bridge`
-    during the disabled run.
-  - **Planted faults:** one row deleted from the `own` detections made the capture differ (`person 100001 ... count 4 ->
-    3`) and `project --target=own` repaired it, `identical` again. The flows run with `PROVIDER=recognize` while the
-    fork was set to the bridge: 11 of 21 failed, with `no request went to the facewright_bridge tree` listing the stray
-    MOVE, DELETE and PROPFIND requests.
-  - `app:enable recognize` re-added its `MaintenanceJob`; deleting it in the same chain left 0 Recognize jobs and
-    `faces.enabled` `true`.
-  - `dev/run-all.sh --ui` now also runs `memories-ui-bridge` and `memories-ui-bridge-off` (`with_provider`,
-    `with_recognize_off`); the full run is at the end of M9.
-- **M9 (measured), the rollback drill, each step followed by `snapshot.sh restore original`, a capture and a compare
-  with `stock.json`:** fork with provider ours `identical`; provider setting removed (0.3 s) `identical`, flows with
-  `PROVIDER=recognize` 21 passed; **store build back** (swap 0.8 s, not pinned, `signature.json` present, no
-  `recognizeProvider` in it) `identical`; **fork forward** (swap 2.2 s, setting back 0.3 s) `identical`, flows with
-  `PROVIDER=facewright_bridge` 21 passed. `dev/run-all.sh --ui`: **`40 of 40 suites passed`** (the 38 before, plus
-  `memories-ui-bridge` and `memories-ui-bridge-off`).
-  - **Order matters on the way back:** the store build ignores the provider setting and reads Recognize's tables. So
-    the setting is removed first (while the fork is still there), then the folder swapped; with the setting left in
-    place the store build would show Recognize's copy, which is only right while Recognize is enabled and a target.
-- **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
-  greps on the commit. The code has never run in Nextcloud.
-
-**M10 (docs) is done. M11 items 1-5 are done on live (2026-11-20, "M11 as run" below), and so were two of item 6's steps
-on 2026-11-21: `recognize` dropped from `projection_targets` and Recognize disabled. The build script's commit is pushed.
-Decided 2026-11-21: the rest of item 6 and Stages F and H go ahead, with the tags `pre-stage-f` / `facewright-v11.1.4`
-as the way back (see "Decision after M11" below, and `docs/cleanup.md`). Nothing of it is started yet.**
+- **The build on live and dev:** `build/memories-v11.1.4-facewright.tar.gz`, sha256
+  `d540449f018bcc46215f8bdc801a9718e206e0ff5a7fac694a77dea3bd4d225c` (builds are not reproducible byte for byte).
 
 ## How to work this plan
 
@@ -254,6 +165,10 @@ plugin, which learns this second prefix.
 
 **Verify:** the run's last line reads `N of N suites passed`, and the versions are recorded in "Where things stand".
 
+**Done (measured):** `dev/run-all.sh --ui` printed `29 of 29 suites passed`. Versions on dev: bridge 0.11.0, memories
+11.0.2, recognize 12.0.3. `occ app:update --showonly` offers `memories` 11.1.4 only. The snapshot `original-m0` is
+byte-identical to `original` (apart from the dump's own date line).
+
 ### M1 The fork repository — done 2026-11-20
 
 Done: steps 1, 3, 4 (on the identical prototype), 5, 6 and the planted fault. The branch `facewright` (`bbb4f38c`)
@@ -293,6 +208,9 @@ rebases.
 - **Planted fault:** add a `'recognize_face_clusters'` literal back into `RecognizeBackend.php`. The first grep must
   show it. Remove it again.
 
+**Checks on the patch's content (measured):** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
+greps on the commit. The code has never run in Nextcloud.
+
 ### M2 The build script, in the fork — done 2026-11-20
 
 `scripts/facewright-build.sh` in the fork; commit it as a second commit, which is also rebased in M12. It takes no
@@ -319,6 +237,12 @@ leave an old one next to its error:
 - `bin-ext/` is identical.
 - **Planted fault:** in step 4, copy `appinfo/` over the release without the `rm -rf`. Step 5 must abort. Restore it.
 
+**Done (measured):** the build takes about 40 s and produces `build/memories-v11.1.4-facewright.tar.gz` (58 MB). Against
+the unpacked release only the four patched `lib/` files and `js/` (rebuilt) differ, `signature.json` is missing,
+`bin-ext/` is identical, the version is 11.1.4. The rebuilt `js/` contains `recognize_provider` in 3 files and the
+release's in none. The build is **not reproducible byte for byte** (two runs gave different sha256), so record the
+hash of the one you deploy.
+
 ### M3 Dev: prove the pin, then the store update to v11.1.4 — done 2026-11-20
 
 1. `occ app:update --showonly` lists `memories` (11.1.4 on 2026-11-19).
@@ -341,6 +265,14 @@ leave an old one next to its error:
 
 **Verify:** steps 1 to 3 printed as described (paste the three outputs into "Where things stand"), `occ app:list` shows
 `memories: 11.1.4`, and the run passes.
+
+**Done (measured):** the `.git/` pin works. `--showonly` printed `memories new version available: 11.1.4`, then with
+`custom_apps/memories/.git` present `All apps are up-to-date or no updates could be found`, then after `rmdir` the
+`memories` line again. `occ app:update memories` printed `memories updated`; dev now runs **Memories 11.1.4** (bridge
+0.11.0, recognize 12.0.3) and migration `900008Date20261104000000` is recorded. `dev/run-all.sh --ui` on it:
+`29 of 29 suites passed`, after one fix to `dev/memories-ui/flows.py` (11.1.4 draws the person page's tiles later;
+the flow now waits for the first tile instead of a fixed 4.5 s). The oracle `dev/.work/fork/stock.json`:
+`STABLE: two captures identical`, then `captured admin: 297 people, 2713 photo entries`.
 
 ### M4 Dev: the fork with the default provider changes nothing — done 2026-11-20
 
@@ -369,6 +301,19 @@ leave an old one next to its error:
 - **Planted fault:** in the deployed fork, make `recognizeProvider()` return `'nonexistent'`. The capture must differ:
   the People list is empty or errors. Restore it.
 
+**Done (measured), dev now runs the fork:** the build deployed is `build/memories-v11.1.4-facewright.tar.gz`,
+sha256 `d540449f018bcc46215f8bdc801a9718e206e0ff5a7fac694a77dea3bd4d225c`, pinned with `.git/`, no `signature.json`.
+- `occ app:list`: `memories: 11.1.4`. `--showonly`: `All apps are up-to-date or no updates could be found`.
+- `occ setupchecks`: `Code integrity: No altered files` (the store build said the same). `occ integrity:check-app
+  memories`: `App signature not found, skipping app integrity check`.
+- `/apps/memories/api/config` has `recognize_provider: recognize`; the API-key endpoint returns a key (292 characters).
+- `compare stock.json m4.json`: `identical`. `dev/run-all.sh --ui`: `29 of 29 suites passed`.
+- **Planted fault:** `recognizeProvider()` returning `'nonexistent'` made the capture stop with `people list is not a
+  list: {'message': 'Recognize app not enabled or not the required version.'}` and no file. The restored fork
+  captured `identical` again.
+- **Rollback rehearsal:** store build back (not pinned, with `signature.json`, no `recognizeProvider` in it): capture
+  `identical`; fork forward again: `identical`. The swap to the fork took 2.2 s including the web server restart (the swap back was not timed).
+
 ### M5 Bridge: the `own` tables — done 2026-11-20
 
 - Migration `Version000009000Date2026MMDD000000` creating the two tables exactly as in "The design". No data. Bump the
@@ -385,6 +330,13 @@ leave an old one next to its error:
 **Verify:**
 - `SHOW CREATE TABLE` on both matches the design: columns, NOT NULL, the four indexes, no autoincrement.
 - `occ facewright:own-tables --verify` is clean, and the run passes. Nothing writes the tables yet.
+
+**Done (measured):** migration `Version000009000Date20261120000000`, bridge **0.12.0**, `occ upgrade` printed `Updated
+<facewright_bridge> to 0.12.0`. `SHOW CREATE TABLE` on `oc_facewright_bridge_face_detections` and `_clusters` shows
+exactly the design: `id` bigint NOT NULL without AUTO_INCREMENT, `x y width height` double NOT NULL, `cluster_id`
+bigint NOT NULL, the keys `fwb_fdet_cluster` / `_user` / `_file` and `fwb_fclust_user`, `utf8mb4_bin` like
+Recognize's tables, 0 rows in both. After the re-save the snapshot `original` equals `original-pre-m5` and
+`original-m0` (the own tables are not in it). `dev/run-all.sh --ui`: `29 of 29 suites passed`.
 
 ### M6 Bridge: projection targets — done 2026-11-20
 
@@ -435,6 +387,21 @@ leave an old one next to its error:
   - Break one `own` statement (a wrong column name): the push must still write `recognize`, set the dirty flag and log
     one error naming the target, and a People API write must still succeed.
 
+**Done (measured):** `ProjectionService` writes every configured target (`projection_targets`, unset = `recognize`);
+`occ facewright:project` has `--target` and prints a `Target: <name>` line first; the hourly job and `--verify` cover
+every configured target. Existing suites with the default config, **unchanged**: `project-drift` 24 passed,
+`project-failure` 15, `project-recognize-trap` 21, `project-recognize-copies` 26. New `dev/project-own.sh`: 49 passed
+(an empty copy reports 2790 visible faces and 311 people and writes nothing; the fill; planted drift reported as
+exactly A 6, C 2, D 1 and 1; the repair; Recognize's `CHECKSUM TABLE` equal before and after; `--hydrate --target=own`
+and an unknown target exit 2; a broken `own` column leaves Recognize's copy written, the flag set with `own: ...
+cluster_idx`, one error logged, and the job repairs it). With `own` configured: `writers-people` 55, `writers-cluster`
+23, `persist-guard` 13, `project-concurrency` 4, `battery` 45 passed. `dev/run-all.sh --ui`: `36 of 36 suites passed`
+(the 29 before and `project-own` plus six `-own` runs).
+- **Planted faults, both caught:** push skipping `own` entirely for people: the fill itself failed (`could not fill
+  own`, reconcile cannot repair people). Push skipping `own` people only for a push with no faces (renames, creates):
+  `writers-people` under `with_own` printed `FAIL verify after create` and `FAIL own oracle after create ... 0/0/1/0`,
+  the same after rename and after an empty person exists (49 passed, 6 failed). Code restored byte for byte.
+
 ### M7 Bridge: the WebDAV tree — done 2026-11-20
 
 - `lib/Dav/Tree/`: `RootCollection`, `UserHome`, `FacesHome`, `PersonCollection`, `UnassignedFacesHome`, `FaceFile`,
@@ -467,6 +434,23 @@ leave an old one next to its error:
   - Make `UserHome` skip the user check: the other-user PROPFIND check fails.
   - Name children by file id instead of face id: the merge-listing check fails.
 
+**Done (measured):** `lib/Dav/Tree/` (`RootCollection`, `UserHome`, `FacesHome`, `PersonCollection`,
+`UnassignedFacesHome`, `FaceFile`, and a `ReadOnlyCollection` base that refuses every write), `PeopleService::getFace()`,
+`info.xml` with `<types><dav/></types>` and the `<sabre>` collection (version **0.12.1**), a
+`registerServiceAlias('principalBackend', Principal::class)` in `Application` (without it every DAV request answered 500
+`Could not resolve Sabre\DAVACL\PrincipalBackend\BackendInterface`), and the router's second root with the same-tree
+rule. `dev/battery.sh` takes `TREE`: **Recognize's own tree 58 passed, the bridge's tree 59 passed** (the one extra is the
+405 for the unassigned listing, which Recognize does not give), the same status codes for the same requests. The
+listing check compares the 27 face ids of one person with SQL; Recognize's tree gives the same set, which is what
+shows the expectation is right and not shaped to our code. The bytes of a face file equal the Files tree's (sha256).
+- **Planted faults, each caught:** no same-tree rule: 11 checks failed, among them `MOVE a person into the other tree
+  expected [403] got [201]`, and the person had really been renamed in the other tree. A root without the user check:
+  `PROPFIND on bob's tree as admin expected [403] got [207]`. Children named by file id: `PROPFIND depth 1 on a
+  person lists exactly its faces` got `244,244,...`.
+- `dev/run-all.sh --ui`: 37 of 38 suites passed; the one failure was `rollback-drill`, whose Stage D router predates the
+  cross-tree rule that the battery now checks. The battery takes `CROSS_TREE=no` for it; the drill alone then passed
+  24 of 24. A full run is repeated at the end of M8.
+
 ### M8 Dev: point the fork at the bridge — done 2026-11-20
 
 1. `projection_targets=recognize,own` and `occ facewright:project --target=own` clean. Then `occ config:system:set
@@ -492,6 +476,23 @@ leave an old one next to its error:
 - **Planted fault:** delete one row from the `own` detections table while the provider is ours. The capture must
   differ: Memories reads ours. Then repair with `project --target=own`.
 
+**Done (measured), provider `facewright_bridge`, `projection_targets=recognize,own`:** 
+- Capture right after `snapshot.sh restore original`: `identical` to `stock.json` (297 people, 2713 photo entries), with
+  Recognize enabled, **disabled**, and enabled again. The frontend config carries `recognize_provider:
+  facewright_bridge`; the API-key endpoint returns `{"apiKey":""}`; Memories' settings page and app page answer 200.
+- `dev/memories-ui/flows.py` with `PROVIDER=facewright_bridge` (database checks on the `own` tables, and every flow asserts
+  that no request went to `/dav/recognize`): **21 passed**, with Recognize enabled and again with it disabled (merge:
+  one PROPFIND of our tree and 11 MOVEs). The log held no warning or error from `memories` or `facewright_bridge`
+  during the disabled run.
+- **Planted faults:** one row deleted from the `own` detections made the capture differ (`person 100001 ... count 4 ->
+  3`) and `project --target=own` repaired it, `identical` again. The flows run with `PROVIDER=recognize` while the
+  fork was set to the bridge: 11 of 21 failed, with `no request went to the facewright_bridge tree` listing the stray
+  MOVE, DELETE and PROPFIND requests.
+- `app:enable recognize` re-added its `MaintenanceJob`; deleting it in the same chain left 0 Recognize jobs and
+  `faces.enabled` `true`.
+- `dev/run-all.sh --ui` now also runs `memories-ui-bridge` and `memories-ui-bridge-off` (`with_provider`,
+  `with_recognize_off`); the full run is at the end of M9.
+
 ### M9 Dev: rollback drill — done 2026-11-20
 
 1. Provider back to `recognize` (`occ config:system:delete memories.recognize.provider`). Capture and compare: identical.
@@ -501,6 +502,16 @@ leave an old one next to its error:
 4. `dev/run-all.sh --ui`, with `PROVIDER=facewright_bridge` for the UI flows.
 
 **Verify:** all four compares are identical and the run passes. Record the time each swap took.
+
+**Done (measured), the rollback drill, each step followed by `snapshot.sh restore original`, a capture and a compare
+with `stock.json`:** fork with provider ours `identical`; provider setting removed (0.3 s) `identical`, flows with
+`PROVIDER=recognize` 21 passed; **store build back** (swap 0.8 s, not pinned, `signature.json` present, no
+`recognizeProvider` in it) `identical`; **fork forward** (swap 2.2 s, setting back 0.3 s) `identical`, flows with
+`PROVIDER=facewright_bridge` 21 passed. `dev/run-all.sh --ui`: **`40 of 40 suites passed`** (the 38 before, plus
+`memories-ui-bridge` and `memories-ui-bridge-off`).
+- **Order matters on the way back:** the store build ignores the provider setting and reads Recognize's tables. So
+  the setting is removed first (while the fork is still there), then the folder swapped; with the setting left in
+  place the store build would show Recognize's copy, which is only right while Recognize is enabled and a target.
 
 ### M10 Docs — done 2026-11-20
 

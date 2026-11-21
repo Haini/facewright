@@ -1,65 +1,20 @@
 # Owning the face data: review and implementation plan
 
-> ## Where things stand (updated 2026-11-21) — read this first
+> ## Where things stand (2026-11-21) — read this first
 >
-> **Update 2026-11-21: the Memories fork is live (Stage G, `docs/memories-fork.md`, M11 items 1 to 5 and two steps of 6).**
-> Live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with `memories.recognize.provider=facewright_bridge`,
-> `projection_targets=own`, and Recognize disabled (its tables frozen since 2026-11-21). **Decided 2026-11-21: Stages F
-> and H go ahead (Option 2 of `docs/memories-fork.md`, "Decision after M11").** The way back is the tag
-> `pre-stage-f` on a database rebuilt from scratch, not a data rollback; the runbook and the order of work are in
-> `docs/cleanup.md`, section 0 and 4. Stages F and H below are **not started**; each live step needs its own go-ahead
-> and a fresh dump. The text below from 2026-11-07 is history where it disagrees.
+> **Done and live:** Stages A to E (our tables are the source of truth, the copy Memories reads is written by
+> `ProjectionService`; since 2026-11-06) and G (the fork of Memories reads the `own` copy and writes to our DAV tree;
+> since 2026-11-20, `docs/memories-fork.md`). Live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
+> `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize
+> disabled, its tables frozen since 2026-11-21.
 >
-> **Stages A to E are done and live.** Live runs bridge 0.10.0: our tables are the source of
-> truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
-> confirmed in Memories that rename, move and remove-face edits work and show at once. The work is on `master`, not
-> pushed. The rollback source is a full dump and the Stage D bridge, taken at the cutover (see "Rollback").
+> **Next: Stages F and H**, decided 2026-11-21 (Option 2 of `docs/memories-fork.md`, "Decision after M11"). Not started.
+> The way back from them is the tag `pre-stage-f` on a database rebuilt from scratch, not a data rollback; the runbook
+> and the order of work are in `docs/cleanup.md`, sections 0 and 4. Each live step needs the user's go-ahead and a
+> fresh dump.
 >
-> **What is open, in order** (nothing below is started; each destructive step needs the user's go-ahead):
-> 1. **Day-after check.** A clean dry run alone proves little, because the hourly `ProjectionMaintenanceJob` repairs drift
->    before anyone looks. The evidence is what it logged. On the live instance (the exact commands and expected numbers
->    are in the operator's private notes, which is where every name and path of that instance lives): `occ
->    facewright:project --dry-run`, `occ facewright:own-tables --verify`, `occ config:app:get facewright_bridge
->    projection_last_error`, and the lines of `nextcloud.log` that mention `facewright` (`grep -i facewright`; not
->    `"app":"facewright_bridge"`, which matches nothing: our lines carry `"app":"no app in context"`).
->    Expected: A = C = D = 0, `--verify` exits 0, B no higher than recorded at the cutover (it falls as faces change, it
->    never rises), legacy rows unchanged, and no `projection_last_error` value (the command exits 1 when the key is unset).
->    In the log, read every `repaired N difference(s) ... (A x, C y, D z)` warning and any error. These lines are warnings
->    since 2026-11-06, so an earlier repair left no trace. C after a share is expected: Recognize's own access sync writes
->    rows, and that is what reconcile removes. A or D needs an explanation: a failed push logs an error, Recognize's
->    handlers can delete rows; with neither, a writer is missing its push.
->    **Run on 2026-11-07: clean, but not yet the full check.** No file had been detected, no face created and no share made
->    since the cutover, so a clustering run on new faces and a share have still not happened on live under Stage E. Repeat
->    after those. Also open the admin page and confirm the "Memories sync" line says up to date (never seen in a browser).
-> 2. **If A, C or D is not 0:** save the dry-run output first, then find the cause, and only then run `occ
->    facewright:project` (the hourly job may repair it first, so check the log too). Drift that comes back is a missed
->    writer: fix the writer. Rollback tiers are under "Rollback".
-> 3. **Stage F** (delete the hidden rows, blank vectors, drop transitional code) waits at least two weeks after the
->    cutover, so not before 2026-11-20, and needs the user's explicit go-ahead.
-> 4. **Stage G** (the Memories change), **decided 2026-11-19: a fork** of Memories on the user's GitHub account, since
->    pulsejet/memories#1812 got no answer. Its Recognize backend reads a Recognize-format copy in tables of ours and sends
->    its writes to a WebDAV tree of ours, selected by a system setting, so Recognize need not be installed. The fork's
->    change is `docs/memories-fork.patch` (9 files, +70/-20); the fork carries it
->    (https://github.com/Haini/memories, branch `facewright`). **Built and verified on dev (2026-11-20, steps M0 to M10):**
->    the bridge (0.12.1) writes the `own` projection target and serves the DAV tree `facewright_bridge/`, the fork reads and
->    writes them, and Memories works with Recognize disabled; rollback to the store build is rehearsed. **Live since
->    2026-11-20 (M11)**; Recognize disabled since 2026-11-21. What is left is M12 (rebasing the fork on each Memories
->    release).
->    **The plan and everything measured is `docs/memories-fork.md`.**
->
-> **A separate track: clustering in the ExApp** (`docs/exapp-clustering.md`, its own "Where things stand"). Compared on
-> live with 0 differences; the `exapp` engine, the stored checksum and the cache hygiene (S1 to S5) are live since
-> 2026-11-09 (S6, S7), and S7 closed on 2026-11-21 after two weeks without a fallback.
->
-> **Verification tooling** is under `dev/` (`dev/README.md`; `dev/run-all.sh --ui` on the compose stack, which takes a
-> lock because the dev DB is shared). The last full run passed 40 of 40 suites (2026-11-20, with `--ui`, M9 of
-> `docs/memories-fork.md`, including the ExApp clustering suites and the fork's UI flows). The ground-truth clustering test (`dev/clustering-truth.sh`, 50 people of 15 faces from
-> the Georgia Tech set, which is fetched, never committed) passed 15 of 15.
->
-> **Things that bit and will again:** Apache's opcache revalidates every 60 s (`reload_web` after editing source in
-> tests); `docker exec -i` is needed for piped stdin; `occ upgrade` applies every pending store update (check
-> `occ app:update --showonly`) and Recognize's `MaintenanceJob` can come back after it (delete it in the same chain,
-> pipe `y`); a rollback must keep `info.xml`'s version at the installed one.
+> **Checking the copy** on live: "The day-after check" at the end of Stage E. Last run 2026-11-21, clean
+> (`docs/cleanup.md`, section 1). The test suites are in `dev/README.md`.
 
 The plan for moving all face and people data into tables we own, written for a model session that has not seen this
 repository before. Part 1 is the review and the design; Part 2 is the work, stage by stage: Stages A to E are condensed
@@ -811,9 +766,31 @@ means `occ upgrade` applies whatever is pending).
    it at once; the log and the admin status are clean.
 5. After a day that includes a clustering run and any shares: the dry run is clean. Stage F waits at least two weeks.
 
+### The day-after check
+
+A standing procedure for the copy, after any deploy and whenever something looks off. The live instance's exact
+commands and expected numbers are in the operator's private notes.
+
+1. `occ facewright:project --dry-run` (one report per configured target), `occ facewright:own-tables --verify`,
+   `occ config:app:get facewright_bridge projection_last_error`, and the lines of `nextcloud.log` that mention
+   `facewright` (`grep -i facewright`; not `"app":"facewright_bridge"`, which matches nothing: our lines carry
+   `"app":"no app in context"`).
+2. Expected: A = C = D = 0 for every target, no `projection_last_error` value (the command exits 1 when the key is
+   unset), and no unexplained `repaired N difference(s) ... (A x, C y, D z)` warning or error in the log. A clean dry
+   run alone proves little, because the hourly `ProjectionMaintenanceJob` repairs drift before anyone looks: the
+   evidence is what it logged.
+3. `--verify` always checks Recognize's table too, configured as a target or not. With `recognize` dropped from the
+   targets its C rises as faces are deleted (the copy is frozen), so it exits 1; that goes away with H.1. While
+   `recognize` is a target: B never rises, legacy rows stay unchanged, and C after a share is expected (Recognize's own
+   access sync writes rows, which reconcile removes).
+4. If A, C or D is not 0: save the dry-run output first, find the cause, and only then run `occ facewright:project`.
+   A failed push logs an error and Recognize's handlers can delete rows; with neither, a writer is missing its push.
+   Drift that comes back is a missed writer: fix the writer.
+
 ### The `dev/` scripts
 
-`dev/README.md` says what each script checks and how to run it on the compose stack.
+`dev/README.md` says what each script checks and how to run it on the compose stack. The last full run passed 40 of 40
+suites (2026-11-20, `dev/run-all.sh --ui`, M9 of `docs/memories-fork.md`).
 
 ---
 
