@@ -2,7 +2,7 @@
 
 An inventory of what is left to tidy now that live runs the fork of Memories against our own copy (`docs/memories-fork.md`,
 M11) and Recognize is disabled. Assessed 2026-11-21 against `master` at `beb5488`. Each item says where, what, and whether
-it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3).
+it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3), the three bugs of 6.1 (on dev).
 
 **State this assumes:** live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
 `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize 12.0.3
@@ -136,6 +136,11 @@ enabled Recognize.
 Not changed, for the user: whether "early public alpha" and the README's People-page limitation ("only tried by hand,
 on a throwaway instance") still describe it; the page has been in use on live since 0.8.0.
 
+**Found 2026-11-21, not fixed yet:** `CLAUDE.md` (`PathFilterService`: "Empty list = nothing included") and
+`README.md` (quickstart step 3: "An empty list means nothing is scanned") are wrong. The code
+(`PathFilterService::isIncluded()`, `resolveSearchRoots()`) and the personal settings page agree that an empty list
+includes all of the user's files.
+
 ### 3.2 Shorten the status blocks — done 2026-11-21
 
 `docs/own-tables.md`: "Where things stand" is three short paragraphs; the day-after check moved to the end of Stage E as
@@ -211,16 +216,30 @@ soak times are in that section. Before the first one-way live step: the dev rehe
 
 ## 6. Known bugs (code) **[either option]**
 
-### 6.1 CLAUDE.md open item 4 — all three still present (checked 2026-11-21)
+### 6.1 CLAUDE.md open item 4 — fixed 2026-11-21 on dev, not yet deployed to live
 
-1. `ex_app/lib/main.py:70,96` — `detect` is `async def` and calls `FACE_ANALYSIS.get(img)` synchronously and unguarded:
-   inference blocks the event loop (so `/heartbeat` stalls), and an exception surfaces as a 500, i.e. retryable. Fix:
-   plain `def` (like `/cluster`) or `run_in_threadpool`, with a `try` that maps a decode-level failure to 4xx.
-2. `facewright_bridge/lib/BackgroundJob/DetectQueuedJob.php:144` — the zero-byte branch marks
-   `array_keys($access)` (every user with access) instead of `$pending`, which is computed only afterwards. Move the
-   check after `$pending` and mark only those.
-3. `ProcessedFileService::candidateFileIds()` (`:232`) — `PathFilterService::images()` filters `image/%`, not
-   `DetectionService::SUPPORTED_MIMETYPES`, so unsupported images keep the "not yet processed" count above zero.
+Each fix was checked on dev against the old code, which had to fail the same check:
+
+1. **`/detect` on the event loop** (`ex_app/lib/main.py`). Decoding and inference moved into `_analyse()`, run with
+   `run_in_threadpool`; `_INFERENCE_LOCK` keeps inference one at a time, as the event loop did (parallel ONNX Runtime
+   sessions spiking every core preceded the native crashes). An exception from `FACE_ANALYSIS.get()` is now a 400 if
+   it is an OpenCV error (the image itself, so permanent) and an explicit 500 with the traceback in the container log
+   otherwise (retryable). Measured: `/heartbeat` polled every 50 ms during three forced detections of a 2 MB image,
+   slowest answer **157 ms on the old image, 4.9 ms on the new one** (median about 1.3 ms both). A stand-in model
+   raising `cv2.error` gave 400, `RuntimeError` 500, a normal answer 200, and the lock was free afterwards.
+2. **Zero-byte branch** (`DetectQueuedJob`). The check moved after `$pending` and marks only those users. Measured
+   with an emptied file and a job run through `occ background-job:execute`: a user who already had a marker
+   (`faces_found = 7`) went to **-1 on the old code and kept 7 on the new**; a pending user got -1 on both.
+3. **Candidate count** (`ProcessedFileService::candidateFileIds()`). Applies `SUPPORTED_MIMETYPES` like
+   `BatchTriggerService`. Measured: one `.cr2` file (`image/x-dcraw`) raised admin's count from **96 to 97 on the old
+   code and left it at 96 on the new**.
+
+Regression: `dev/run-all.sh --ui` with the fixes, 39 of 40; the one failure was `rollback-drill` refusing to swap
+uncommitted bridge files, and run alone after the commit it passed 24 of 24.
+
+To deploy: the bridge files (PHP only, no version bump needed) and the ExApp image (`make build` / `make run` on the
+live host), each with the user's go-ahead. A side note from the test: on Nextcloud 33+ `oc_jobs.id` is a Snowflake id
+with no auto-increment, so a hand-made job row needs an explicit id.
 
 ### 6.2 `docs/people-ui-review.md` — apparently unworked
 

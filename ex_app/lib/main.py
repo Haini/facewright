@@ -1,6 +1,8 @@
 """InsightFace-based /detect endpoint for Facewright."""
 
 import os
+import threading
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +17,7 @@ from insightface.model_zoo.model_zoo import PickableInferenceSession
 from nc_py_api import AsyncNextcloudApp, NextcloudApp, NextcloudException
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, anc_app, run_app, set_handlers
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from clustering import ROUTER as CLUSTERING_ROUTER
 from clustering import init_cache
@@ -83,6 +86,18 @@ async def detect(payload: DetectRequest, nc: Annotated[AsyncNextcloudApp, Depend
     if not image_bytes:
         raise HTTPException(status_code=400, detail=f"Empty file: {payload.path}")
 
+    # Decoding and inference take seconds of CPU. Run on the event loop, they stalled every other
+    # request meanwhile, /heartbeat included, so AppAPI saw the ExApp as unresponsive during a scan.
+    # They run in Starlette's thread pool instead, like the plain-def /cluster endpoints.
+    return await run_in_threadpool(_analyse, image_bytes)
+
+
+# One inference at a time, as when it ran on the event loop. Parallel requests would each get their own ONNX Runtime
+# threads, and all cores spiking at once is what preceded the native crashes described at the top of this file.
+_INFERENCE_LOCK = threading.Lock()
+
+
+def _analyse(image_bytes: bytes) -> JSONResponse:
     npbuf = np.frombuffer(image_bytes, dtype=np.uint8)
     try:
         img = cv2.imdecode(npbuf, cv2.IMREAD_COLOR)
@@ -93,7 +108,20 @@ async def detect(payload: DetectRequest, nc: Annotated[AsyncNextcloudApp, Depend
     if img is None:
         raise HTTPException(status_code=400, detail="Could not decode image")
 
-    faces = FACE_ANALYSIS.get(img)
+    try:
+        with _INFERENCE_LOCK:
+            faces = FACE_ANALYSIS.get(img)
+    except cv2.error as exc:
+        # An image that decodes but that InsightFace's own OpenCV preprocessing rejects (degenerate dimensions and the
+        # like). The same input fails the same way every time, so it is a verdict on the file: 4xx, which the bridge
+        # marks permanent instead of retrying.
+        raise HTTPException(status_code=400, detail=f"Could not analyse image: {exc}") from exc
+    except Exception as exc:
+        # Anything else (ONNX Runtime, memory) says nothing about the file: an explicit 5xx, which the bridge retries a
+        # bounded number of times, with the traceback in this container's log instead of a bare 500.
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Inference failed: {type(exc).__name__}: {exc}") from exc
+
     results = [
         {
             "bbox": face.bbox.tolist(),

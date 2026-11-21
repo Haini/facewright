@@ -560,11 +560,12 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 3. **Admin-side threshold changes re-evaluate nothing for users who set their own**; only the
    personal page triggers `clearUnclusterableMarks()`. `occ facewright:cluster --reset` remains
    the blunt option.
-4. **Three known bugs**: `ex_app/lib/main.py` runs `FACE_ANALYSIS.get()` unguarded and
-   synchronously on the event loop (a crash reads as retryable, and `/heartbeat` stalls during
-   inference); `DetectQueuedJob`'s zero-byte branch marks *every* user with access, not just
-   `$pending`; `ProcessedFileService::candidateFileIds()` lacks the `SUPPORTED_MIMETYPES` filter,
-   so the "not yet processed" count can never reach zero.
+4. **Closed (2026-11-21, dev; not yet deployed to live): three known bugs.** `/detect` ran decoding and inference
+   on the event loop, so `/heartbeat` stalled during inference; they run in the thread pool now, one inference at a time
+   (`_INFERENCE_LOCK`), and an inference error is an explicit 400 for an OpenCV rejection of the image (permanent) or 500
+   for anything else (retryable). `DetectQueuedJob`'s zero-byte branch marks only `$pending`, so an existing marker is no
+   longer overwritten with `FACES_FAILED`. `ProcessedFileService::candidateFileIds()` applies `SUPPORTED_MIMETYPES`, so
+   raw camera files no longer keep the "not yet processed" count above zero. Measurements: `docs/cleanup.md`, 6.1.
 5. **No tests, static analysis, or CI** — and the People page has only been exercised by hand in
    headless Chromium on the compose stack, never against a production-sized library. The pure-logic pieces (`ClusteringService`'s distance
    math, `AccessService::pickFetchUser`, `PathFilterService::isIncluded`) are

@@ -135,21 +135,23 @@ class DetectQueuedJob extends QueuedJob {
 			$this->logger->debug("facewright: file {$fileId} has unsupported mimetype {$node->getMimetype()} at run time, skipping.");
 			return;
 		}
-		if ($node->getSize() === 0) {
-			// Nothing to send, and worth catching on this side: an empty body makes OpenCV raise
-			// rather than return None, which surfaces as a 500 and so reads as retryable. Marked
-			// processed rather than merely skipped, because unlike an unsupported mimetype this
-			// is a broken file rather than a capability we might gain later.
-			$this->logger->warning("facewright: skipping zero-byte file {$fetch['path']} (fileId {$fileId}).");
-			$this->processedFiles->markManyProcessed(array_keys($access), $fileId, ProcessedFileService::FACES_FAILED);
-			return;
-		}
-
 		// Replaces the old single isProcessed() check. Under fan-out "has this file been processed"
 		// is no longer a property of the file: one long since done for its owner still needs rows
 		// for someone it was shared with yesterday.
 		$pending = array_values(array_diff(array_keys($access), $this->processedFiles->getProcessedUsers($fileId)));
 		if ($pending === []) {
+			return;
+		}
+
+		if ($node->getSize() === 0) {
+			// Nothing to send, and worth catching on this side: an empty body makes OpenCV raise
+			// rather than return None, which surfaces as a 500 and so reads as retryable. Marked
+			// processed rather than merely skipped, because unlike an unsupported mimetype this
+			// is a broken file rather than a capability we might gain later. Only $pending: a
+			// user who already has a marker keeps it (a file emptied after detection must not
+			// overwrite their faces_found with FACES_FAILED while their face rows remain).
+			$this->logger->warning("facewright: skipping zero-byte file {$fetch['path']} (fileId {$fileId}).");
+			$this->processedFiles->markManyProcessed($pending, $fileId, ProcessedFileService::FACES_FAILED);
 			return;
 		}
 

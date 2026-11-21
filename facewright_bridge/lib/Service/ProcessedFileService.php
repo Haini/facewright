@@ -238,6 +238,12 @@ class ProcessedFileService {
 		$userFolder = $this->rootFolder->getUserFolder($userId);
 		foreach ($this->pathFilter->resolveSearchRoots($userId, $userFolder) as $folder) {
 			foreach ($this->pathFilter->images($folder) as $node) {
+				// The same filter as BatchTriggerService::collectForUser(): images() matches all of
+				// `image/*`, raw camera files (`image/x-dcraw`) included, which are never enqueued or
+				// marked, so counting them kept "not yet processed" above zero for good.
+				if (!in_array($node->getMimetype(), DetectionService::SUPPORTED_MIMETYPES, true)) {
+					continue;
+				}
 				$ids[$node->getId()] = true;
 			}
 		}
