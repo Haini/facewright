@@ -1,7 +1,7 @@
 # Requirements: Facewright People curation UI
 
 Requirements for an own face-curation page in `facewright_bridge` (Stage 3(b) of
-`docs/independence.md`, narrowed to curation). Gathered 2026-10-20. The step-by-step
+`docs/archive/independence.md`, narrowed to curation). Gathered 2026-10-20. The step-by-step
 implementation plan is a separate doc, to be written from this one.
 
 ## Context
@@ -15,7 +15,7 @@ the session-scoped OCS API in `PeopleApiController`, but nothing in a browser ca
 
 This feature is a **face-crop curation UI** inside `facewright_bridge`: name, merge, delete,
 fix and ignore faces. Memories stays the place to browse photos. It is Stage 3(b) of
-`docs/independence.md`, narrowed to curation only. That doc said not to build 3(b) speculatively;
+`docs/archive/independence.md`, narrowed to curation only. That doc said not to build 3(b) speculatively;
 the reasons above are why it is built anyway (noted there).
 
 Decisions:
@@ -148,7 +148,7 @@ Decisions:
 
 ## Open points, as resolved
 
-The implementation plan is `docs/people-ui-implementation.md`.
+The implementation plan is `docs/archive/people-ui-implementation.md`.
 
 1. **F7 centroids: a cached table from the start, per person only.** Measured on the dev instance
    with 2,500 synthetic people and a warm buffer pool: suggestions for one person take 0.12 s

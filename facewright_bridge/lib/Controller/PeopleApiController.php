@@ -15,7 +15,7 @@ use OCP\IRequest;
 
 /**
  * Session-scoped OCS API over PeopleService - the "API of our own" Stage 0 of
- * docs/independence-implementation.md exists to create. Every action is #[NoAdminRequired] and
+ * docs/archive/independence-implementation.md exists to create. Every action is #[NoAdminRequired] and
  * scoped to the session user ($userId, injected by the framework from the auth token) - there is
  * no parameter anywhere that names a different user, so there is no way to reach anyone else's
  * clusters through this controller. The admin's cross-user merge stays on

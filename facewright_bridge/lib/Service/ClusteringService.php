@@ -588,7 +588,7 @@ class ClusteringService {
 	 * Split into two passes on purpose, and that split is what makes the cap cost anything at
 	 * all. Pass 1 selects no embedding at all (clustered-index leaf pages only, never faulting in
 	 * a BLOB page) purely to decide *which* ids are wanted, and pass 2 fetches embeddings for just
-	 * those - via facewright_faces (Stage 1 of docs/independence-implementation.md), a
+	 * those - via facewright_faces (Stage 1 of docs/archive/independence-implementation.md), a
 	 * 2 KB-per-row blob rather than recognize_face_detections.face_vector's ~4.8 KB JSON, so this
 	 * pass is cheaper again than the ~340 MB it was measured at against that column (see CLAUDE.md's
 	 * "Capping rows in PHP saves no I/O").

@@ -10,7 +10,7 @@ use OCP\IDBConnection;
 
 /**
  * Backfills facewright_faces / facewright_detection_faces (Stage 1 of
- * docs/independence-implementation.md) for detections written before those tables existed.
+ * docs/archive/independence-implementation.md) for detections written before those tables existed.
  * Resumable and chunked by file_id - a cursor in appconfig survives across runs and is deleted
  * once the whole table is caught up.
  *

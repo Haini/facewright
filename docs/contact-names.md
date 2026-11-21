@@ -122,7 +122,7 @@ both.
    existing `/detect` behaviour, and anything listed in `docs/people-ui-review.md` "Reviewed and
    fine".
 7. **No tests, no build step.** Verify with `occ`, SQL, `curl` and the browser on the stack, as in
-   `docs/people-ui-implementation.md`.
+   `docs/archive/people-ui-implementation.md`.
 
 **Test data.** Create vCards for `alice` on the stack with `curl -u alice:… -X PUT -H
 'Content-Type: text/vcard' --data-binary @card.vcf

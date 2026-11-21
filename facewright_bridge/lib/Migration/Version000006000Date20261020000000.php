@@ -11,7 +11,7 @@ use OCP\Migration\IOutput;
 use OCP\Migration\SimpleMigrationStep;
 
 /**
- * Merge suggestions for the People page (step 6 of docs/people-ui-implementation.md).
+ * Merge suggestions for the People page (step 6 of docs/archive/people-ui-implementation.md).
  *
  * facewright_cluster_centroids: a cache of one averaged, L2-normalized embedding per cluster
  * (512 x float32 little-endian, FaceVectorCodec), so suggesting merges compares ~2 KB per person

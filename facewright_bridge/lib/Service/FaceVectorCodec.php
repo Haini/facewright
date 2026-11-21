@@ -6,7 +6,7 @@ namespace OCA\FacewrightBridge\Service;
 
 /**
  * The one place an embedding becomes bytes, for facewright_faces.embedding (Stage 1 of
- * docs/independence-implementation.md). InsightFace already emits float32; packing straight into
+ * docs/archive/independence-implementation.md). InsightFace already emits float32; packing straight into
  * that width - rather than JSON through a PHP double, as recognize_face_detections.face_vector
  * still does - loses nothing: `1 - dot(decode(encode(v)), v)` for an L2-normalized `v` is <= 1e-7,
  * against a clustering threshold of 0.5.

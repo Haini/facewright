@@ -47,7 +47,7 @@ class ResetService {
 		[$detectionIds, $clusterIds, $faceIds] = $this->findOwnRows();
 
 		// Links before detections before faces: a face is only ours to delete once nothing still
-		// links to it (Stage 1 of docs/independence-implementation.md - fan-out can mean a face is
+		// links to it (Stage 1 of docs/archive/independence-implementation.md - fan-out can mean a face is
 		// shared, though a whole-instance reset removes every one of our own detection rows, so in
 		// practice every face this collected becomes orphaned).
 		$this->deleteByIds('facewright_detection_faces', 'detection_id', $detectionIds);

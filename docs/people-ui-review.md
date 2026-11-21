@@ -195,14 +195,14 @@ action still works when logged in.
 `PUT /faces/{id}/cluster` (`moveFace`), `DELETE /faces/{id}/cluster` (`detachFace`).
 
 **Problem:** The page uses only the bulk forms. These five were specified in Stage 0
-(`docs/independence-implementation.md`) as "an API of our own", but the planned Stage 2 DAV shim
+(`docs/archive/independence-implementation.md`) as "an API of our own", but the planned Stage 2 DAV shim
 calls `PeopleService` directly, not OCS. They are untested surface area, and they disagree with the
 bulk forms on status codes (not-found is 404 for `deleteCluster`, 400 for `moveFace`/`mergeMany`).
 
 **Proposal for the user:** remove the five routes and their actions (keep the `PeopleService`
 methods: `mergeClusters()` is used by `PeopleSettingsController` and `occ facewright:merge-clusters`;
 `deleteCluster()`/`detachFace()`/`moveFace()` can stay as thin conveniences or go). Update the Stage 0
-route table in `docs/independence-implementation.md` with a note. If the user prefers to keep them,
+route table in `docs/archive/independence-implementation.md` with a note. If the user prefers to keep them,
 instead make not-found consistently 404 across all actions (throw a dedicated
 `PersonNotFoundException extends \InvalidArgumentException` from `getCluster()` and map it).
 

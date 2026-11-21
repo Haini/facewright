@@ -16,7 +16,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 /**
  * One-time migration for the meaning change of cluster_id = -1 (see ClusteringService::UNASSIGNED
- * and docs/independence-implementation.md Stage 0). Before this runs, our own clustering treats -1
+ * and docs/archive/independence-implementation.md Stage 0). Before this runs, our own clustering treats -1
  * as "Recognize rejected this, re-evaluate it"; after the code in this same stage deploys, -1
  * means "unassigned - excluded from clustering until a human assigns it" and is never
  * re-evaluated automatically. Rows Recognize's own HDBSCAN previously parked at -1 would

@@ -14,7 +14,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 /**
  * Inspection and light maintenance for PeopleService, without a browser - how every later step
- * of docs/independence-implementation.md's Stage 0/2 work is verified. Lists a user's clusters
+ * of docs/archive/independence-implementation.md's Stage 0/2 work is verified. Lists a user's clusters
  * by default; --faces/--unassigned narrow to one cluster's or the unassigned pool's member faces;
  * --delete-empty runs PeopleService::deleteEmptyClusters().
  */

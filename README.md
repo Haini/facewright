@@ -68,7 +68,7 @@ full design history and every incident/gotcha hit building this, if you want the
   Memories reads a copy in Recognize's internal tables and sends its edits to Recognize's DAV paths,
   which this app answers. Both are undocumented and could change in a future release (Recognize 10
   already renamed the vector column once); a change there breaks Memories' People page, not the
-  data. `docs/independence.md` reviews the coupling, and `docs/own-tables.md` is the plan, ending in
+  data. `docs/archive/independence.md` reviews the coupling, and `docs/own-tables.md` is the plan, ending in
   a change to Memories itself.
 - **The People page has only been tried by hand, on a throwaway instance with generated data,**
   not yet on a real library. A face marked "not a face" is forgotten by a full reset

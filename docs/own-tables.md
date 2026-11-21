@@ -4,11 +4,11 @@
 >
 > **Update 2026-11-21: the Memories fork is live (Stage G, `docs/memories-fork.md`, M11 items 1 to 5 and two steps of 6).**
 > Live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with `memories.recognize.provider=facewright_bridge`,
-> `projection_targets=own`, and Recognize disabled (its tables frozen since 2026-11-21). **Open and undecided, to be
-> reconsidered by the user in a later session: whether to park Stages F and H and keep the Recognize-side machinery as a
-> way out (Option 1, with an optional warm standby), or to remove it (Option 2).** Both are written out, with a
-> recommendation, in `docs/memories-fork.md`, "Open decision after M11". Stages F and H below are **not started** and
-> must not be started before that decision. The text below from 2026-11-07 is history where it disagrees.
+> `projection_targets=own`, and Recognize disabled (its tables frozen since 2026-11-21). **Decided 2026-11-21: Stages F
+> and H go ahead (Option 2 of `docs/memories-fork.md`, "Decision after M11").** The way back is the tag
+> `pre-stage-f` on a database rebuilt from scratch, not a data rollback; the runbook and the order of work are in
+> `docs/cleanup.md`, section 0 and 4. Stages F and H below are **not started**; each live step needs its own go-ahead
+> and a fresh dump. The text below from 2026-11-07 is history where it disagrees.
 >
 > **Stages A to E are done and live.** Live runs bridge 0.10.0: our tables are the source of
 > truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
@@ -63,7 +63,7 @@ The plan for moving all face and people data into tables we own, written for a m
 repository before. Part 1 is the review and the design; Part 2 is the work, stage by stage: Stages A to E are condensed
 to what was built, found and verified (the original step text is in git history, before this line), F to H are still
 the plan. Where the parts differ, Part 2 wins. Where this plan differs from
-`docs/independence.md` or `docs/independence-implementation.md`, this plan wins (see "Deviations").
+`docs/archive/independence.md` or `docs/archive/independence-implementation.md`, this plan wins (see "Deviations").
 
 ---
 
@@ -151,7 +151,7 @@ Consequence for the design: rows Recognize creates are unlinked copies of ours. 
 stale rows (Stage E, category C) matches them by vector length, which holds for both a real vector (over 3500) and the
 blanked `'[]'` (length 2). Removing them is correct, because they have no visible own row.
 
-`docs/independence.md` does not list the `FsActionService` paths.
+`docs/archive/independence.md` does not list the `FsActionService` paths.
 
 **Memories' five writes** (`js/memories-main.js`, 10.1.0): `DELETE recognize/{u}/faces/{p}/{id}-{name}`,
 `DELETE recognize/{u}/faces/{p}`, `MKCOL recognize/{u}/faces/{p}`, `MOVE` rename on `faces/{p}`, and
@@ -893,7 +893,7 @@ uses) and `PeopleService::moveLegacyMembers()`.
 - `CLAUDE.md`: drop `ownRowsExpr()`, the vector bands, `face_vector`'s remaining rules and the commands F.2 removes;
   the `occ` list; Open item 6.
 - `README.md`: no Memories note is needed; editing keeps working.
-- `docs/independence.md`: mark what is done.
+- `docs/archive/independence.md`: mark what is done.
 
 ---
 
@@ -951,7 +951,7 @@ Only after M11 of `docs/memories-fork.md` runs on production.
 
 ## Deviations
 
-From `docs/independence.md`:
+From `docs/archive/independence.md`:
 
 1. **Stage 2's shim is not planned.** Recognize stays installed and passive; our router answers writes on its DAV tree.
 2. **M7 is out of date.** The server side is not pluggable: `Manager::BACKENDS` is a constant (10.1.0 and 11.0.2).
@@ -961,7 +961,7 @@ From `docs/independence.md`:
 6. **Its version references** (Memories 8.1.0, `ClusterMergeService`) are stale: live is 11.0.2, and
    that service was deleted. Stage 0's `ClusterMergeService` references are historical.
 
-From `docs/independence-implementation.md`:
+From `docs/archive/independence-implementation.md`:
 
 1. **Deviation 2 is reversed.** Assignment state moves out of `rfd`, and the `state`-column idea returns,
    without `rejected_cluster_id`, which is still not needed.

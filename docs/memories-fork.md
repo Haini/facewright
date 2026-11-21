@@ -108,8 +108,8 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 
 **M10 (docs) is done. M11 items 1-5 are done on live (2026-11-20, "M11 as run" below), and so were two of item 6's steps
 on 2026-11-21: `recognize` dropped from `projection_targets` and Recognize disabled. The build script's commit is pushed.
-Next: an open decision about the rest of item 6 and Stages F and H, see "Open decision after M11" below. Nothing is
-started on it; decide with the user first.**
+Decided 2026-11-21: the rest of item 6 and Stages F and H go ahead, with the tags `pre-stage-f` / `facewright-v11.1.4`
+as the way back (see "Decision after M11" below, and `docs/cleanup.md`). Nothing of it is started yet.**
 
 ## How to work this plan
 
@@ -558,7 +558,12 @@ Ask the user before each numbered item.
 Rollback at any point: the provider back to `recognize` (Recognize must still be enabled and a target, and
 `occ facewright:project --target=recognize` repairs its copy), then the store build of the same version.
 
-### Open decision after M11 (2026-11-21, not decided: the user wants to think it over)
+### Decision after M11 (2026-11-21: Option 2)
+
+**Decided 2026-11-21: Option 2.** The user does not need a data rollback: the way back is the code at the tag
+`pre-stage-f` (this repo) and `facewright-v11.1.4` (the fork) on a database rebuilt from scratch, with detection run
+again; losing names and other curation on that path is accepted. Runbook and work order: `docs/cleanup.md`, section 0.
+The text below is the decision as it was laid out.
 
 **State on live now:** Memories is the pinned fork (11.1.4), `memories.recognize.provider=facewright_bridge`,
 `projection_targets=own`, Recognize 12.0.3 **disabled** (installed, no `oc_jobs` rows of it), bridge 0.12.1. Recognize's

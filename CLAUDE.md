@@ -57,8 +57,8 @@ The coupling is the path shapes, the `Destination` header and the status codes; 
 
 Only reads are decoupled (`RecognizeBackend.php` queries the tables directly). Nextcloud's own
 Photos app has the same three dependencies. The full coupling inventory, the write-path bugs it
-causes, and the stages already done are in `docs/independence.md` and
-`docs/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
+causes, and the stages already done are in `docs/archive/independence.md` and
+`docs/archive/independence-implementation.md`. The current plan is `docs/own-tables.md`: all face and people
 data in tables we own, a temporary one-way push to Recognize's tables with Memories' edits routed through
 our people service, and a Memories change (now in a fork, Stage G) as the end state. It replaces the
 `recognize`-contract shim. Stage G (decided 2026-11-19, since pulsejet/memories#1812 got no answer) is a fork of
@@ -174,7 +174,7 @@ shell (`PageController`, `templates/main.php`, `js/people.js`, `css/people.css`,
 api/v1/`, every action `#[NoAdminRequired]` and scoped to the session user, no parameter names
 another user) and `FacePreviewController` (`/faces/{id}/preview`, a square crop of Nextcloud's
 1024 px preview; a plain route because `<img>` cannot send OCS headers). Requirements and rationale:
-`docs/people-ui.md`; build plan: `docs/people-ui-implementation.md`. Things that bit:
+`docs/people-ui.md`; build plan: `docs/archive/people-ui-implementation.md`. Things that bit:
 - Nextcloud's global CSS resets `dialog` margins and gives every `button` an opaque fill: dialogs
   need `margin: auto` and the face boxes need `background: transparent !important`.
 - Esc on a `<dialog>` is handled on the document for the topmost one: whether the browser fires
@@ -579,7 +579,7 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of
-`docs/independence-implementation.md`. The face-identity key is `(file_id, face_index)`, as
+`docs/archive/independence-implementation.md`. The face-identity key is `(file_id, face_index)`, as
 recommended.
 
 ## Licensing note

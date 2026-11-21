@@ -9,7 +9,7 @@ done too: the data lives in tables we own, a temporary one-way push feeds Recogn
 Memories change is the target. Stage 2's shim is no longer planned. This file stays as the coupling inventory;
 its deviations are listed in that plan.
 
-The step-by-step implementation plan for the roadmap is `docs/independence-implementation.md`;
+The step-by-step implementation plan for the roadmap is `docs/archive/independence-implementation.md`;
 where the two differ, that plan wins (its "Deviations" section lists the differences and why).
 
 Verified against the app versions installed on the reference instance: Memories 8.1.0,
@@ -106,7 +106,7 @@ compose stack before fixing (see "Verification").
    pass, the faces appear in Memories' "unassigned" view (M6).
    **Fixed by Stage 0 (`-1` = unassigned)**: `ClusteringService::UNASSIGNED` now excludes `-1`
    rows from clustering entirely instead of reading them as pending, with no schema change - see
-   `docs/independence-implementation.md` Stage 0, step 0.2.
+   `docs/archive/independence-implementation.md` Stage 0, step 0.2.
 2. **Removing a face from a person does not stick.** `FacePhoto::delete()`
    (`recognize/lib/Dav/Faces/FacePhoto.php:48-59`) sets `cluster_id = NULL` — pending, for us — and
    writes `threshold`, which nothing of ours reads. The face still sits within 0.5 of its former

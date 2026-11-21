@@ -13,7 +13,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 /**
  * Resumable backfill of facewright_faces / facewright_detection_faces for detections written
- * before Stage 1 of docs/independence-implementation.md - see FaceMigrationService for the actual
+ * before Stage 1 of docs/archive/independence-implementation.md - see FaceMigrationService for the actual
  * algorithm. Safe to interrupt and re-run: the cursor (appconfig
  * facewright_bridge/migrate_faces_after_file_id) survives, and re-processing a chunk that
  * partially completed skips rows already linked.

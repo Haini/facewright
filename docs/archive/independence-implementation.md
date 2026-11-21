@@ -1,6 +1,6 @@
-# Implementation plan: `docs/independence.md`, stage by stage
+# Implementation plan: `docs/archive/independence.md`, stage by stage
 
-An executable plan for the roadmap in `docs/independence.md`. Written for a model session that has
+An executable plan for the roadmap in `docs/archive/independence.md`. Written for a model session that has
 not seen this repository before: every step names the files, the functions, the schema and the
 verification, and says what must *not* be touched. Where this plan and `independence.md` differ,
 this plan wins — it was derived from reading the code more closely and the differences are called
@@ -222,7 +222,7 @@ added commands, which do).
   in 0.2; Open items: remove item 6, and in item 4 replace the "deleting a person … rebuilds the
   person untitled" bug with "fixed in Stage 0: `-1` now means unassigned"; leave the remove-face
   bug (it is fixed by Stage 2).
-- `docs/independence.md`: in Finding 1, add "Fixed by Stage 0 (`-1` = unassigned)".
+- `docs/archive/independence.md`: in Finding 1, add "Fixed by Stage 0 (`-1` = unassigned)".
 
 **Stage 0 done when:** all verifications above pass on the compose stack; `grep -rn
 RECOGNIZE_REJECTED` is empty; `occ facewright:merge-clusters --dry-run` prints without writing.
@@ -560,7 +560,7 @@ people, "create person" works, and a detection populates it.
 7. Table size: `information_schema` `data_length` of `rfd` before/after the column drop (an
    estimate, per CLAUDE.md, but the order of magnitude is the point).
 
-### 2.9 Cutover runbook (per instance; written into `docs/independence.md` §Stage 2 once rehearsed)
+### 2.9 Cutover runbook (per instance; written into `docs/archive/independence.md` §Stage 2 once rehearsed)
 
 1. `occ facewright:migrate-faces` complete and reconciled (Stage 1).
 2. Admin page → "Pause processing". Confirm no `DetectQueuedJob`/`ClusterScanJob` is mid-run
@@ -592,7 +592,7 @@ people, "create person" works, and a detection populates it.
   the "derived from Recognize, AGPL" sentence.
 - README: "What this is" no longer says Recognize stays installed; Quickstart gains the shim;
   "Current limitations" drops the schema-drift bullet.
-- `docs/independence.md`: mark Stages 0–2 done with commit hashes; keep Stage 3 and the "What
+- `docs/archive/independence.md`: mark Stages 0–2 done with commit hashes; keep Stage 3 and the "What
   stays coupled" section.
 
 **Stage 2 done when:** 2.8 passes on the compose stack twice — once upgrading from a stack that

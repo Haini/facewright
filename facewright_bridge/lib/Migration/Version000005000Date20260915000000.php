@@ -11,7 +11,7 @@ use OCP\Migration\IOutput;
 use OCP\Migration\SimpleMigrationStep;
 
 /**
- * Stage 1 of docs/independence-implementation.md: two tables we own, so "is this row ours" can
+ * Stage 1 of docs/archive/independence-implementation.md: two tables we own, so "is this row ours" can
  * become a join instead of a string-length proxy on Recognize's face_vector, and a per-file
  * physical face gets a stable identity independent of how many users' rows point at it.
  *
