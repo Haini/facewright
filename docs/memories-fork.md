@@ -106,7 +106,10 @@ answers Memories' requests. Recognize can then be disabled, and in the end unins
 - **Checks on the patch's content:** `vue-tsc` and `prettier --check` on the identical prototype; `php -l` and the M1
   greps on the commit. The code has never run in Nextcloud.
 
-**M10 (docs) is done. M11 items 1-5 are done on live (2026-11-20, see "M11 as run" below); the build script's commit is pushed. Next, each with its own go-ahead: M11 item 6 (drop `recognize` from `projection_targets`, disable Recognize, Stage H), after a day or two of normal use including new detections.**
+**M10 (docs) is done. M11 items 1-5 are done on live (2026-11-20, "M11 as run" below), and so were two of item 6's steps
+on 2026-11-21: `recognize` dropped from `projection_targets` and Recognize disabled. The build script's commit is pushed.
+Next: an open decision about the rest of item 6 and Stages F and H, see "Open decision after M11" below. Nothing is
+started on it; decide with the user first.**
 
 ## How to work this plan
 
@@ -554,6 +557,56 @@ Ask the user before each numbered item.
 
 Rollback at any point: the provider back to `recognize` (Recognize must still be enabled and a target, and
 `occ facewright:project --target=recognize` repairs its copy), then the store build of the same version.
+
+### Open decision after M11 (2026-11-21, not decided: the user wants to think it over)
+
+**State on live now:** Memories is the pinned fork (11.1.4), `memories.recognize.provider=facewright_bridge`,
+`projection_targets=own`, Recognize 12.0.3 **disabled** (installed, no `oc_jobs` rows of it), bridge 0.12.1. Recognize's
+tables are **frozen** at the moment `recognize` was dropped (21 Nov, about 15:40 local, a fresh dump of that moment is
+`~/backups/facewright-pre-recognize-off/`); nothing writes them. Photos' People view is gone (it needs Recognize). Both
+copies agreed at 0 until then; the `own` copy has been checked after new detections and edits.
+
+The open question is how much of the Recognize-side machinery to keep as **a way out** if the fork cannot be kept up
+(Memories moving on faster than we rebase, a security fix we cannot port, etc.). Two options:
+
+**Option 1: park Stages F and H, keep the way out cheap.** Delete nothing. Keep the `recognize` target, `--hydrate`,
+reconcile's B/squatter/legacy categories, the router's `recognize` root, Recognize's tables and its app files (disabled,
+not `app:remove`d), and the saved store build. Then:
+- *Warm standby (optional but recommended with this option):* put `recognize` back into `projection_targets`
+  (`recognize,own`) and run `occ facewright:project --target=recognize` once to catch up the stretch it was off. The
+  copy stays current for a few seconds of writes (the `own` fill of 156,231 faces took 3.8 s). A rollback is then: remove
+  the provider setting, swap the store build of the same version back, `occ app:enable recognize`, delete its
+  `MaintenanceJob` (and any `ClusterFacesJob`) in the same chain. No repair step.
+- *Without warm standby (current state):* the same, plus `occ facewright:project --target=recognize` after setting
+  `projection_targets=recognize,own`, to repair a stale copy. Its run time at production size is **not measured**
+  (a dry run on live is read-only and would give the size of the drift).
+- **Untested:** M9's rollback drill had Recognize enabled and a target. Rolling back from the present state (Recognize
+  disabled, copy stale) has not been rehearsed. If this option is taken: write a dev drill for it (disable Recognize,
+  drop the target, make changes through the fork, roll back, `memories-api.py capture|compare`), add it to
+  `dev/run-all.sh`, and put the runbook here.
+- Optional and rollback-safe later: F.1 (blank the vectors in Recognize's table, `ALTER TABLE ... FORCE`; about 1.1 GB
+  and the buffer pool); `--hydrate` and `project` restore what it takes out. Not needed now.
+- Costs: the Recognize-side code and the `recognize_*` rows stay (about 1.1 GB on disk); `facewright_detection_faces`,
+  `ownRowsExpr` and the other Stage D leftovers stay; Photos' People view stays gone.
+
+**Option 2: Stages H and F as written (a one-way door).** Sequence, each live step with its own go-ahead and a fresh
+dump, dev first:
+1. Code (bridge 0.13.0): remove the `recognize` target, `project --hydrate`, reconcile's B/squatter/legacy categories
+   (H.1); the router's `recognize` root; F.2's dead code (`ownRowsExpr`, `encodeVector`, `VectorCompactionService`,
+   `MigrateFaces`, `ReopenUnassigned`, `--precheck/--migrate/--seed-ids`; sentinels into `FaceState`); the legacy-member
+   reads of Recognize's tables (F.3, after the user has seen the titled and untitled split of the 40 legacy rows).
+2. Deploy 0.13.0 on live (`occ upgrade` also applies pending store updates).
+3. Soak about a week on `own` alone.
+4. 0.14.0 migration dropping `facewright_detection_faces` (after `grep -rn detection_faces lib/` is empty).
+5. Dump, then drop `rfd`/`rfc` or leave them frozen; remove the Recognize app or leave it disabled; docs (the
+   coexistence section of `CLAUDE.md`, `.noimage`).
+- After step 1 there is **no way back to stock Memories** and none to the Stage D code; the way out is the dump.
+- Gains: about 1.1 GB and buffer pool, much less code, no Recognize.
+
+**Recommendation (Claude, 2026-11-21):** Option 1 with warm standby, then revisit Option 2 after the fork has survived a
+rebase onto a real Memories release (M12) and a few weeks of use. The recommendation is the cheaper one to take back; it
+is not yet decided. Open points for the user: whether to re-add the `recognize` target now; whether to have the dev drill
+written; whether F.1 is ever wanted; whether Recognize is ever uninstalled.
 
 ### M12 Keeping the fork current
 

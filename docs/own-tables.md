@@ -1,6 +1,14 @@
 # Owning the face data: review and implementation plan
 
-> ## Where things stand (updated 2026-11-07) — read this first
+> ## Where things stand (updated 2026-11-21) — read this first
+>
+> **Update 2026-11-21: the Memories fork is live (Stage G, `docs/memories-fork.md`, M11 items 1 to 5 and two steps of 6).**
+> Live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with `memories.recognize.provider=facewright_bridge`,
+> `projection_targets=own`, and Recognize disabled (its tables frozen since 2026-11-21). **Open and undecided, to be
+> reconsidered by the user in a later session: whether to park Stages F and H and keep the Recognize-side machinery as a
+> way out (Option 1, with an optional warm standby), or to remove it (Option 2).** Both are written out, with a
+> recommendation, in `docs/memories-fork.md`, "Open decision after M11". Stages F and H below are **not started** and
+> must not be started before that decision. The text below from 2026-11-07 is history where it disagrees.
 >
 > **Stages A to E are done and live.** Live runs bridge 0.10.0: our tables are the source of
 > truth and Recognize's tables are a copy written by `ProjectionService`. The cutover passed every gate and the user
