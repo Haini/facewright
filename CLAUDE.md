@@ -566,7 +566,7 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    per face, plus a per-face read-back query for `facewright_faces.id` — `IDBConnection::
    setValues()` has no id-returning mode), `AccessSyncService::copyToUsers()` and
    `ClusteringService::persistAssignments()`.
-7. **Closed (design and dev, 2026-11-09): clustering's matching in the ExApp.** It ran in PHP only: every chunk reloaded
+7. **Closed (2026-11-21, live since 2026-11-09): clustering's matching in the ExApp.** It ran in PHP only: every chunk reloaded
    the user's whole pool as PHP float arrays (about 12 KB per face against 2 KB stored) and compared up to 300 pending
    faces with all of it. Now there is the `exapp` engine (see "Components" and "Job semantics"), with PHP kept as the
    fallback by design. Why, measured on live with `occ facewright:cluster-compare --reopen` (2026-11-08), which found 0
@@ -574,8 +574,8 @@ the running containers' and restart the affected ones; the durable fix is pinnin
    786 MB, and the ExApp 4 min 42 s round trip (about 7.7 ms per attempt); the 22k pool (13,713 attempts) 38 min
    against 48 s. Moving our tables into the ExApp was rejected: every join with `oc_mounts` / `oc_filecache` would
    become an HTTP round trip, "write ours, commit, push" would lose its transaction, and the second store would need
-   its own backup. Live runs bridge 0.11.0 on `exapp` since 2026-11-09 (S6, S7). **Open:** observing the
-   first real chain and a week without fallbacks (S7 of `docs/exapp-clustering.md`), and that document's later questions (the 20-per-person cap, threshold tuning).
+   its own backup. Live runs on `exapp` since 2026-11-09 (S6, S7): 27 `/cluster` passes to 2026-11-21, all 200, no
+   fallback to PHP. What stays open is that document's later questions (the 20-per-person cap, threshold tuning).
 
 Option C — vectors in a table we own, keyed by physical face — is done: see `facewright_faces` /
 `facewright_detection_faces` in "Schema mapping" and Stage 1 of

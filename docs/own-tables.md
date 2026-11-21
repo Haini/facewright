@@ -20,7 +20,8 @@
 >    before anyone looks. The evidence is what it logged. On the live instance (the exact commands and expected numbers
 >    are in the operator's private notes, which is where every name and path of that instance lives): `occ
 >    facewright:project --dry-run`, `occ facewright:own-tables --verify`, `occ config:app:get facewright_bridge
->    projection_last_error`, and the lines of `nextcloud.log` with `"app":"facewright_bridge"`.
+>    projection_last_error`, and the lines of `nextcloud.log` that mention `facewright` (`grep -i facewright`; not
+>    `"app":"facewright_bridge"`, which matches nothing: our lines carry `"app":"no app in context"`).
 >    Expected: A = C = D = 0, `--verify` exits 0, B no higher than recorded at the cutover (it falls as faces change, it
 >    never rises), legacy rows unchanged, and no `projection_last_error` value (the command exits 1 when the key is unset).
 >    In the log, read every `repaired N difference(s) ... (A x, C y, D z)` warning and any error. These lines are warnings

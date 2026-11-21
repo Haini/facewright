@@ -22,8 +22,8 @@ stayed under 40 ms meanwhile. Nothing is deployed to live.
 31,126 attempts, PHP 3 h 36 min against 4 min 42 s); see C5's "Progress". **The switch-over is planned as Part 2 (S1 to S7); S1 to S5 are done on dev** (S3: the `exapp` engine,
 off unless `clustering_engine=exapp`; S4: deleted faces leave the ExApp's cache; S5: CLAUDE.md). **S6 is done on live
 (2026-11-09):** ExApp and bridge 0.11.0 deployed, checksums filled, still on `php`; see S6's "Done". **Next: S7, the
-switch, with the user's go-ahead.** **S7: switched on live 2026-11-09**; the first real chain and the week without
-fallbacks are still to be observed (see S7's "Done").
+switch, with the user's go-ahead.** **S7: switched on live 2026-11-09, closed 2026-11-21**: real chains ran on `exapp`
+with no fallback in two weeks (see S7's "Done").
 
 **C4 is done (2026-11-08), on dev only (bridge 0.10.1 there).** `occ facewright:cluster-compare` runs both engines;
 `dev/cluster-compare.sh` passes 16 of 16. On dev the engines agree exactly (0 differences of any class) and the
@@ -628,7 +628,15 @@ switch). Projection at the switch: A = C = D = 0, B = 44,815.
 an `exapp` chain for each. Two passes per user (the second wrote nothing and ended the chain): 4 `/cluster` requests,
 all 200, one `put` for the new embeddings, 0 fallbacks. user1: 26 assigned, 6 unclusterable; user2: 29 assigned, 3
 unclusterable; one new person. Afterwards projection A = C = D = 0, `own-tables --verify` all ok, no bridge log
-entries. **Open:** the week without fallbacks (no earlier than 2026-11-16).
+entries.
+
+**Two weeks without fallbacks (checked 2026-11-21, read-only), S7 closed.** The ExApp's log back to 2026-11-09 holds 27
+`POST /cluster`, 62 `cache/check`, 6 `cache/put` and 5 `cache/forget`, all 200; the container has run since 2026-11-15
+without a restart. `nextcloud.log` has no "continuing this chain in PHP" warning and no warning or error of ours after
+2026-11-09 (one ExApp timeout at 09:13 that day, during S6, with no fallback after it). No face is pending. `php` stays
+the fallback, by design. **Correction:** "no bridge log entries" above was read with the filter `"app":"facewright_bridge"`,
+which matches nothing: our lines carry `"app":"no app in context"`. The 2026-11-21 check searched the message text
+(`grep -i facewright`), which does find them, and the result for the earlier days is the same.
 
 ## Open questions for later (not in S1 to S7)
 

@@ -74,16 +74,34 @@ result here.
 
 These close out tracks that are done in code but whose evidence was never recorded.
 
-1. **ExApp clustering, S7** (`docs/exapp-clustering.md`): the first real `exapp` chain and "a week without fallbacks"
-   (due from 2026-11-16) were never recorded. Read the log for `POST /cluster` in the ExApp and for the warning
-   "continuing this chain in PHP"; record the result in S7's "Done" and close CLAUDE.md open item 7.
-2. **Stage E day-after check, the full version** (`docs/own-tables.md`, "Where things stand", item 1): it was clean on
-   2026-11-07 but before any detection, new face or share. Repeat now for the `own` target (`project --dry-run`,
-   `own-tables --verify`, `projection_last_error`, the `repaired ...` warnings in the log).
-3. **The admin page's "Memories sync" line** has never been looked at in a browser.
-4. **Recognize's jobs**: confirm `oc_jobs` still has no `MaintenanceJob` / `ClusterFacesJob` (it was disabled, but any
-   `occ upgrade` that touches it re-adds them).
-5. **The deployed fork build**: confirm its sha256 is in the private notes (two builds of the same commit differ).
+**Run 2026-11-21 (evening), read-only.** Live: bridge 0.12.1, Memories 11.1.4 (fork), Recognize 12.0.3 disabled,
+`projection_targets=own`, `clustering_engine=exapp`, provider `facewright_bridge`, `processing_paused=false`.
+
+1. **ExApp clustering, S7 — passed.** The ExApp container has run since 2026-11-15 with 0 restarts; its log (back to
+   2026-11-09) has 27 `POST /cluster`, 62 `cache/check`, 6 `cache/put`, 5 `cache/forget`, all 200, and 456
+   `POST /detect` 200 (one 404). The Nextcloud log has no "continuing this chain in PHP" warning at all, and no
+   warning or error of ours after 2026-11-09 (the last is a single ExApp timeout at 09:13 that day, during the S6/S7
+   work, with no fallback after it). No face is pending (states: 152,750 assigned, 3,578 unassigned, 45,048
+   unclusterable, 3 ignored). Recorded in S7's "Done"; CLAUDE.md open item 7 is closed.
+2. **Day-after check for `own` — passed, with one expected failure in `--verify`.** `project --dry-run` for `own`:
+   A 0, C 0, D 0/0. `projection_last_error` unset. No `repaired ...` warning in the log since it begins (2026-10-21).
+   `own-tables --verify`: every check of ours and of `own` is 0 (201,379 faces, 4,679 people), **but it exits 1 on
+   `C_stale_copies = 2`**: two rows in Recognize's frozen table (`10507` Consti, `98894` Julia, both file `68229`) whose
+   rows of ours are gone because the file was deleted to the trash bin after the freeze. That is correct behaviour of
+   ours; `--verify` always checks Recognize's table, configured as a target or not, so it will keep failing more as
+   faces change. **To do:** in 0.13.0 (H.1) the `recognize` checks go; until then read C there as the frozen copy's
+   drift. (B 44,712, legacy 40, as expected.)
+3. **The admin page's "Memories sync" line** — not checked (needs a browser and a login; for the user).
+4. **Recognize's jobs — passed.** No Recognize class in `oc_jobs`; `oc_recognize_fs_deletions` is empty. Ours: the
+   three hourly maintenance jobs, nothing else queued.
+5. **The deployed fork build — passed.** The sha256 of the deployed tarball (`d540449f…d225c`, the same as dev's M4
+   build) is stored next to it with the pre-fork backup and matches the file; live's `custom_apps/memories` has the
+   `.git/` pin, no `signature.json`, and `recognizeProvider` in the four patched `lib/` files.
+6. **Found while checking: the documented log filter finds nothing.** Our log lines carry `"app":"no app in context"`,
+   not `"app":"facewright_bridge"`, so the grep in the day-after check (`docs/own-tables.md`, item 1) has matched none
+   of them since at least 2026-10-21. Search the message text instead (every message of ours starts with
+   `facewright:`; Nextcloud's own lines about our jobs name `FacewrightBridge`): `grep -i facewright nextcloud.log`.
+   Fixed in `docs/own-tables.md` and the operator's private notes; S7's earlier "no bridge log entries" is corrected.
 
 ---
 
@@ -113,7 +131,6 @@ risk: a cold session acts on them.
 | `CLAUDE.md:69` | the fork is "Built and verified on the dev stack; not on live yet." | live 2026-11-20 |
 | `CLAUDE.md`, "Architecture" and "Why Recognize cannot simply be uninstalled" | Recognize "stays installed and enabled", Memories depends on it being enabled | with the fork and provider set, Recognize is disabled; this is now the stock-Memories story only |
 | `CLAUDE.md`, "Coexisting with Recognize" | written for an enabled Recognize | still needed for a rollback, but should say it applies only while Recognize is enabled |
-| `CLAUDE.md`, open item 7 | "Open: observing the first real chain and a week without fallbacks" | close after 1.1 |
 | `docs/own-tables.md:44` | Stage G "**Not on live.**" | live 2026-11-20 |
 | `docs/own-tables.md`, "Where things stand" | ExApp track "Open: S6 … and S7"; last full suite run "28 of 28" | S6/S7 done 2026-11-09; run-all is 40 of 40 (M9) |
 | `docs/memories-fork.md:15` | "`2adf50b6` is not [pushed], it waits for the user's go-ahead" | the same section's end says it is pushed |
