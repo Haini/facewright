@@ -7,6 +7,9 @@ A review of the People page as released in `facewright_bridge` 0.8.0 (commits `d
 fix, how to verify. Work them in order. Items marked **Ask first** need a decision from the user
 before any code changes.
 
+**Status (2026-11-23):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there). Items 5 to 13
+are open; 8 and 12 still need the user.
+
 ## How to work this list
 
 - Read `CLAUDE.md` first, especially "Invariants" and "Bridge app" deployment mechanics. The
@@ -26,6 +29,12 @@ before any code changes.
 ## P1: Bugs
 
 ### 1. Person page: a late response renders into whichever view is now showing
+
+**Done (2026-11-23).** As proposed, with one change: dialogs keep their `close()` on the element (`dialog.fwClose`),
+and `render()` tears the view down *before* closing them, so a photo dialog's `onChanged` meets a stopped grid;
+`faceGrid`'s `stop()` now also makes `reload()` and `loadMore()` no-ops and drops a page in flight. Verified in
+headless Chromium with 2.5 s of added latency: the old code showed a second action bar, requested the person's faces
+and suggestions after Back and left the photo dialog open; the new code does none of these.
 
 **Where:** `js/people.js`, `personView()` (the `ocs('GET', '/people/' + id)` at the end) and
 `render()`.
@@ -56,6 +65,10 @@ Open a photo from a person, press Back with the dialog open: the dialog must clo
 
 ### 2. Name taken during rename: the merge offer can miss the other person
 
+**Done (2026-11-23).** As proposed; every `title_exists` answer (create, rename, move to a new person) carries
+`existingId`. Verified with 210 people named "Anna Fragment …": the answer names the right id, and the page fetches
+`/people/{existingId}` and offers the merge, with no search.
+
 **Where:** `js/people.js` `offerMerge()`; `PeopleService::assertValidTitle()`;
 `DuplicateTitleException`; the three `title_exists` responses in `PeopleApiController`.
 
@@ -75,6 +88,10 @@ fine), name one "Anna", rename another person to "Anna": the merge offer must ap
 right person and face count.
 
 ### 3. Merge suggestions use stale centroids after face moves
+
+**Done (2026-11-23).** As proposed, in `setFacesClusterInTx()` (every move, detach, ignore and restore goes through it).
+Verified: a swap that keeps a person's size removes its cached centroid on both moves, a detach too; the page fetches
+suggestions again after a face action.
 
 **Where:** `PeopleService::setFacesCluster()`; `SuggestionService::centroids()`; `js/people.js`
 `suggestionCache`.
@@ -96,6 +113,10 @@ after face moves.
 re-run the `occ` command: P's centroid must be recomputed (`centroidsComputed` ≥ 1).
 
 ### 4. Legacy 128-dim rows show up as tiles that can never render
+
+**Closed (2026-11-23), no change.** Overtaken by Stage E: the listings and counts read `facewright_user_faces`, which
+holds only faces of ours (512-dim), so a legacy row of Recognize's table cannot reach the page at all. Under Option 2
+(`docs/cleanup.md`) that table goes entirely. The text below is the original item.
 
 **Where:** `PeopleService::listFacesByClusterId()`, `countFaces()`, `clusterListQuery()`;
 `FacePreviewController::preview()` (filters with `ownRowsExpr()`).

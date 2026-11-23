@@ -277,12 +277,11 @@ Rollback: `docker tag facewright:pre-healthcheck facewright:latest`, `make run` 
 A side note from the test: on Nextcloud 33+ `oc_jobs.id` is a Snowflake id
 with no auto-increment, so a hand-made job row needs an explicit id.
 
-### 6.2 `docs/people-ui-review.md` — apparently unworked
+### 6.2 `docs/people-ui-review.md`
 
-No commit references its items, and spot checks show item 7 still open (16 `userId === null` checks in
-`PeopleApiController`). Work it as written (P1 first: late responses rendering into another view, the merge offer on
-rename, stale centroids, legacy-tile rendering); items 8 and 12 need the user first. Item 4 (legacy 128-dim tiles)
-becomes moot under Option 2.
+Items 1 to 3 (P1) done and item 4 closed on 2026-11-23, bridge 0.12.2 (on dev; not deployed to live yet); the
+measurements are in that document. Open: 5 and 6 (measure first), 7, 9 to 11, 13; 8 and 12 need the user. Item 7 is
+still as found (16 `userId === null` checks in `PeopleApiController`).
 
 ---
 

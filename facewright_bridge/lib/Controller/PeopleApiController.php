@@ -75,7 +75,7 @@ class PeopleApiController extends OCSController {
 		try {
 			$id = $this->people->createCluster($this->userId, $title);
 		} catch (DuplicateTitleException $e) {
-			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists'], Http::STATUS_BAD_REQUEST);
+			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -107,7 +107,7 @@ class PeopleApiController extends OCSController {
 		try {
 			$this->people->renameCluster($this->userId, $id, $title);
 		} catch (DuplicateTitleException $e) {
-			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists'], Http::STATUS_BAD_REQUEST);
+			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -215,7 +215,7 @@ class PeopleApiController extends OCSController {
 			}
 			return new DataResponse(['clusterId' => $clusterId, 'moved' => $this->people->moveFaces($this->userId, $ids, $clusterId)]);
 		} catch (DuplicateTitleException $e) {
-			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists'], Http::STATUS_BAD_REQUEST);
+			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}

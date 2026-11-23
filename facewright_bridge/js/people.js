@@ -57,7 +57,7 @@
 
 	var OCS_BASE = OC.getRootPath() + '/ocs/v2.php/apps/facewright_bridge/api/v1';
 
-	/** One OCS call; resolves with the unwrapped `ocs.data`, rejects with Error(message, status, code). */
+	/** One OCS call; resolves with the unwrapped `ocs.data`, rejects with Error(message, status, code, data). */
 	function ocs(method, path, body) {
 		var options = {
 			method: method,
@@ -77,6 +77,7 @@
 					var error = new Error((data && data.message) || 'Request failed');
 					error.status = response.status;
 					error.code = data && data.code;
+					error.data = data;
 					throw error;
 				}
 				return data;
@@ -186,6 +187,16 @@
 	var dialogStack = [];
 
 	/**
+	 * Closes every open dialog, topmost first. Dialogs hang off `root`, not `main`, so a view change would otherwise
+	 * leave them open over the next view, acting on a grid that is gone.
+	 */
+	function closeAllDialogs() {
+		dialogStack.slice().reverse().forEach(function (dialog) {
+			dialog.fwClose();
+		});
+	}
+
+	/**
 	 * Wires a <dialog> into the page: Esc and a click on the backdrop close it, and `done` runs
 	 * exactly once however it closes. Returns close(), for the dialog's own buttons.
 	 *
@@ -226,6 +237,7 @@
 			}
 		});
 		document.addEventListener('keydown', onKey);
+		dialog.fwClose = close;
 		dialogStack.push(dialog);
 		root.appendChild(dialog);
 		dialog.showModal();
@@ -666,6 +678,7 @@
 						if (outcome !== null) {
 							toast(outcome.message);
 							changed = true;
+							forgetSuggestions(); // a face moved: the people it left or joined look different now
 							return load();
 						}
 					}).catch(fail).then(function () {
@@ -764,6 +777,7 @@
 		main.appendChild(bar.element);
 
 		var scroller = infiniteScroll(loadMore);
+		var stopped = false;
 
 		function addTile(face) {
 			var tile = h('div', { class: 'fw-face', role: 'checkbox', 'aria-checked': 'false', 'aria-label': 'Face', tabindex: '0' }, [
@@ -803,7 +817,7 @@
 		}
 
 		function loadMore() {
-			if (state.loading || state.done) {
+			if (stopped || state.loading || state.done) {
 				return;
 			}
 			state.loading = true;
@@ -827,6 +841,9 @@
 		}
 
 		function reload() {
+			if (stopped) {
+				return; // e.g. a photo dialog closed by a view change calls this after the grid was torn down
+			}
 			state.generation++;
 			state.offset = 0;
 			state.done = false;
@@ -862,6 +879,7 @@
 					return;
 				}
 				toast(outcome.message);
+				forgetSuggestions(); // a face moved: the people it left or joined look different now
 				if (outcome.count === ids.length) {
 					removeTiles(ids);
 				} else {
@@ -875,7 +893,14 @@
 		}
 
 		loadMore();
-		return { stop: scroller.stop, reload: reload };
+		return {
+			stop: function () {
+				stopped = true;
+				state.generation++; // a page still in flight is dropped when it arrives
+				scroller.stop();
+			},
+			reload: reload,
+		};
 	}
 
 	/** A page that is only a titled, explained, selectable grid of faces: Unassigned, Ignored. */
@@ -1115,6 +1140,7 @@
 			countNode,
 		]);
 		var grid = null;
+		var stopped = false;
 
 		var suggestBox = h('section', { class: 'fw-suggest', 'aria-label': 'Possibly the same person' });
 		suggestBox.hidden = true;
@@ -1152,7 +1178,7 @@
 				}).catch(function (error) {
 					if (error.code === 'title_exists') {
 						stop();
-						offerMerge(title);
+						offerMerge(title, error.data && error.data.existingId);
 					} else {
 						fail(error);
 					}
@@ -1175,16 +1201,16 @@
 			input.select();
 		}
 
-		/** The name typed is another person's: probably the same person, so offer to merge. */
-		function offerMerge(title) {
-			ocs('GET', '/people' + query({ search: title, limit: 200 })).then(function (data) {
-				var target = data.items.filter(function (candidate) {
-					return candidate.title === title && candidate.id !== id;
-				})[0];
-				if (!target) {
-					toast('A person named “' + title + '” already exists.', true);
-					return null;
-				}
+		/**
+		 * The name typed is another person's: probably the same person, so offer to merge. The server names that person
+		 * (`existingId`); finding them again by a name search would miss them past the search's 200 results.
+		 */
+		function offerMerge(title, existingId) {
+			if (!existingId || existingId === id) {
+				toast('A person named “' + title + '” already exists.', true);
+				return;
+			}
+			ocs('GET', '/people/' + existingId).then(function (target) {
 				return confirmDialog({
 					title: 'That name is already used',
 					message: '“' + title + '” is another person with ' + plural(target.count, 'face', 'faces') + '. If it is the same person, you can merge them.',
@@ -1192,7 +1218,14 @@
 				}).then(function (yes) {
 					return yes ? mergeInto(target) : null;
 				});
-			}).catch(fail);
+			}).catch(function (error) {
+				// Deleted in the meantime: then the name is free again, but say what happened rather than retry.
+				if (error.status === 404) {
+					toast('A person named “' + title + '” already exists.', true);
+				} else {
+					fail(error);
+				}
+			});
 		}
 
 		/** Merges this person into $target, then shows $target. */
@@ -1276,6 +1309,9 @@
 		}
 
 		ocs('GET', '/people/' + id).then(function (data) {
+			if (stopped) {
+				return; // the user left before this arrived; `main` belongs to another view now
+			}
 			person = data;
 			showTitle();
 			countNode.textContent = plural(person.count, 'face', 'faces');
@@ -1293,6 +1329,9 @@
 				],
 			});
 		}).catch(function (error) {
+			if (stopped) {
+				return;
+			}
 			if (error.status === 404) {
 				titleRow.hidden = true;
 				main.appendChild(h('div', { class: 'fw-empty' }, [
@@ -1305,6 +1344,7 @@
 		});
 
 		return function () {
+			stopped = true;
 			if (grid) {
 				grid.stop();
 			}
@@ -1359,10 +1399,12 @@
 	var teardown = null;
 
 	function render() {
+		// Teardown first, so a dialog that reloads its grid on close finds the grid already stopped.
 		if (teardown) {
 			teardown();
 			teardown = null;
 		}
+		closeAllDialogs();
 		var route = parseRoute();
 		[].forEach.call(root.querySelectorAll('.fw-nav-link'), function (link) {
 			// The person page belongs under People in the navigation.

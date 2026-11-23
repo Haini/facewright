@@ -385,8 +385,9 @@ class PeopleService {
 		if ($excludingClusterId !== null) {
 			$qb->andWhere($qb->expr()->neq('id', $qb->createNamedParameter($excludingClusterId, IQueryBuilder::PARAM_INT)));
 		}
-		if ($qb->executeQuery()->fetchOne() !== false) {
-			throw new DuplicateTitleException("A person named \"{$title}\" already exists; merge instead.");
+		$existingId = $qb->executeQuery()->fetchOne();
+		if ($existingId !== false) {
+			throw new DuplicateTitleException("A person named \"{$title}\" already exists; merge instead.", (int)$existingId);
 		}
 	}
 
@@ -607,6 +608,9 @@ class PeopleService {
 			$count += count($matched);
 			array_push($faces, ...$matched);
 			array_push($clusters, ...$this->faceStore->deleteEmptyUntitled($userId, $sources));
+			// A centroid counts as current while member_count equals the person's size, so a face moved out and another
+			// moved in would keep a stale one for good. Every person a face left or joined loses it here.
+			$this->forgetCentroids($userId, array_values(array_unique($to !== null && $to > 0 ? [...$sources, $to] : $sources)));
 		}
 		return [$count, $faces, $clusters];
 	}
