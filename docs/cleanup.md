@@ -258,7 +258,7 @@ request reached frpc, frpc could not dial the socket, and the connection was lef
 without `--max-time` waits on forever. (2026-11-09, at S6, has the same `dial to uds` line; Nextcloud's own AppAPI
 calls time out instead, logged then as `cURL error 28`, which the bridge treats as retryable.)
 
-**Fixed (2026-11-23, dev only; live needs a `make build` + `make run`, one ExApp restart):**
+**Fixed (2026-11-23, deployed to live the same day):**
 - `healthcheck.sh` asks `/heartbeat` on the socket (HaRP mode) or on `APP_HOST:APP_PORT` (dev), with a 1 s timeout, so
   "healthy" means the app answers. The `Dockerfile` probes every 2 s until the first success (5 min start period, for
   a first model download) and then once a minute, since every probe is now an access-log line.
@@ -269,7 +269,10 @@ Measured on dev: first start downloads into `/data`, healthy 2 s after uvicorn l
 container starts with no download and is healthy in 2.1 s; `exapp-client` 12/12, `exapp-cluster` 28/28,
 `cache-hygiene` 20/20, six `POST /detect` 200 on the volume's model. The HaRP branch, run read-only inside the live
 container against the running app: exit 0; against a missing socket curl fails at once (exit 7). The first live start
-with the new image downloads the model once more, into the volume.
+with the new image downloads the model once more, into the volume. Live deploy: the first start downloaded the model into the
+volume and was healthy after 15 s, with uvicorn listening and no `dial to uds` line; `make verify` answered 200; a forced
+`occ facewright:detect` of the same zero-face photo as before gave `POST /detect` 200; `projection_last_error` unset.
+Rollback: `docker tag facewright:pre-healthcheck facewright:latest`, `make run` (the model in the volume is harmless).
 
 A side note from the test: on Nextcloud 33+ `oc_jobs.id` is a Snowflake id
 with no auto-increment, so a hand-made job row needs an explicit id.
