@@ -6,10 +6,12 @@
 # Changes data: restore a snapshot afterwards.   dev/project-concurrency.sh   (LOOPS=40 per worker, WORKERS=2)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 : "${LOOPS:=40}"; : "${WORKERS:=2}"; u=$ADMIN_USER
-P=($(words "$(csv "SELECT cluster_id FROM oc_facewright_user_faces WHERE user_id='$u' AND state=1 GROUP BY cluster_id HAVING COUNT(*)>=4 ORDER BY cluster_id LIMIT 3")"))
-need "people with 4+ faces" "${#P[@]}" 3
-F=$(csv "SELECT id FROM oc_facewright_user_faces WHERE user_id='$u' AND cluster_id=${P[0]} ORDER BY id LIMIT 4")
-IDS=$(csv "SELECT id FROM oc_facewright_user_faces WHERE user_id='$u' AND cluster_id IN (${P[0]},${P[1]},${P[2]}) ORDER BY id LIMIT 12")
+P=($(words "$(csv "SELECT cluster_id FROM oc_facewright_user_faces WHERE user_id='$u' AND state=1 GROUP BY cluster_id HAVING COUNT(*)>=5 ORDER BY cluster_id LIMIT 3")"))
+need "people with 5+ faces" "${#P[@]}" 3
+# Four faces from each person, so each keeps at least one the loops never touch. The people are untitled, and an
+# untitled person emptied by a move or detach is deleted: with all twelve faces from one person (as this once picked),
+# a run that happened to empty it before a rename named it answered 400 to every later move into it.
+IDS=$(for p in "${P[@]}"; do csv "SELECT id FROM oc_facewright_user_faces WHERE user_id='$u' AND cluster_id=$p ORDER BY id LIMIT 4"; done | paste -sd, -)
 need "faces to fight over" "$(wc -w <<<"$(words "$IDS")")" 12
 echo "  people ${P[*]}; faces $IDS"
 out="$WORK_DIR/conc"; rm -rf "$out"; mkdir -p "$out"
