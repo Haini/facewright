@@ -2,7 +2,7 @@
 
 An inventory of what is left to tidy now that live runs the fork of Memories against our own copy (`docs/memories-fork.md`,
 M11) and Recognize is disabled. Assessed 2026-11-21 against `master` at `beb5488`. Each item says where, what, and whether
-it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3), the three bugs of 6.1 (on dev).
+it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3), the three bugs of 6.1 (live).
 
 **State this assumes:** live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
 `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize 12.0.3
@@ -216,7 +216,7 @@ soak times are in that section. Before the first one-way live step: the dev rehe
 
 ## 6. Known bugs (code) **[either option]**
 
-### 6.1 CLAUDE.md open item 4 — fixed 2026-11-21 on dev, not yet deployed to live
+### 6.1 CLAUDE.md open item 4 — fixed 2026-11-21, deployed to live the same evening
 
 Each fix was checked on dev against the old code, which had to fail the same check:
 
@@ -237,8 +237,41 @@ Each fix was checked on dev against the old code, which had to fail the same che
 Regression: `dev/run-all.sh --ui` with the fixes, 39 of 40; the one failure was `rollback-drill` refusing to swap
 uncommitted bridge files, and run alone after the commit it passed 24 of 24.
 
-To deploy: the bridge files (PHP only, no version bump needed) and the ExApp image (`make build` / `make run` on the
-live host), each with the user's go-ahead. A side note from the test: on Nextcloud 33+ `oc_jobs.id` is a Snowflake id
+**Deployed to live 2026-11-21 (about 22:30 local), with the user's go-ahead.** Before: live's bridge was byte-identical
+to the tag `pre-stage-f`; the backup of its folder and the previous ExApp image (tagged `facewright:pre-bugfix`) are
+kept, see the operator's private notes. `make run`'s settings were compared with the running container's first (equal,
+secrets compared by hash). ExApp: `make build`, `make run`, healthy, model downloaded again at start (the image does
+not keep it). Bridge: `git archive HEAD facewright_bridge` copied in, live's folder then equal to HEAD (`4b89a5a`),
+version unchanged at 0.12.1, no upgrade needed. Checks: one forced `occ facewright:detect` of a zero-face photo went
+through AppAPI and HaRP to the new ExApp (`POST /detect` 200, 0 faces, only the marker's time changed); `project
+--dry-run` for `own` all 0; `projection_last_error` unset; no warning or error in `nextcloud.log` since; candidate counts
+with the new filter: Consti 55,380 (4.3 s), Julia 49,309 (3.4 s). Rollback: the backup folder back in, `docker tag
+facewright:pre-bugfix facewright:latest`, `make run`.
+
+**Found while deploying: `make verify` hung, a startup race.** Its `curl` (no timeout) sat for about four minutes
+until stopped. Not hairpin NAT: from inside the Nextcloud container the public URL answers in 36 ms, and the same
+heartbeat request answered 200 in 22 ms nine minutes later. The timeline: the container started 21:27:29 and the
+model download ran until uvicorn listened at 21:27:41; frpc logged `dial to uds /tmp/exapp.sock error: no such file`
+at 21:27:34, and uvicorn logged no heartbeat until the later test. `healthcheck.sh` only checks that `frpc` runs, so
+the container is "healthy" about 2 s after start, before the app listens, and `make verify` ran in that gap. The
+request reached frpc, frpc could not dial the socket, and the connection was left open with no answer, which a `curl`
+without `--max-time` waits on forever. (2026-11-09, at S6, has the same `dial to uds` line; Nextcloud's own AppAPI
+calls time out instead, logged then as `cURL error 28`, which the bridge treats as retryable.)
+
+**Fixed (2026-11-23, dev only; live needs a `make build` + `make run`, one ExApp restart):**
+- `healthcheck.sh` asks `/heartbeat` on the socket (HaRP mode) or on `APP_HOST:APP_PORT` (dev), with a 1 s timeout, so
+  "healthy" means the app answers. The `Dockerfile` probes every 2 s until the first success (5 min start period, for
+  a first model download) and then once a minute, since every probe is now an access-log line.
+- `make verify`'s `curl` has `--max-time 15`: a dead tunnel is `HTTP_STATUS:000` and exit 28, not a hang.
+- The model lives under the data volume (`FaceAnalysis(root=$FACEWRIGHT_DATA_DIR/insightface)`, about 600 MB with the
+  zip insightface keeps), so only the first start of a new volume downloads it.
+Measured on dev: first start downloads into `/data`, healthy 2 s after uvicorn listened (not before); a recreated
+container starts with no download and is healthy in 2.1 s; `exapp-client` 12/12, `exapp-cluster` 28/28,
+`cache-hygiene` 20/20, six `POST /detect` 200 on the volume's model. The HaRP branch, run read-only inside the live
+container against the running app: exit 0; against a missing socket curl fails at once (exit 7). The first live start
+with the new image downloads the model once more, into the volume.
+
+A side note from the test: on Nextcloud 33+ `oc_jobs.id` is a Snowflake id
 with no auto-increment, so a hand-made job row needs an explicit id.
 
 ### 6.2 `docs/people-ui-review.md` — apparently unworked

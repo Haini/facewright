@@ -111,7 +111,7 @@ bust-cache:
 verify: check-nc-url
 	@AUTH=$$(printf ':%s' "$(APP_SECRET)" | base64 -w0); \
 	echo "--- heartbeat ---"; \
-	docker exec $(NC_CONTAINER) curl -s -o /dev/null -w "HTTP_STATUS:%{http_code}\n" \
+	docker exec $(NC_CONTAINER) curl -s --max-time 15 -o /dev/null -w "HTTP_STATUS:%{http_code}\n" \
 		-H "AA-VERSION: 32" -H "EX-APP-ID: $(APP_ID)" -H "EX-APP-VERSION: $(APP_VERSION)" \
 		-H "AUTHORIZATION-APP-API: $$AUTH" -H "harp-shared-key: $(HARP_SHARED_KEY)" \
 		-H "ex-app-port: $(APP_PORT)" -H "ex-app-host: 127.0.0.1" \

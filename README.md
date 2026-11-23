@@ -177,8 +177,9 @@ make register APP_SECRET=<same-secret-as-above>
 make verify APP_SECRET=<same-secret-as-above>
 ```
 
-`make verify` checks `/heartbeat` through the real Nextcloud/HaRP path; it does not run a
-detection. `make help` lists every target, including troubleshooting ones (`bust-cache`) for a
+`make verify` checks `/heartbeat` through the real Nextcloud/HaRP path (15 s timeout); it does not run a
+detection. Run it once `docker ps` shows the container healthy: that means the app answers, not just that it runs. The
+first start downloads the model (about 280 MB) into the `facewright-data` volume, so it takes longer. `make help` lists every target, including troubleshooting ones (`bust-cache`) for a
 specific HaRP caching gotcha documented in `CLAUDE.md`.
 
 This recipe assumes an existing AppAPI + HaRP manual-install-daemon setup, matching how AppAPI

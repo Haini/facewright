@@ -126,7 +126,8 @@ SQLite is in the standard library).
   `embeddings(id INTEGER PRIMARY KEY, crc INTEGER NOT NULL, vec BLOB NOT NULL, seen_at INTEGER NOT NULL)`.
   `put` upserts; `check` updates `seen_at` for the ids that match. Open a connection per request (endpoints run in a thread pool).
 - **Volume**: `make run` mounts a named volume `facewright-data:/data` and sets `FACEWRIGHT_DATA_DIR=/data`. Without it,
-  every container restart empties the cache, which is correct but slow.
+  every container restart empties the cache, which is correct but slow. The InsightFace model lives there too
+  (`/data/insightface`), so a new container does not download it again before it can answer.
 - **Threads**: the endpoints are plain `def`, not `async def`, so FastAPI runs them in its thread pool and `/heartbeat`
   and `/detect` keep answering during a pass. Cap BLAS threads: `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
   `MKL_NUM_THREADS` default to 2 in the `Dockerfile` (`ENV`). ONNX Runtime spreading over every core correlated with

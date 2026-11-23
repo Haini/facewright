@@ -65,4 +65,6 @@ ENV FACEWRIGHT_DATA_DIR=/data
 
 WORKDIR /ex_app/lib
 ENTRYPOINT ["/start.sh", "python3", "main.py"]
-HEALTHCHECK --interval=2s --timeout=2s --retries=300 CMD /healthcheck.sh
+# Every 2 s until the first success (a first start downloads the model into /data, so allow 5 min), then once a
+# minute: the probe goes through uvicorn now and every probe is an access-log line.
+HEALTHCHECK --interval=60s --timeout=2s --start-period=300s --start-interval=2s --retries=3 CMD /healthcheck.sh

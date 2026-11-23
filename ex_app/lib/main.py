@@ -19,8 +19,8 @@ from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, anc_app, run_app, set
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from clustering import DATA_DIR, init_cache
 from clustering import ROUTER as CLUSTERING_ROUTER
-from clustering import init_cache
 
 # insightface's FaceAnalysis/model_zoo.get_model() only ever forwards `providers`/
 # `provider_options` kwargs to onnxruntime - there's no supported way to pass a SessionOptions
@@ -57,8 +57,12 @@ async def lifespan(app: FastAPI):
     global FACE_ANALYSIS
     set_handlers(app, enabled_handler)
     init_cache()
-    # Loading the model is expensive - do it once here, never per-request.
-    FACE_ANALYSIS = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    # Loading the model is expensive - do it once here, never per-request. Kept under the data volume rather than
+    # insightface's default ~/.insightface, which is inside the container: otherwise every new container downloads
+    # buffalo_l again (about 280 MB, 10+ s) before the app listens, and a missing download fails the start outright.
+    FACE_ANALYSIS = FaceAnalysis(
+        name="buffalo_l", root=str(DATA_DIR / "insightface"), providers=["CPUExecutionProvider"]
+    )
     FACE_ANALYSIS.prepare(ctx_id=-1, det_size=(640, 640))
     yield
     FACE_ANALYSIS = None

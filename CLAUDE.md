@@ -448,6 +448,9 @@ tunnels in through HaRP's FRP reverse proxy. See `Makefile` (`daemon-register`, 
   port or re-registering, run `make bust-cache` before assuming anything else is wrong.
 - Run with `--restart unless-stopped`: native crashes in ONNX Runtime/OpenCV leave no Python
   traceback and would otherwise stall detection silently.
+- "Healthy" means `/heartbeat` answers (`healthcheck.sh`), not that frpc runs: frpc runs before uvicorn listens, and a
+  request tunnelled in that gap hangs with no answer. The model lives under the `facewright-data` volume, so only a new
+  volume downloads it before the app can listen.
 
 ### Bridge app (`facewright_bridge`)
 
@@ -560,7 +563,7 @@ the running containers' and restart the affected ones; the durable fix is pinnin
 3. **Admin-side threshold changes re-evaluate nothing for users who set their own**; only the
    personal page triggers `clearUnclusterableMarks()`. `occ facewright:cluster --reset` remains
    the blunt option.
-4. **Closed (2026-11-21, dev; not yet deployed to live): three known bugs.** `/detect` ran decoding and inference
+4. **Closed (2026-11-21, deployed to live the same day): three known bugs.** `/detect` ran decoding and inference
    on the event loop, so `/heartbeat` stalled during inference; they run in the thread pool now, one inference at a time
    (`_INFERENCE_LOCK`), and an inference error is an explicit 400 for an OpenCV rejection of the image (permanent) or 500
    for anything else (retryable). `DetectQueuedJob`'s zero-byte branch marks only `$pending`, so an existing marker is no
