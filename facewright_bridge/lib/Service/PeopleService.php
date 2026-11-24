@@ -121,30 +121,33 @@ class PeopleService {
 	}
 
 	/**
-	 * Each cluster's cover: its best-scoring face (highest detector confidence, then largest),
-	 * one query per cluster on the page. det_score is NULL for backfilled rows, which sort last.
+	 * Each cluster's cover: its best-scoring face (highest detector confidence, then largest, then lowest id). det_score
+	 * is NULL for backfilled rows, which sort last.
+	 *
+	 * One query for the whole page, ROW_NUMBER() per person, rather than one query per person: measured on live
+	 * (2026-11-24, people-ui-review item 5) it returns the same covers and takes 1-26 ms for a page instead of 15-41 ms.
+	 * The first page stays at 130-200 ms either way: it holds the largest people (12k and 18k faces), and every one of
+	 * their faces has to be sorted, since the order needs both tables and no index can serve it. QueryBuilder cannot
+	 * express a window function, hence the raw SQL (as countClusters() does).
 	 *
 	 * @param list<int> $clusterIds
 	 * @return array<int, int> cluster id => detection id
 	 */
 	public function coversFor(string $userId, array $clusterIds): array {
 		$covers = [];
-		foreach ($clusterIds as $clusterId) {
-			$qb = $this->db->getQueryBuilder();
-			$qb->select('u.id')
-				->from('facewright_user_faces', 'u')
-				->innerJoin('u', 'facewright_faces', 'f', $qb->expr()->eq('f.id', 'u.face_id'))
-				->where($qb->expr()->eq('u.user_id', $qb->createNamedParameter($userId)))
-				->andWhere($qb->expr()->eq('u.cluster_id', $qb->createNamedParameter($clusterId, IQueryBuilder::PARAM_INT)))
-				->orderBy($qb->createFunction('(f.det_score IS NULL)'), 'ASC')
-				->addOrderBy('f.det_score', 'DESC')
-				->addOrderBy($qb->createFunction('(f.width * f.height)'), 'DESC')
-				->addOrderBy('u.id', 'ASC')
-				->setMaxResults(1);
-			$id = $qb->executeQuery()->fetchOne();
-			if ($id !== false) {
-				$covers[$clusterId] = (int)$id;
+		$qb = $this->db->getQueryBuilder();
+		$sql = 'SELECT id, cluster_id FROM (SELECT u.id, u.cluster_id, ROW_NUMBER() OVER (PARTITION BY u.cluster_id'
+			. ' ORDER BY (f.det_score IS NULL), f.det_score DESC, (f.width * f.height) DESC, u.id) AS rn'
+			. ' FROM ' . $qb->getTableName('facewright_user_faces') . ' u'
+			. ' INNER JOIN ' . $qb->getTableName('facewright_faces') . ' f ON f.id = u.face_id'
+			. ' WHERE u.user_id = ? AND u.cluster_id IN (?)) t WHERE rn = 1';
+		// At most 1000 list entries per statement, as everywhere here.
+		foreach (array_chunk(array_values(array_unique($clusterIds)), 1000) as $batch) {
+			$result = $this->db->executeQuery($sql, [$userId, $batch], [IQueryBuilder::PARAM_STR, IQueryBuilder::PARAM_INT_ARRAY]);
+			while ($row = $result->fetch()) {
+				$covers[(int)$row['cluster_id']] = (int)$row['id'];
 			}
+			$result->closeCursor();
 		}
 		return $covers;
 	}

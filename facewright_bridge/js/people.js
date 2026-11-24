@@ -747,7 +747,7 @@
 	 * A paged grid of face crops that can be selected and acted on, shared by the person page and
 	 * the unassigned and ignored views.
 	 *
-	 * options.list(limit, offset)  -> Promise<{items, total}>
+	 * options.list(limit, offset)  -> Promise<{items, total}>, total null after the first page
 	 * options.actions              -> [{label, run(ids) -> Promise<{count, message}|null>}]; null
 	 *                                 means the user backed out and nothing changed
 	 * options.onTotal(total)       -> called when the count changes
@@ -829,8 +829,12 @@
 				state.loading = false;
 				data.items.forEach(addTile);
 				state.offset += data.items.length;
-				state.done = data.items.length < FACE_PAGE || state.offset >= data.total;
-				showTotal(data.total);
+				// The server counts only for the first page (null after); later pages keep that number, which
+				// removeTiles() adjusts locally.
+				if (data.total !== null) {
+					showTotal(data.total);
+				}
+				state.done = data.items.length < FACE_PAGE || (state.total !== null && state.offset >= state.total);
 				scroller.check();
 			}).catch(function (error) {
 				if (generation === state.generation) {
@@ -1038,11 +1042,13 @@
 				state.loading = false;
 				data.items.forEach(addTile);
 				state.offset += data.items.length;
-				state.total = data.total;
-				state.done = data.items.length < PEOPLE_PAGE || state.offset >= data.total;
-				totalNode.textContent = plural(data.total, 'person', 'people');
+				if (data.total !== null) {
+					state.total = data.total; // counted for the first page only
+				}
+				state.done = data.items.length < PEOPLE_PAGE || (state.total !== null && state.offset >= state.total);
+				totalNode.textContent = plural(state.total, 'person', 'people');
 				message.textContent = '';
-				if (data.total === 0) {
+				if (state.total === 0) {
 					message.textContent = search !== '' || minCount > 0
 						? 'No people match. Try a lower minimum or a different name.'
 						: 'No people yet. They appear here once your photos have been scanned and grouped.';

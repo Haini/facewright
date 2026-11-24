@@ -49,7 +49,9 @@ class PeopleApiController extends OCSController {
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
 			'items' => $this->people->listClusters($this->userId, $limit, $offset, max(0, $minCount), $search, true),
-			'total' => $this->people->countClusters($this->userId, max(0, $minCount), $search),
+			// Only for the first page: the grouped count costs as much as the page itself (100-200 ms on live), and the
+			// page needs it once. Later pages answer null and the page keeps the first page's number.
+			'total' => $offset === 0 ? $this->people->countClusters($this->userId, max(0, $minCount), $search) : null,
 		]);
 	}
 
@@ -95,7 +97,7 @@ class PeopleApiController extends OCSController {
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
 			'items' => $this->people->listFaces($this->userId, $id, $limit, $offset),
-			'total' => $this->people->countFaces($this->userId, $id),
+			'total' => $offset === 0 ? $this->people->countFaces($this->userId, $id) : null, // as in listClusters()
 		]);
 	}
 
@@ -148,7 +150,7 @@ class PeopleApiController extends OCSController {
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
 			'items' => $this->people->listUnassignedFaces($this->userId, $limit, $offset),
-			'total' => $this->people->countFaces($this->userId, ClusteringService::UNASSIGNED),
+			'total' => $offset === 0 ? $this->people->countFaces($this->userId, ClusteringService::UNASSIGNED) : null,
 		]);
 	}
 
@@ -160,7 +162,7 @@ class PeopleApiController extends OCSController {
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
 			'items' => $this->people->listIgnoredFaces($this->userId, $limit, $offset),
-			'total' => $this->people->countFaces($this->userId, ClusteringService::IGNORED),
+			'total' => $offset === 0 ? $this->people->countFaces($this->userId, ClusteringService::IGNORED) : null,
 		]);
 	}
 

@@ -7,8 +7,8 @@ A review of the People page as released in `facewright_bridge` 0.8.0 (commits `d
 fix, how to verify. Work them in order. Items marked **Ask first** need a decision from the user
 before any code changes.
 
-**Status (2026-11-23):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there). Items 5 to 13
-are open; 8 and 12 still need the user.
+**Status (2026-11-24):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
+done (bridge 0.12.3). Items 7 to 13 are open; 8 and 12 still need the user.
 
 ## How to work this list
 
@@ -150,6 +150,20 @@ Unassigned's total and tiles must not include it.
 
 ### 5. Covers are one query per person, each sorting the whole person
 
+**Done (2026-11-24), with a measured limit.** Measured on live, read-only, with `PeopleService` itself (two runs, both
+users; minCount 3):
+
+| | Consti (1,163 people) | Julia (3,484 people) |
+|---|---|---|
+| covers, page 1: loop / one query | 127-132 / 135-136 ms | 195-208 / 207-210 ms |
+| covers, page 2: loop / one query | 24-25 / 10 ms | 40-41 / 26 ms |
+| covers, page 11: loop / one query | 15-16 / 1.3 ms | 15-16 / 3 ms |
+
+The window query returned the same covers on every page measured, on live and on dev (six pages of the API diffed
+before and after). It is in, but it does not fix page 1: that page holds the largest people (12,265 and 18,327 faces)
+and every one of their faces is sorted, since the order needs both tables and no index can serve it. Making page 1
+cheap needs a stored cover per person, which is a design change (when to recompute it) and is not done.
+
 **Where:** `PeopleService::coversFor()`, called for every page of the people list (60 people) and
 every suggestion list.
 
@@ -169,6 +183,14 @@ as raw SQL with the table names from `$qb->getTableName()` and named parameters,
 (diff the JSON), and record both timings.
 
 ### 6. The people list runs its GROUP BY twice per page
+
+**Done (2026-11-24).** As proposed, for all four lists. Measured on live: `countClusters()` took 100 ms (Consti) and
+190-230 ms (Julia), as long as the page itself, so every page after the first saves that; the face counts are cheap
+(under 1 ms, 12 and 33 ms for the largest person) but follow the same rule. Verified in headless Chromium: scrolling
+292 people and a person of 327 faces to the end, only the first page carries a total, no request goes past the last
+page, the header keeps the first page's number and still falls when faces are removed.
+The list query itself also costs 100-200 ms a page on live (it groups every face of the user to sort by size); that
+is not part of this item.
 
 **Where:** `PeopleApiController::listClusters()` → `listClusters()` + `countClusters()`.
 

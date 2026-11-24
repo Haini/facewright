@@ -282,7 +282,9 @@ with no auto-increment, so a hand-made job row needs an explicit id.
 Items 1 to 3 (P1) done and item 4 closed on 2026-11-23, bridge 0.12.2, deployed to live the same day
 (`occ upgrade`, which also took richdocumentscode from 26.4.502 to 26.4.603 from the App Store, as agreed; live then
 equal to HEAD, `project --dry-run` 0 for `own`, no Recognize jobs, no errors logged). The measurements are in that
-document. Open: 5 and 6 (measure first), 7, 9 to 11, 13; 8 and 12 need the user. Item 7 is
+document. Items 5 and 6 done on 2026-11-24, bridge 0.12.3 (on dev; not deployed to live yet): the covers are one query
+and the totals come with the first page only; page 1 of the people list stays at 130-200 ms on live for its covers,
+which only a stored cover per person would fix. Open: 7, 9 to 11, 13; 8 and 12 need the user. Item 7 is
 still as found (16 `userId === null` checks in `PeopleApiController`).
 
 ---
