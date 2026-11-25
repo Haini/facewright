@@ -7,8 +7,9 @@ A review of the People page as released in `facewright_bridge` 0.8.0 (commits `d
 fix, how to verify. Work them in order. Items marked **Ask first** need a decision from the user
 before any code changes.
 
-**Status (2026-11-24):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
-done (bridge 0.12.3). Items 7 to 13 are open; 8 and 12 still need the user.
+**Status (2026-11-25):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
+done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, on dev). Items 7 to 13 are open; 8
+and 12 still need the user.
 
 ## How to work this list
 
@@ -164,6 +165,14 @@ before and after). It is in, but it does not fix page 1: that page holds the lar
 and every one of their faces is sorted, since the order needs both tables and no index can serve it. Making page 1
 cheap needs a stored cover per person, which is a design change (when to recompute it) and is not done.
 
+**Follow-up (2026-11-25, bridge 0.12.4): sizes and covers are stored.** `facewright_cluster_stats` holds each person's
+size and cover; `FaceStore` keeps it with every write (CLAUDE.md, "Our own tables"), and the list reads it, so neither
+the covers of page 1 nor the GROUP BY of item 6's last paragraph remain. Measured on live, read-only: filling the
+table costs 66 ms for the sizes of all 4,675 people and 333 ms for their covers (done in the migration); a write costs
+3-4 ms per person it touches for the recount (18k faces) and 2-3 ms for the cover, and 40-76 ms in the rare case that
+the person's cover face itself leaves (the person's faces are sorted again then). On dev, the list from the stored
+values equals the old query's in every filter tried (people, order, sizes, covers, every page, the count).
+
 **Where:** `PeopleService::coversFor()`, called for every page of the people list (60 people) and
 every suggestion list.
 
@@ -190,7 +199,7 @@ as raw SQL with the table names from `$qb->getTableName()` and named parameters,
 292 people and a person of 327 faces to the end, only the first page carries a total, no request goes past the last
 page, the header keeps the first page's number and still falls when faces are removed.
 The list query itself also costs 100-200 ms a page on live (it groups every face of the user to sort by size); that
-is not part of this item.
+is not part of this item. (Done since: see item 5's follow-up.)
 
 **Where:** `PeopleApiController::listClusters()` → `listClusters()` + `countClusters()`.
 

@@ -41,6 +41,7 @@ run reads-stable           "$DEV_DIR/reads.sh" stable
 run reads-direct-stable    "$DEV_DIR/reads-direct.sh" stable
 run dav-battery            "$DEV_DIR/battery.sh"
 run writers-people         "$DEV_DIR/writers-people.sh"
+run people-stats           "$DEV_DIR/people-stats.sh"
 run writers-cluster        "$DEV_DIR/writers-cluster.sh"
 run persist-guard          "$DEV_DIR/persist-guard.sh"
 run own-traps              "$DEV_DIR/own-traps.sh"

@@ -36,6 +36,7 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 | `clustering-truth.sh` (+ `truth.py`, `fetch-dataset.sh`) | clustering against labelled identities (Georgia Tech set, downloaded into `.work/`, never committed: no stated licence); the oracle `truth.py USER` checks pure / complete / same in Recognize's table and is proven able to fail | yes (restore) |
 | `project-drift.sh` | Stage E reconcile: plants eight kinds of drift in Recognize's tables, requires the dry run to report exactly those, repairs, checks the legacy row and Memories | yes (restore) |
 | `project-failure.sh` | a broken push must not break People writes; the admin page says so; the hourly job repairs | yes (restore) |
+| `people-stats.sh` | each person's stored size and cover: the cover face leaving, a better face joining, opposite moves at once, merge, delete, reset, `--recount` | yes (restore) |
 | `project-concurrency.sh` | two parallel writers on the same faces; the copy must still agree; fails if the upsert is degraded | yes (restore) |
 | `project-recognize-trap.sh` | Recognize's own `.noimage` deletion job and `recognize:reset-face-clusters` (dev only): the projection brings everything back and Memories shows what it showed before | yes (restore) |
 | `project-recognize-copies.sh` | Recognize's access-sync handler writes rows of its own; reconcile removes them; ids that meet (squatters) | yes (restore) |

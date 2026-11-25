@@ -784,6 +784,8 @@ class ClusteringService {
 				$requested++;
 			}
 		}
+		// In id order: each write locks its person's stored size (FaceStore), and a human's move locks those in id order.
+		ksort($byPerson);
 
 		$writtenIds = $this->inTransaction(function () use ($userId, $byPerson, $createdClusterIds): array {
 			$written = [];

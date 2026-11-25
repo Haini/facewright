@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Command;
 
+use OCA\FacewrightBridge\Service\FaceStore;
 use OCA\FacewrightBridge\Service\OwnTablesMigrationService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -19,6 +20,7 @@ use Symfony\Component\Console\Output\OutputInterface;
  *   --verify    read-only: check ours internally and against Recognize's tables (via the projection's reconcile),
  *               exit 1 on any mismatch
  *   --seed-ids  Stage E: raise our id counters above Recognize's
+ *   --recount   rebuild each person's stored size and cover (facewright_cluster_stats) from our tables
  *
  * The copies are kept in step by every writer from then on (FaceStore); --verify failing after a
  * period of normal use means a writer was missed, and the fix is the writer, not another backfill.
@@ -26,6 +28,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 class OwnTables extends Command {
 	public function __construct(
 		private OwnTablesMigrationService $migration,
+		private FaceStore $faceStore,
 	) {
 		parent::__construct();
 	}
@@ -36,6 +39,7 @@ class OwnTables extends Command {
 			->addOption('precheck', null, InputOption::VALUE_NONE, 'Read-only: count what the backfill would trip over')
 			->addOption('migrate', null, InputOption::VALUE_NONE, 'Copy people and assignments into the new tables (processing must be paused)')
 			->addOption('verify', null, InputOption::VALUE_NONE, 'Read-only: check our tables and that Recognize\'s copy matches them, exit 1 on a mismatch')
+			->addOption('recount', null, InputOption::VALUE_NONE, 'Rebuild every person\'s stored size and cover from our tables (the repair for --verify\'s people_stats checks)')
 			->addOption('seed-ids', null, InputOption::VALUE_NONE, 'Raise our id counters above Recognize\'s (Stage E; with --dry-run reports only)')
 			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --migrate or --seed-ids: report what would happen, write nothing')
 			->addOption('chunk', null, InputOption::VALUE_REQUIRED, 'With --migrate: id range per step', '5000')
@@ -48,9 +52,10 @@ class OwnTables extends Command {
 			'migrate' => $input->getOption('migrate'),
 			'verify' => $input->getOption('verify'),
 			'seed' => $input->getOption('seed-ids'),
+			'recount' => $input->getOption('recount'),
 		]);
 		if (count($modes) !== 1) {
-			$output->writeln('<error>Pass exactly one of --precheck, --migrate, --verify, --seed-ids.</error>');
+			$output->writeln('<error>Pass exactly one of --precheck, --migrate, --verify, --seed-ids, --recount.</error>');
 			return 1;
 		}
 
@@ -59,6 +64,7 @@ class OwnTables extends Command {
 			'migrate' => $this->migrate($input, $output),
 			'verify' => $this->verify($output),
 			'seed' => $this->seed($input, $output),
+			'recount' => $this->recount($output),
 		};
 	}
 
@@ -136,8 +142,17 @@ class OwnTables extends Command {
 			return 0;
 		}
 		$this->migration->resetCursor();
+		$output->writeln(sprintf('people: stored the size and cover of %d', $this->faceStore->rebuildPeopleStats()));
 		$output->writeln('');
 		return $this->verify($output);
+	}
+
+	private function recount(OutputInterface $output): int {
+		if (!$this->usable($output)) {
+			return 1;
+		}
+		$output->writeln(sprintf('Stored the size and cover of %d people.', $this->faceStore->rebuildPeopleStats()));
+		return 0;
 	}
 
 	private function seed(InputInterface $input, OutputInterface $output): int {

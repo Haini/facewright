@@ -286,7 +286,9 @@ document. Items 5 and 6 done on 2026-11-24, bridge 0.12.3, deployed to live on 2
 from 5.13.3 to 5.13.4, as agreed; live then equal to HEAD, `project --dry-run` 0 for `own`, no errors logged; the
 people list's first page carries the total and the second `null`, covers on every person): the covers are one query
 and the totals come with the first page only; page 1 of the people list stays at 130-200 ms on live for its covers,
-which only a stored cover per person would fix. Open: 7, 9 to 11, 13; 8 and 12 need the user. Item 7 is
+which only a stored cover per person would fix. That and the list's own GROUP BY are fixed in bridge 0.12.4 (on dev;
+not deployed to live yet): each person's size and cover are stored (`facewright_cluster_stats`, kept by `FaceStore`),
+measured in that document, item 5's follow-up. Open: 7, 9 to 11, 13; 8 and 12 need the user. Item 7 is
 still as found (16 `userId === null` checks in `PeopleApiController`).
 
 ---

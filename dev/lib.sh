@@ -104,6 +104,10 @@ verify_step() {  # verify_step LABEL : the invariant checker after a step
   local out; out=$(occ facewright:own-tables --verify 2>&1); local rc=$?
   if [ $rc -eq 0 ]; then PASS=$((PASS+1)); printf '  ok    verify after %s\n' "$1"
   else FAIL=$((FAIL+1)); printf '  FAIL  verify after %s\n' "$1"; echo "$out" | grep -E 'must|failed' | sed 's/^/        /'; fi
+  # Only informational in --verify (a forced re-detection may change a score in place), but nothing in dev's suites
+  # does that, so a cover that is not the best face here means FaceStore's incremental cover went wrong.
+  local nb; nb=$(awk '$1 == "people_stats_cover_not_best" {print $2}' <<<"$out")
+  if [ -n "$nb" ] && [ "$nb" != 0 ]; then FAIL=$((FAIL+1)); printf '  FAIL  %s people whose cover is not their best face, after %s\n' "$nb" "$1"; fi
   own_oracle "$1"
 }
 # True when the `own` projection target is configured (docs/memories-fork.md, M6).

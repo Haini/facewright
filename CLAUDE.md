@@ -137,7 +137,8 @@ Services (`lib/Service/`):
   best-scored faces, stale when the person's size changed), threshold `suggest_max_distance`
   (default 0.6, uncalibrated). Dismissed pairs live in `facewright_merge_dismissals`.
 - `BatchTriggerService` — enumerates unprocessed candidates for enabled users and enqueues jobs.
-- `FaceStore` — the only writer of `facewright_user_faces` / `facewright_clusters` (see "Our own tables").
+- `FaceStore` — the only writer of `facewright_user_faces` / `facewright_clusters`, and of `facewright_cluster_stats`
+  (each person's size and cover; see "Our own tables").
 - `ProjectionService` — copies them into the tables Memories reads, and reconciles drift. It writes every configured
   **target** (app config `projection_targets`, a comma list, unset = `recognize`): `recognize` is `recognize_face_detections`
   / `_clusters` (the one place that writes them, plus the deliberate direct statements in `ResetService`,
@@ -202,7 +203,8 @@ writes nothing, for measuring against a database that must not change), `facewri
 [--dry-run] [--user=<uid>]` (one-time; see the `cluster_id` invariant below),
 `facewright:migrate-faces [--dry-run] [--chunk=<files>] [--reset-cursor]` (Stage 1 backfill,
 see "Schema mapping").
-`facewright:own-tables --precheck | --migrate | --verify | --seed-ids` (the move into our own tables; `--migrate`
+`facewright:own-tables --precheck | --migrate | --verify | --seed-ids | --recount` (the move into our own tables; `--recount` rebuilds
+the stored sizes and covers; `--migrate`
 needs processing paused and refuses once our tables hold faces, as does `migrate-faces`; `--verify` checks ours internally and Recognize's copy through the projection's reconcile;
 `docs/own-tables.md`), `facewright:project [--dry-run] [--hydrate] [--user=<uid>] [--limit=<n>] [--target=recognize|own]` (report and repair the
 copy Memories reads, one report per configured target; `--hydrate` is the rollback and `recognize` only).
@@ -286,6 +288,15 @@ ignored) are the source of truth for people and face assignments (`docs/own-tabl
   the cutover (tolerated until Stage F), C stale copies and squatters, D people missing or stale. It reads a vector
   only for rows with no row of ours. Recognize's `.noimage` deletion job, its access sync (which writes rows of its
   own) and even `occ recognize:reset-face-clusters` are recoverable this way; that is tested in `dev/`.
+- **Each person's size and cover are stored** (`facewright_cluster_stats`), and the People list sorts and filters by
+  them instead of counting every face (100-200 ms per page on a real library). Every `FaceStore` method that changes
+  which person a face is in calls `refreshPeople()` before returning, inside the caller's transaction: it locks the
+  people's rows there in id order, then **recounts** (never adds or subtracts) and takes the best of the old cover and
+  the faces that joined; only a cover that left its person makes it sort all members. A new writer of
+  `facewright_user_faces` that bypasses `FaceStore` leaves sizes wrong; `own-tables --verify` reports it and
+  `--recount` repairs it. Writers that touch several people lock them in id order (`persistAssignments()` sorts), or
+  two writers can deadlock. It is a table of its own because a write into a person holds a shared lock on the
+  person's row in `facewright_clusters`, and two writers updating a column there would deadlock upgrading it.
 - **`facewright_user_faces` has no index that starts with `cluster_id`.** Every query or join on it by `cluster_id` must
   also name `user_id` (the index is `(user_id, cluster_id)`). Without it the query walks every face for each person, and
   dev's small data will not show it: the People overview took 26 s per query on a real library for this reason.

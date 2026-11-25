@@ -178,6 +178,7 @@ class OwnTablesMigrationService {
 		$uf = $this->table('facewright_user_faces');
 		$fc = $this->table('facewright_clusters');
 		$faces = $this->table('facewright_faces');
+		$cs = $this->table('facewright_cluster_stats');
 
 		// Ours, internally. Since Stage E our tables are the source of truth, so what must hold is about them.
 		$checks = [
@@ -206,6 +207,24 @@ class OwnTablesMigrationService {
 				"SELECT COUNT(*) FROM {$faces} WHERE embedding_crc IS NOT NULL AND embedding_crc <> CRC32(embedding)"
 			), 'zero'],
 			'embedding_crc_unknown' => [$this->count("SELECT COUNT(*) FROM {$faces} WHERE embedding_crc IS NULL"), 'info'],
+			// Each person's stored size and cover (FaceStore keeps them with every write; --recount rebuilds them).
+			'people_stats_missing' => [$this->count(
+				"SELECT COUNT(*) FROM {$fc} c LEFT JOIN {$cs} s ON s.cluster_id = c.id WHERE s.cluster_id IS NULL OR s.user_id <> c.user_id"
+			), 'zero'],
+			'people_stats_size_wrong' => [$this->count(
+				"SELECT COUNT(*) FROM {$cs} s WHERE s.face_count <> (SELECT COUNT(*) FROM {$uf} u WHERE u.user_id = s.user_id AND u.cluster_id = s.cluster_id)"
+			), 'zero'],
+			// No cover while it has faces, or a cover that is not one of them.
+			'people_stats_cover_invalid' => [$this->count(
+				"SELECT COUNT(*) FROM {$cs} s WHERE (s.cover_id IS NULL) <> (s.face_count = 0) OR (s.cover_id IS NOT NULL AND NOT EXISTS "
+				. "(SELECT 1 FROM {$uf} u WHERE u.id = s.cover_id AND u.user_id = s.user_id AND u.cluster_id = s.cluster_id))"
+			), 'zero'],
+			// A valid cover that is not the best face: only a forced re-detection that changed a score in place does that.
+			'people_stats_cover_not_best' => [$this->count(
+				"SELECT COUNT(*) FROM {$cs} s INNER JOIN (SELECT id, cluster_id FROM (SELECT u.id, u.cluster_id, ROW_NUMBER() OVER "
+				. '(PARTITION BY u.cluster_id ORDER BY ' . FaceStore::COVER_ORDER . ") AS rn FROM {$uf} u INNER JOIN {$faces} f ON f.id = u.face_id "
+				. 'WHERE u.cluster_id IS NOT NULL) t WHERE rn = 1) b ON b.cluster_id = s.cluster_id WHERE s.cover_id <> b.id'
+			), 'info'],
 			'people_in_store' => [$this->count("SELECT COUNT(*) FROM {$fc}"), 'info'],
 			'faces_in_store' => [$this->count("SELECT COUNT(*) FROM {$uf}"), 'info'],
 		];

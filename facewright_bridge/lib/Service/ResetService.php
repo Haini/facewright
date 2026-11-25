@@ -56,8 +56,9 @@ class ResetService {
 		// Ours: exactly those faces and people. Not "everything": the people table also holds copies of
 		// Recognize's own legacy people, which this reset deliberately leaves alone. The Recognize rows above
 		// were deleted directly, not through the projection: a full reset must not depend on it.
-		$this->faceStore->deleteFaces($detectionIds);
+		// People first: deleting their faces then has no stored size left to recount.
 		$this->faceStore->deleteClustersById($clusterIds);
+		$this->faceStore->deleteFaces($detectionIds);
 		$deletedFaces = $this->deleteOrphanedFaces($faceIds);
 
 		$qb = $this->db->getQueryBuilder();

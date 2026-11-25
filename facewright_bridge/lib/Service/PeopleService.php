@@ -57,13 +57,13 @@ class PeopleService {
 	 */
 	public function listClusters(string $userId, ?int $limit = null, int $offset = 0, int $minCount = 0, string $search = '', bool $withCovers = false): array {
 		$qb = $this->clusterListQuery($userId, $minCount, $search);
-		$qb->select('c.id', 'c.title')
-			->selectAlias($qb->func()->count('u.id'), 'c')
+		$qb->select('c.id', 'c.title', 's.cover_id')
+			->selectAlias($qb->createFunction('COALESCE(s.face_count, 0)'), 'face_count')
 			// Named clusters first, then largest first, then stable by id - matches Recognize's
 			// own FacesHome::getChildren() ordering closely enough for Memories' list to look
 			// sane without depending on it.
 			->orderBy($qb->createFunction("(c.title <> '')"), 'DESC')
-			->addOrderBy('c', 'DESC')
+			->addOrderBy('face_count', 'DESC')
 			->addOrderBy('c.id', 'ASC')
 			->setFirstResult($offset);
 		if ($limit !== null) {
@@ -73,47 +73,42 @@ class PeopleService {
 		$clusters = [];
 		$result = $qb->executeQuery();
 		while ($row = $result->fetch()) {
-			$clusters[] = ['id' => (int)$row['id'], 'title' => (string)$row['title'], 'count' => (int)$row['c']];
+			$cluster = ['id' => (int)$row['id'], 'title' => (string)$row['title'], 'count' => (int)$row['face_count']];
+			if ($withCovers) {
+				$cluster['cover'] = $row['cover_id'] === null ? null : (int)$row['cover_id'];
+			}
+			$clusters[] = $cluster;
 		}
 		$result->closeCursor();
-
-		if ($withCovers) {
-			$covers = $this->coversFor($userId, array_column($clusters, 'id'));
-			foreach ($clusters as &$cluster) {
-				$cluster['cover'] = $covers[$cluster['id']] ?? null;
-			}
-			unset($cluster);
-		}
 		return $clusters;
 	}
 
 	/** How many people listClusters() would return with the same filters and no paging. */
 	public function countClusters(string $userId, int $minCount = 0, string $search = ''): int {
 		$qb = $this->clusterListQuery($userId, $minCount, $search);
-		$qb->select('c.id');
-		// A derived table is the only way to count groups; QueryBuilder has no way to express it.
-		$result = $this->db->executeQuery('SELECT COUNT(*) FROM (' . $qb->getSQL() . ') t', $qb->getParameters(), $qb->getParameterTypes());
+		$qb->select($qb->func()->count('*'));
+		$result = $qb->executeQuery();
 		$count = (int)$result->fetchOne();
 		$result->closeCursor();
 		return $count;
 	}
 
+	/**
+	 * Sizes and covers are stored (facewright_cluster_stats, kept by FaceStore with every write), so a page of the list
+	 * reads a few thousand short rows instead of counting every face of the user (100-200 ms per page on live). A person
+	 * without a row there counts as empty; `occ facewright:own-tables --verify` reports any.
+	 */
 	private function clusterListQuery(string $userId, int $minCount, string $search): IQueryBuilder {
 		$qb = $this->db->getQueryBuilder();
 		$qb->from('facewright_clusters', 'c')
-			// user_id too: the index is (user_id, cluster_id), and without it this walks every face for every person.
-			->leftJoin('c', 'facewright_user_faces', 'u', $qb->expr()->andX(
-				$qb->expr()->eq('u.user_id', 'c.user_id'),
-				$qb->expr()->eq('u.cluster_id', 'c.id'),
-			))
-			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)))
-			->groupBy('c.id', 'c.title');
+			->leftJoin('c', 'facewright_cluster_stats', 's', $qb->expr()->eq('s.cluster_id', 'c.id'))
+			->where($qb->expr()->eq('c.user_id', $qb->createNamedParameter($userId)));
 		if ($search !== '') {
 			$qb->andWhere($qb->expr()->iLike('c.title', $qb->createNamedParameter('%' . $this->db->escapeLikeParameter($search) . '%')));
 		}
 		if ($minCount > 0) {
-			$qb->having($qb->expr()->orX(
-				$qb->expr()->gte($qb->createFunction('COUNT(u.id)'), $qb->createNamedParameter($minCount, IQueryBuilder::PARAM_INT)),
+			$qb->andWhere($qb->expr()->orX(
+				$qb->expr()->gte($qb->createFunction('COALESCE(s.face_count, 0)'), $qb->createNamedParameter($minCount, IQueryBuilder::PARAM_INT)),
 				$qb->expr()->neq('c.title', $qb->createNamedParameter('')),
 			));
 		}
@@ -121,31 +116,23 @@ class PeopleService {
 	}
 
 	/**
-	 * Each cluster's cover: its best-scoring face (highest detector confidence, then largest, then lowest id). det_score
-	 * is NULL for backfilled rows, which sort last.
-	 *
-	 * One query for the whole page, ROW_NUMBER() per person, rather than one query per person: measured on live
-	 * (2026-11-24, people-ui-review item 5) it returns the same covers and takes 1-26 ms for a page instead of 15-41 ms.
-	 * The first page stays at 130-200 ms either way: it holds the largest people (12k and 18k faces), and every one of
-	 * their faces has to be sorted, since the order needs both tables and no index can serve it. QueryBuilder cannot
-	 * express a window function, hence the raw SQL (as countClusters() does).
+	 * Each person's cover: its best face (FaceStore::COVER_ORDER), as stored with every write.
 	 *
 	 * @param list<int> $clusterIds
 	 * @return array<int, int> cluster id => detection id
 	 */
 	public function coversFor(string $userId, array $clusterIds): array {
 		$covers = [];
-		$qb = $this->db->getQueryBuilder();
-		$sql = 'SELECT id, cluster_id FROM (SELECT u.id, u.cluster_id, ROW_NUMBER() OVER (PARTITION BY u.cluster_id'
-			. ' ORDER BY (f.det_score IS NULL), f.det_score DESC, (f.width * f.height) DESC, u.id) AS rn'
-			. ' FROM ' . $qb->getTableName('facewright_user_faces') . ' u'
-			. ' INNER JOIN ' . $qb->getTableName('facewright_faces') . ' f ON f.id = u.face_id'
-			. ' WHERE u.user_id = ? AND u.cluster_id IN (?)) t WHERE rn = 1';
-		// At most 1000 list entries per statement, as everywhere here.
 		foreach (array_chunk(array_values(array_unique($clusterIds)), 1000) as $batch) {
-			$result = $this->db->executeQuery($sql, [$userId, $batch], [IQueryBuilder::PARAM_STR, IQueryBuilder::PARAM_INT_ARRAY]);
+			$qb = $this->db->getQueryBuilder();
+			$qb->select('cluster_id', 'cover_id')
+				->from('facewright_cluster_stats')
+				->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+				->andWhere($qb->expr()->in('cluster_id', $qb->createNamedParameter($batch, IQueryBuilder::PARAM_INT_ARRAY)))
+				->andWhere($qb->expr()->isNotNull('cover_id'));
+			$result = $qb->executeQuery();
 			while ($row = $result->fetch()) {
-				$covers[(int)$row['cluster_id']] = (int)$row['id'];
+				$covers[(int)$row['cluster_id']] = (int)$row['cover_id'];
 			}
 			$result->closeCursor();
 		}
