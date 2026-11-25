@@ -34,14 +34,15 @@ class PageController extends Controller {
 	#[NoAdminRequired]
 	#[NoCSRFRequired]
 	public function index(): TemplateResponse {
-		$userId = $this->userId ?? '';
+		// Not #[PublicPage]: the framework has refused a request without a user before it gets here.
+		$userId = $this->userId ?? throw new \LogicException('No user session on a non-public route');
 
 		Util::addScript($this->appName, 'people');
 		Util::addStyle($this->appName, 'people');
 
 		return new TemplateResponse($this->appName, 'main', [
-			'enabled' => $userId !== '' && $this->userSettings->isEnabled($userId),
-			'minFaces' => $userId === '' ? 3 : $this->userSettings->getClusterMinFaces($userId),
+			'enabled' => $this->userSettings->isEnabled($userId),
+			'minFaces' => $this->userSettings->getClusterMinFaces($userId),
 			'settingsUrl' => $this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => $this->appName]),
 		]);
 	}

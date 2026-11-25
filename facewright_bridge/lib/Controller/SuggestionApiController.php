@@ -28,13 +28,15 @@ class SuggestionApiController extends OCSController {
 		parent::__construct($appName, $request);
 	}
 
+	/** None of these actions is #[PublicPage], so the framework has refused a request without a user before it gets here. */
+	private function uid(): string {
+		return $this->userId ?? throw new \LogicException('No user session on a non-public route');
+	}
+
 	#[NoAdminRequired]
 	public function forPerson(int $id, int $limit = 10): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			return new DataResponse(['items' => $this->suggestions->forPerson($this->userId, $id, max(1, min(self::MAX_LIMIT, $limit)))]);
+			return new DataResponse(['items' => $this->suggestions->forPerson($this->uid(), $id, max(1, min(self::MAX_LIMIT, $limit)))]);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_NOT_FOUND);
 		}
@@ -43,11 +45,8 @@ class SuggestionApiController extends OCSController {
 	/** Says the two people are not the same, so neither is suggested for the other again. */
 	#[NoAdminRequired]
 	public function dismiss(int $a, int $b): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$this->suggestions->dismiss($this->userId, $a, $b);
+			$this->suggestions->dismiss($this->uid(), $a, $b);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}

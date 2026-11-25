@@ -35,6 +35,11 @@ class PeopleApiController extends OCSController {
 		parent::__construct($appName, $request);
 	}
 
+	/** None of these actions is #[PublicPage], so the framework has refused a request without a user before it gets here. */
+	private function uid(): string {
+		return $this->userId ?? throw new \LogicException('No user session on a non-public route');
+	}
+
 	/** Paged listings clamp to this; the People page asks for far fewer. */
 	private const MAX_PAGE = 200;
 
@@ -43,86 +48,68 @@ class PeopleApiController extends OCSController {
 
 	#[NoAdminRequired]
 	public function listClusters(int $limit = 60, int $offset = 0, int $minCount = 0, string $search = ''): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
-			'items' => $this->people->listClusters($this->userId, $limit, $offset, max(0, $minCount), $search, true),
+			'items' => $this->people->listClusters($this->uid(), $limit, $offset, max(0, $minCount), $search, true),
 			// Only for the first page: the grouped count costs as much as the page itself (100-200 ms on live), and the
 			// page needs it once. Later pages answer null and the page keeps the first page's number.
-			'total' => $offset === 0 ? $this->people->countClusters($this->userId, max(0, $minCount), $search) : null,
+			'total' => $offset === 0 ? $this->people->countClusters($this->uid(), max(0, $minCount), $search) : null,
 		]);
 	}
 
 	/** One person: what the person page needs for its header. */
 	#[NoAdminRequired]
 	public function getCluster(int $id): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$person = $this->people->getCluster($this->userId, $id);
+			$person = $this->people->getCluster($this->uid(), $id);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_NOT_FOUND);
 		}
-		return new DataResponse($person + ['count' => $this->people->countFaces($this->userId, $id)]);
+		return new DataResponse($person + ['count' => $this->people->countFaces($this->uid(), $id)]);
 	}
 
 	#[NoAdminRequired]
 	public function createCluster(string $title): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$id = $this->people->createCluster($this->userId, $title);
+			$id = $this->people->createCluster($this->uid(), $title);
 		} catch (DuplicateTitleException $e) {
 			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
-		return new DataResponse($this->people->getCluster($this->userId, $id));
+		return new DataResponse($this->people->getCluster($this->uid(), $id));
 	}
 
 	#[NoAdminRequired]
 	public function listFaces(int $id, int $limit = 120, int $offset = 0): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$this->people->getCluster($this->userId, $id);
+			$this->people->getCluster($this->uid(), $id);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_NOT_FOUND);
 		}
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
-			'items' => $this->people->listFaces($this->userId, $id, $limit, $offset),
-			'total' => $offset === 0 ? $this->people->countFaces($this->userId, $id) : null, // as in listClusters()
+			'items' => $this->people->listFaces($this->uid(), $id, $limit, $offset),
+			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), $id) : null, // as in listClusters()
 		]);
 	}
 
 	#[NoAdminRequired]
 	public function renameCluster(int $id, string $title): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$this->people->renameCluster($this->userId, $id, $title);
+			$this->people->renameCluster($this->uid(), $id, $title);
 		} catch (DuplicateTitleException $e) {
 			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
-		return new DataResponse($this->people->getCluster($this->userId, $id));
+		return new DataResponse($this->people->getCluster($this->uid(), $id));
 	}
 
 	#[NoAdminRequired]
 	public function deleteCluster(int $id): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$unassigned = $this->people->deleteCluster($this->userId, $id);
+			$unassigned = $this->people->deleteCluster($this->uid(), $id);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_NOT_FOUND);
 		}
@@ -131,11 +118,8 @@ class PeopleApiController extends OCSController {
 
 	#[NoAdminRequired]
 	public function mergeClusters(int $id, string $merge, bool $dryRun = false): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$result = $this->people->mergeClusters($this->userId, (string)$id, $merge, $dryRun);
+			$result = $this->people->mergeClusters($this->uid(), (string)$id, $merge, $dryRun);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -144,25 +128,19 @@ class PeopleApiController extends OCSController {
 
 	#[NoAdminRequired]
 	public function listUnassignedFaces(int $limit = 120, int $offset = 0): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
-			'items' => $this->people->listUnassignedFaces($this->userId, $limit, $offset),
-			'total' => $offset === 0 ? $this->people->countFaces($this->userId, ClusteringService::UNASSIGNED) : null,
+			'items' => $this->people->listUnassignedFaces($this->uid(), $limit, $offset),
+			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), ClusteringService::UNASSIGNED) : null,
 		]);
 	}
 
 	#[NoAdminRequired]
 	public function listIgnoredFaces(int $limit = 120, int $offset = 0): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
-			'items' => $this->people->listIgnoredFaces($this->userId, $limit, $offset),
-			'total' => $offset === 0 ? $this->people->countFaces($this->userId, ClusteringService::IGNORED) : null,
+			'items' => $this->people->listIgnoredFaces($this->uid(), $limit, $offset),
+			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), ClusteringService::IGNORED) : null,
 		]);
 	}
 
@@ -174,11 +152,8 @@ class PeopleApiController extends OCSController {
 	 */
 	#[NoAdminRequired]
 	public function mergeMany(int $keep, array $merge, bool $dryRun = false): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			return new DataResponse($this->people->mergeMany($this->userId, $keep, $this->ids($merge), $dryRun));
+			return new DataResponse($this->people->mergeMany($this->uid(), $keep, $this->ids($merge), $dryRun));
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -187,11 +162,8 @@ class PeopleApiController extends OCSController {
 	/** @param list<int> $ids */
 	#[NoAdminRequired]
 	public function deleteMany(array $ids): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			return new DataResponse(['unassigned' => $this->people->deleteMany($this->userId, $this->ids($ids))]);
+			return new DataResponse(['unassigned' => $this->people->deleteMany($this->uid(), $this->ids($ids))]);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -204,18 +176,15 @@ class PeopleApiController extends OCSController {
 	 */
 	#[NoAdminRequired]
 	public function moveFaces(array $ids, ?int $clusterId = null, ?string $newTitle = null): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		if (($clusterId === null) === ($newTitle === null)) {
 			return new DataResponse(['message' => 'Give either clusterId or newTitle.'], Http::STATUS_BAD_REQUEST);
 		}
 		try {
 			$ids = $this->ids($ids);
 			if ($newTitle !== null) {
-				return new DataResponse($this->people->moveFacesToNewPerson($this->userId, $ids, $newTitle));
+				return new DataResponse($this->people->moveFacesToNewPerson($this->uid(), $ids, $newTitle));
 			}
-			return new DataResponse(['clusterId' => $clusterId, 'moved' => $this->people->moveFaces($this->userId, $ids, $clusterId)]);
+			return new DataResponse(['clusterId' => $clusterId, 'moved' => $this->people->moveFaces($this->uid(), $ids, $clusterId)]);
 		} catch (DuplicateTitleException $e) {
 			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
@@ -226,26 +195,23 @@ class PeopleApiController extends OCSController {
 	/** @param list<int> $ids */
 	#[NoAdminRequired]
 	public function detachFaces(array $ids): DataResponse {
-		return $this->facesAction($ids, fn (array $ids): int => $this->people->detachFaces($this->userId, $ids));
+		return $this->facesAction($ids, fn (array $ids): int => $this->people->detachFaces($this->uid(), $ids));
 	}
 
 	/** @param list<int> $ids */
 	#[NoAdminRequired]
 	public function ignoreFaces(array $ids): DataResponse {
-		return $this->facesAction($ids, fn (array $ids): int => $this->people->ignoreFaces($this->userId, $ids));
+		return $this->facesAction($ids, fn (array $ids): int => $this->people->ignoreFaces($this->uid(), $ids));
 	}
 
 	/** @param list<int> $ids */
 	#[NoAdminRequired]
 	public function unignoreFaces(array $ids): DataResponse {
-		return $this->facesAction($ids, fn (array $ids): int => $this->people->unignoreFaces($this->userId, $ids));
+		return $this->facesAction($ids, fn (array $ids): int => $this->people->unignoreFaces($this->uid(), $ids));
 	}
 
 	/** @param callable(list<int>): int $action */
 	private function facesAction(array $ids, callable $action): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
 			return new DataResponse(['count' => $action($this->ids($ids))]);
 		} catch (\InvalidArgumentException $e) {
@@ -272,11 +238,8 @@ class PeopleApiController extends OCSController {
 
 	#[NoAdminRequired]
 	public function moveFace(int $id, int $clusterId): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$this->people->moveFace($this->userId, $id, $clusterId);
+			$this->people->moveFace($this->uid(), $id, $clusterId);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -285,11 +248,8 @@ class PeopleApiController extends OCSController {
 
 	#[NoAdminRequired]
 	public function detachFace(int $id): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
 		try {
-			$this->people->detachFace($this->userId, $id);
+			$this->people->detachFace($this->uid(), $id);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -298,9 +258,6 @@ class PeopleApiController extends OCSController {
 
 	#[NoAdminRequired]
 	public function facesForFile(int $fileId): DataResponse {
-		if ($this->userId === null) {
-			return new DataResponse(['message' => 'No user session'], Http::STATUS_UNAUTHORIZED);
-		}
-		return new DataResponse($this->people->facesForFile($this->userId, $fileId));
+		return new DataResponse($this->people->facesForFile($this->uid(), $fileId));
 	}
 }
