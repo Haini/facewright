@@ -390,30 +390,49 @@
 
 /* Selecting people on the list reuses the faces' corner mark */
 
-.fw-person {
+.fw-person-tile {
 	position: relative;
+	min-width: 0;
 }
 
-.fw-person .fw-face-check {
+/* The mark is a <button> here: undo core's button styles (they outrank one class, hence !important) */
+.fw-person-tile .fw-face-check {
 	top: 12px;
 	inset-inline-start: 12px;
+	width: 22px !important;
+	min-width: 0 !important;
+	height: 22px !important;
+	min-height: 0 !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	border: 2px solid #fff !important;
+	border-radius: 50% !important;
+	background-color: rgba(0, 0, 0, 0.35) !important;
+	cursor: pointer;
 }
 
-.fw-person:hover .fw-face-check,
-.fw-person:focus-visible .fw-face-check,
+.fw-person-tile .fw-face-check:focus-visible {
+	opacity: 1;
+	outline: 2px solid var(--color-primary-element) !important;
+	outline-offset: 2px;
+}
+
+.fw-person-tile:hover .fw-face-check,
+.fw-person-tile:focus-within .fw-face-check,
 .fw-people-grid.selecting .fw-face-check {
 	opacity: 1;
 }
 
-.fw-person.selected {
+.fw-person-tile.selected .fw-person {
 	background: var(--color-background-hover);
 	outline: 3px solid var(--color-primary-element);
 }
 
-.fw-person.selected .fw-face-check {
+.fw-person-tile.selected .fw-face-check {
 	opacity: 1;
-	border-color: var(--color-primary-element);
+	border-color: var(--color-primary-element) !important;
 	background: var(--color-primary-element) center / 14px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23fff' d='M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/%3E%3C/svg%3E");
+	background-color: var(--color-primary-element) !important; /* over the unselected !important */
 }
 
 .fw-danger-link {

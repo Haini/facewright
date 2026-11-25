@@ -385,7 +385,13 @@
 				delete selected[id];
 			}
 			tiles[id].classList.toggle('selected', on);
-			tiles[id].setAttribute('aria-checked', on ? 'true' : 'false');
+			// A person tile's corner mark is a button (aria-pressed); a face tile is a checkbox itself.
+			var check = tiles[id].querySelector('button.fw-face-check');
+			if (check) {
+				check.setAttribute('aria-pressed', on ? 'true' : 'false');
+			} else {
+				tiles[id].setAttribute('aria-checked', on ? 'true' : 'false');
+			}
 		}
 
 		var selection = {
@@ -797,8 +803,12 @@
 					activate(event);
 				}
 			});
+			// Space selects, as on any checkbox; Enter is the click (opens the photo, or toggles while selecting).
 			tile.addEventListener('keydown', function (event) {
-				if (event.key === ' ' || event.key === 'Enter') {
+				if (event.key === ' ') {
+					event.preventDefault();
+					selection.toggle(face.id);
+				} else if (event.key === 'Enter') {
 					event.preventDefault();
 					activate(event);
 				}
@@ -929,16 +939,23 @@
 
 	var PEOPLE_PAGE = 60;
 
+	/**
+	 * A link to the person, with the corner mark as a button of its own beside it (a button inside a link is
+	 * invalid and reaches no one by keyboard). createSelection() marks the wrapper and the button's aria-pressed.
+	 */
 	function personTile(person) {
 		var named = person.title !== '';
+		var name = named ? person.title : 'Unnamed';
 		var picture = person.cover
 			? cropImg('fw-crop', person.cover, 256, true)
 			: h('div', { class: 'fw-crop fw-crop-empty' });
-		return h('a', { class: 'fw-person', href: '#/person/' + person.id, role: 'checkbox', 'aria-checked': 'false' }, [
-			picture,
-			h('span', { class: 'fw-face-check', 'aria-hidden': 'true' }),
-			h('span', { class: 'fw-person-name' + (named ? '' : ' unnamed'), text: named ? person.title : 'Unnamed' }),
-			h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
+		return h('div', { class: 'fw-person-tile' }, [
+			h('a', { class: 'fw-person', href: '#/person/' + person.id }, [
+				picture,
+				h('span', { class: 'fw-person-name' + (named ? '' : ' unnamed'), text: name }),
+				h('span', { class: 'fw-person-count', text: plural(person.count, 'face', 'faces') }),
+			]),
+			h('button', { type: 'button', class: 'fw-face-check', 'aria-pressed': 'false', 'aria-label': 'Select ' + name }),
 		]);
 	}
 
@@ -1015,10 +1032,9 @@
 		function addTile(person) {
 			var tile = personTile(person);
 			tile.addEventListener('click', function (event) {
-				// The corner mark selects; anything else selects only once a selection exists, and
-				// otherwise follows the link to the person.
+				// The corner mark (a button, so Space and Enter on it come here too) selects; anything else
+				// selects only once a selection exists, and otherwise follows the link to the person.
 				if (event.target.classList.contains('fw-face-check')) {
-					event.preventDefault();
 					selection.toggle(person.id);
 				} else if (selection.activate(person.id, event)) {
 					event.preventDefault();
