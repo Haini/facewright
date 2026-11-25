@@ -173,6 +173,76 @@
 		};
 	}
 
+	/**
+	 * The paging behind a growing grid, for the people list and the face grids: one request at a time, loading
+	 * more as the end scrolls near. The server counts only for the first page (null after), so later pages keep
+	 * that total, and removed() adjusts it locally. reset() and stop() drop a page still in flight when it
+	 * arrives (a filter changed, or the view went away).
+	 *
+	 * options: fetch(limit, offset) → Promise<{items, total}>, pageSize, onItem(item), onPage(total) after every
+	 * page and every removal.
+	 */
+	function pagedLoader(options) {
+		var state = { offset: 0, total: null, loading: false, done: false, stopped: false, generation: 0 };
+		var scroller = infiniteScroll(loadMore);
+
+		function loadMore() {
+			if (state.stopped || state.loading || state.done) {
+				return;
+			}
+			state.loading = true;
+			var generation = state.generation;
+			options.fetch(options.pageSize, state.offset).then(function (data) {
+				if (generation !== state.generation) {
+					return;
+				}
+				state.loading = false;
+				data.items.forEach(options.onItem);
+				state.offset += data.items.length;
+				if (data.total !== null) {
+					state.total = data.total;
+				}
+				state.done = data.items.length < options.pageSize || (state.total !== null && state.offset >= state.total);
+				options.onPage(state.total);
+				scroller.check();
+			}).catch(function (error) {
+				if (generation === state.generation) {
+					state.loading = false;
+					fail(error);
+				}
+			});
+		}
+
+		return {
+			loadMore: loadMore,
+			/** Starts again from the first page; the caller has emptied its grid. */
+			reset: function () {
+				if (state.stopped) {
+					return; // e.g. a photo dialog closed by a view change calls this after the view was torn down
+				}
+				state.generation++;
+				state.offset = 0;
+				state.done = false;
+				state.loading = false;
+				loadMore();
+			},
+			/** count items left the list on the server: those before the next page's offset among them. */
+			removed: function (count) {
+				state.offset = Math.max(0, state.offset - count);
+				state.total = Math.max(0, state.total - count);
+				options.onPage(state.total);
+			},
+			done: function () {
+				return state.done;
+			},
+			stop: function () {
+				state.stopped = true;
+				state.generation++;
+				scroller.stop();
+			},
+		};
+	}
+
 	function plural(count, one, many) {
 		return count.toLocaleString() + ' ' + (count === 1 ? one : many);
 	}
@@ -763,7 +833,7 @@
 	 * tiles locally rather than reloading, so the scroll position survives.
 	 */
 	function faceGrid(options) {
-		var state = { offset: 0, total: null, loading: false, done: false, busy: false, generation: 0, faces: {} };
+		var busy = false;
 		var grid = h('div', { class: 'fw-grid fw-face-grid' });
 		var message = h('div', { class: 'fw-empty' });
 		var selection = createSelection(function () {
@@ -782,8 +852,17 @@
 		main.appendChild(message);
 		main.appendChild(bar.element);
 
-		var scroller = infiniteScroll(loadMore);
-		var stopped = false;
+		var pages = pagedLoader({
+			fetch: options.list,
+			pageSize: FACE_PAGE,
+			onItem: addTile,
+			onPage: function (total) {
+				message.textContent = total === 0 ? options.emptyText : '';
+				if (options.onTotal) {
+					options.onTotal(total);
+				}
+			},
+		});
 
 		function addTile(face) {
 			var tile = h('div', { class: 'fw-face', role: 'checkbox', 'aria-checked': 'false', 'aria-label': 'Face', tabindex: '0' }, [
@@ -813,80 +892,30 @@
 					activate(event);
 				}
 			});
-			state.faces[face.id] = face;
 			selection.add(face.id, tile);
 			grid.appendChild(tile);
 		}
 
-		function showTotal(total) {
-			state.total = total;
-			message.textContent = total === 0 ? options.emptyText : '';
-			if (options.onTotal) {
-				options.onTotal(total);
-			}
-		}
-
-		function loadMore() {
-			if (stopped || state.loading || state.done) {
-				return;
-			}
-			state.loading = true;
-			var generation = state.generation;
-			options.list(FACE_PAGE, state.offset).then(function (data) {
-				if (generation !== state.generation) {
-					return;
-				}
-				state.loading = false;
-				data.items.forEach(addTile);
-				state.offset += data.items.length;
-				// The server counts only for the first page (null after); later pages keep that number, which
-				// removeTiles() adjusts locally.
-				if (data.total !== null) {
-					showTotal(data.total);
-				}
-				state.done = data.items.length < FACE_PAGE || (state.total !== null && state.offset >= state.total);
-				scroller.check();
-			}).catch(function (error) {
-				if (generation === state.generation) {
-					state.loading = false;
-					fail(error);
-				}
-			});
-		}
-
 		function reload() {
-			if (stopped) {
-				return; // e.g. a photo dialog closed by a view change calls this after the grid was torn down
-			}
-			state.generation++;
-			state.offset = 0;
-			state.done = false;
-			state.loading = false;
-			state.faces = {};
 			clear(grid);
 			selection.reset();
-			loadMore();
+			pages.reset();
 		}
 
 		function removeTiles(ids) {
-			ids.forEach(function (id) {
-				delete state.faces[id];
-			});
 			selection.remove(ids);
-			// Rows before the next page's offset just disappeared from the server's list too.
-			state.offset = Math.max(0, state.offset - ids.length);
-			showTotal(Math.max(0, state.total - ids.length));
-			if (selection.all().length === 0 && !state.done) {
-				loadMore();
+			pages.removed(ids.length);
+			if (selection.all().length === 0 && !pages.done()) {
+				pages.loadMore();
 			}
 		}
 
 		function runAction(action) {
 			var ids = selection.ids();
-			if (ids.length === 0 || state.busy) {
+			if (ids.length === 0 || busy) {
 				return;
 			}
-			state.busy = true;
+			busy = true;
 			bar.busy(true);
 			action.run(ids).then(function (outcome) {
 				if (outcome === null) {
@@ -901,18 +930,14 @@
 					reload();
 				}
 			}).catch(fail).then(function () {
-				state.busy = false;
+				busy = false;
 				bar.busy(false);
 			});
 		}
 
-		loadMore();
+		pages.loadMore();
 		return {
-			stop: function () {
-				stopped = true;
-				state.generation++; // a page still in flight is dropped when it arrives
-				scroller.stop();
-			},
+			stop: pages.stop,
 			reload: reload,
 		};
 	}
@@ -960,7 +985,7 @@
 	}
 
 	function peopleView() {
-		var state = { generation: 0, offset: 0, total: null, loading: false, done: false, busy: false, people: {} };
+		var peopleById = {};
 		var minCount = Math.max(0, parseInt(readStored('minCount', config.minFaces), 10) || 0);
 		var search = '';
 
@@ -978,13 +1003,13 @@
 
 		function chosenPeople() {
 			return selection.ids().map(function (id) {
-				return state.people[id];
+				return peopleById[id];
 			});
 		}
 
 		var mergeButton = bar.add('Merge selected…', function () {
 			var people = chosenPeople();
-			if (people.length < 2 || state.busy) {
+			if (people.length < 2) {
 				return;
 			}
 			chooseKeep(people).then(function (keep) {
@@ -1004,7 +1029,7 @@
 		});
 		bar.add('Delete…', function () {
 			var people = chosenPeople();
-			if (people.length === 0 || state.busy) {
+			if (people.length === 0) {
 				return;
 			}
 			deleteFlow(people).then(function (result) {
@@ -1027,7 +1052,22 @@
 		main.appendChild(message);
 		main.appendChild(bar.element);
 
-		var scroller = infiniteScroll(loadMore);
+		var pages = pagedLoader({
+			fetch: function (limit, offset) {
+				return ocs('GET', '/people' + query({ limit: limit, offset: offset, minCount: minCount, search: search }));
+			},
+			pageSize: PEOPLE_PAGE,
+			onItem: addTile,
+			onPage: function (total) {
+				totalNode.textContent = plural(total, 'person', 'people');
+				message.textContent = '';
+				if (total === 0) {
+					message.textContent = search !== '' || minCount > 0
+						? 'No people match. Try a lower minimum or a different name.'
+						: 'No people yet. They appear here once your photos have been scanned and grouped.';
+				}
+			},
+		});
 
 		function addTile(person) {
 			var tile = personTile(person);
@@ -1040,54 +1080,17 @@
 					event.preventDefault();
 				}
 			});
-			state.people[person.id] = person;
+			peopleById[person.id] = person;
 			selection.add(person.id, tile);
 			grid.appendChild(tile);
 		}
 
-		function loadMore() {
-			if (state.loading || state.done) {
-				return;
-			}
-			state.loading = true;
-			var generation = state.generation;
-			ocs('GET', '/people' + query({ limit: PEOPLE_PAGE, offset: state.offset, minCount: minCount, search: search })).then(function (data) {
-				if (generation !== state.generation) {
-					return; // a filter changed while this was in flight
-				}
-				state.loading = false;
-				data.items.forEach(addTile);
-				state.offset += data.items.length;
-				if (data.total !== null) {
-					state.total = data.total; // counted for the first page only
-				}
-				state.done = data.items.length < PEOPLE_PAGE || (state.total !== null && state.offset >= state.total);
-				totalNode.textContent = plural(state.total, 'person', 'people');
-				message.textContent = '';
-				if (state.total === 0) {
-					message.textContent = search !== '' || minCount > 0
-						? 'No people match. Try a lower minimum or a different name.'
-						: 'No people yet. They appear here once your photos have been scanned and grouped.';
-				}
-				scroller.check();
-			}).catch(function (error) {
-				if (generation === state.generation) {
-					state.loading = false;
-					fail(error);
-				}
-			});
-		}
-
 		function reset() {
-			state.generation++;
-			state.offset = 0;
-			state.done = false;
-			state.loading = false;
-			state.people = {};
+			peopleById = {};
 			clear(grid);
 			selection.reset();
 			message.textContent = '';
-			loadMore();
+			pages.reset();
 		}
 
 		searchInput.addEventListener('input', debounce(function () {
@@ -1100,8 +1103,8 @@
 			reset();
 		}, 400));
 
-		loadMore();
-		return scroller.stop;
+		pages.loadMore();
+		return pages.stop;
 	}
 
 	// ---- "possibly the same person" ------------------------------------------------------
