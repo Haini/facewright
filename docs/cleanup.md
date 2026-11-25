@@ -289,8 +289,10 @@ and the totals come with the first page only; page 1 of the people list stays at
 which only a stored cover per person would fix. That and the list's own GROUP BY are fixed in bridge 0.12.4 (deployed to
 live on 2026-11-25; `occ upgrade` updated nothing else, the migration stored 4,675 people, `--verify` 0 on every
 `people_stats` line, the people list 9-15 ms per page as each user): each person's size and cover are stored (`facewright_cluster_stats`, kept by `FaceStore`),
-measured in that document, item 5's follow-up. Open: 7, 9 to 11, 13; 8 and 12 need the user. Item 7 is
-still as found (16 `userId === null` checks in `PeopleApiController`).
+measured in that document, item 5's follow-up. Items 7, 10 and 11 done and 13 verified (no fix needed) in bridge 0.12.5,
+item 9 marked done (0.12.4); deployed to live on 2026-11-25 (`occ upgrade` updated nothing else; live then equal to
+HEAD, `project --dry-run` 0 for `own`, the API 401 without a user and right for each user, no errors logged but one
+route lookup during the upgrade itself). Open: 8 and 12, which need the user.
 
 ---
 

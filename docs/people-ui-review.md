@@ -9,7 +9,7 @@ before any code changes.
 
 **Status (2026-11-25):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
 done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, live since 2026-11-25). Items 7, 9, 10,
-11 and 13 done (bridge 0.12.5, dev). Items 8 and 12 are open and need the user.
+11 and 13 done (bridge 0.12.5, live since 2026-11-25). Items 8 and 12 are open and need the user.
 
 ## How to work this list
 
