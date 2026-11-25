@@ -8,8 +8,8 @@ fix, how to verify. Work them in order. Items marked **Ask first** need a decisi
 before any code changes.
 
 **Status (2026-11-25):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
-done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, live since 2026-11-25). Items 7 to 13 are open; 8
-and 12 still need the user.
+done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, live since 2026-11-25). Items 7, 9, 10,
+11 and 13 done (bridge 0.12.5, dev). Items 8 and 12 are open and need the user.
 
 ## How to work this list
 
@@ -225,6 +225,9 @@ not per page. The total shown must still decrease when faces are moved out.
 
 ### 7. Twenty unreachable `userId === null` checks
 
+**Done (2026-11-25, bridge 0.12.5).** As proposed. `ControllerMethodReflector` on dev: none of the 22 actions of the
+three controllers (nor `FacePreviewController`'s) is `PublicPage`. Without credentials the API still answers 401.
+
 **Where:** every action in `PeopleApiController` and `SuggestionApiController`; `PageController`
 (`$userId ?? ''` and the `''` branches).
 
@@ -264,6 +267,8 @@ instead make not-found consistently 404 across all actions (throw a dedicated
 
 ### 9. Ambiguous `c` alias in the people list query
 
+**Done (bridge 0.12.4)**, as a side effect of the stored sizes: the alias is `face_count`.
+
 **Where:** `PeopleService::listClusters()`: `selectAlias(count('d.id'), 'c')` then
 `addOrderBy('c', 'DESC')`, while `c` is also the alias of `recognize_face_clusters`.
 
@@ -272,6 +277,12 @@ instead make not-found consistently 404 across all actions (throw a dedicated
 **Verify:** People list order unchanged (named first, then largest).
 
 ### 10. Keyboard selection and roles in the grids
+
+**Done (2026-11-25, bridge 0.12.5)**, with one change: a `<button>` inside the `<a>` would be invalid, so a person tile
+is now a wrapper (`.fw-person-tile`) holding the link and the corner button side by side; the selection marks the
+wrapper. Core's button styles outrank one class, so the mark's size, border and fill are `!important`. Verified in
+headless Chromium: Tab from a person's link reaches its corner button, Space and Enter on it select and unselect, Enter
+on the link opens the person; Space on a face selects, Enter on an unselected face opens the photo, Shift+click ranges.
 
 **Where:** `js/people.js` `faceGrid.addTile()`, `personTile()` / `peopleView.addTile()`.
 
@@ -295,6 +306,12 @@ works with the mouse, Enter on an unselected face opens the photo. Tab to a pers
 Space selects; Enter on the tile opens the person.
 
 ### 11. The people list duplicates `faceGrid`'s paging machinery
+
+**Done (2026-11-25, bridge 0.12.5).** `pagedLoader({fetch, pageSize, onItem, onPage})` returns `{loadMore, reset,
+removed, done, stop}`; 5 code lines fewer than the two copies. One behaviour change, a fix: leaving the people list
+now drops a page still in flight, as the face grids have since item 1. Verified in headless Chromium: 303 people with
+one request per further page, search resets, and with the page size rewritten to 4, removing all 12 loaded faces pulls
+the next page and the rest scrolls in without duplicates.
 
 **Where:** `peopleView()` `state`/`loadMore()`/`reset()` vs `faceGrid()` `state`/`loadMore()`/`reload()`.
 
@@ -322,6 +339,12 @@ wants the app translatable or on the App Store; otherwise skip and say so in CLA
 ## Verification-only items
 
 ### 13. EXIF orientation: do boxes line up on rotated phone photos?
+
+**Verified (2026-11-25): they do, no fix needed.** On dev (OpenCV 5.0.0 in the ExApp), a landscape crop of the
+astronaut portrait (512×400) and the same image stored rotated (400×512, `Orientation=6`) were both detected (two
+`POST /detect`): the normalized boxes agree to 0.001, the embeddings are 0.0016 apart (cosine), and both crops from
+`/faces/{id}/preview` show the face upright and centred. `cv2.IMREAD_COLOR` applies the orientation; a comment at the
+`imdecode` call in `ex_app/lib/main.py` says not to lose that.
 
 **Where:** `ex_app/lib/main.py` (`cv2.imdecode(..., cv2.IMREAD_COLOR)`), `FacePreviewController`
 (crops from Nextcloud's preview), `openPhoto()` (boxes over `/core/preview`).

@@ -104,6 +104,9 @@ _INFERENCE_LOCK = threading.Lock()
 def _analyse(image_bytes: bytes) -> JSONResponse:
     npbuf = np.frombuffer(image_bytes, dtype=np.uint8)
     try:
+        # IMREAD_COLOR applies the EXIF orientation, so boxes and image_width/height are in the displayed frame,
+        # as Nextcloud's previews are (verified with an Orientation=6 file, docs/people-ui-review.md item 13).
+        # Adding IMREAD_IGNORE_ORIENTATION, or a decoder that does not rotate, would misplace every phone photo's box.
         img = cv2.imdecode(npbuf, cv2.IMREAD_COLOR)
     except cv2.error as exc:
         # Any other malformed input that trips an assertion inside OpenCV rather than returning
