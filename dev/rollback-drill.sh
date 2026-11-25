@@ -76,5 +76,9 @@ for id in $(sql "SELECT id FROM oc_jobs WHERE class LIKE '%Recognize%Maintenance
 check "   and after deleting Recognize's MaintenanceJob (re-added by the cycle, same chain) none remain" 0 "$(one "SELECT COUNT(*) FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'")"
 check "   the tree matches the commit" "" "$(git -C "$REPO_DIR" status --porcelain facewright_bridge)"
 occ facewright:project --dry-run >/dev/null 2>&1; check "the copy is clean under Stage E again (exit 0)" 0 "$?"
-verify_step "rolling forward"
+# Stage D code wrote faces without keeping each person's stored size (bridge 0.12.4): --verify must notice, and
+# --recount, the documented last step of rolling forward, must repair it.
+check "   --verify notices the sizes Stage D's writes left stale" 1 "$(occ facewright:own-tables --verify >/dev/null 2>&1; echo $?)"
+occ facewright:own-tables --recount >/dev/null
+verify_step "rolling forward and --recount"
 summary "rollback drill (R2)"

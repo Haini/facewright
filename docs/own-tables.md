@@ -744,7 +744,10 @@ Still to do: the day-after check at the top of this document, and then at least 
   an upgrade (no `occ` commands, web 503), while `occ upgrade` would apply every pending store update; and Nextcloud may
   drop the hourly job from `oc_jobs` while its class is missing (when cron walks the job list), so **rolling forward
   again** needs `occ app:disable facewright_bridge && occ app:enable facewright_bridge` (and Recognize's
-  `MaintenanceJob` deleted in the same chain, as after any enable). R2 stops being possible at F.2.
+  `MaintenanceJob` deleted in the same chain, as after any enable), then `occ facewright:own-tables --recount`: code
+  before bridge 0.12.4 does not keep each person's stored size and cover (`facewright_cluster_stats`), so every write
+  made under it leaves them wrong until then (`--verify`'s `people_stats_*` checks say so). The same holds after running
+  any bridge older than 0.12.4. R2 stops being possible at F.2.
 - **R3:** restore the full database dump taken before the cutover. Loses edits made since; last resort.
 
 Drill on dev: cut over, use it, hydrate, revert, then run the Stage C and D suites and the Stage C `--verify`.
