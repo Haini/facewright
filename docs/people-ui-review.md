@@ -8,7 +8,7 @@ fix, how to verify. Work them in order. Items marked **Ask first** need a decisi
 before any code changes.
 
 **Status (2026-11-25):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
-done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, on dev). Items 7 to 13 are open; 8
+done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, live since 2026-11-25). Items 7 to 13 are open; 8
 and 12 still need the user.
 
 ## How to work this list
@@ -171,7 +171,9 @@ the covers of page 1 nor the GROUP BY of item 6's last paragraph remain. Measure
 table costs 66 ms for the sizes of all 4,675 people and 333 ms for their covers (done in the migration); a write costs
 3-4 ms per person it touches for the recount (18k faces) and 2-3 ms for the cover, and 40-76 ms in the rare case that
 the person's cover face itself leaves (the person's faces are sorted again then). On dev, the list from the stored
-values equals the old query's in every filter tried (people, order, sizes, covers, every page, the count).
+values equals the old query's in every filter tried (people, order, sizes, covers, every page, the count). On live
+after the deploy (2026-11-25): a page of 60 people takes 9 ms (first) and 6 ms (second) for the 1,177 people of the
+smaller library, 15 ms and 12 ms for the 3,498 of the larger, against 598 ms and 220 ms before.
 
 **Where:** `PeopleService::coversFor()`, called for every page of the people list (60 people) and
 every suggestion list.
