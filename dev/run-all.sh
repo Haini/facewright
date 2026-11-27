@@ -86,6 +86,8 @@ run dav-battery-own        with_own env TREE=facewright_bridge "$DEV_DIR/battery
 # The same flows with the fork reading the own tables and writing to the bridge's tree, then with Recognize disabled too.
 [ $ui = yes ] && run memories-ui-bridge     with_own with_provider env PROVIDER=facewright_bridge "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 [ $ui = yes ] && run memories-ui-bridge-off with_own with_provider with_recognize_off env PROVIDER=facewright_bridge "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
+# The provider dropdown on Memories' admin page (docs/memories-fork-admin-ui.md); it sets and restores the system setting itself.
+[ $ui = yes ] && run memories-ui-admin-provider "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/admin_provider.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
 fail=0; for r in "${results[@]}"; do [ "$r" -ne 0 ] && fail=$((fail+1)); done
 echo "$((${#results[@]}-fail)) of ${#results[@]} suites passed"; [ $fail -eq 0 ]
