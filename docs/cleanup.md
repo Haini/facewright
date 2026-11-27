@@ -295,7 +295,10 @@ live on 2026-11-25; `occ upgrade` updated nothing else, the migration stored 4,6
 measured in that document, item 5's follow-up. Items 7, 10 and 11 done and 13 verified (no fix needed) in bridge 0.12.5,
 item 9 marked done (0.12.4); deployed to live on 2026-11-25 (`occ upgrade` updated nothing else; live then equal to
 HEAD, `project --dry-run` 0 for `own`, the API 401 without a user and right for each user, no errors logged but one
-route lookup during the upgrade itself). Open: 8 and 12, which need the user.
+route lookup during the upgrade itself). Items 8 and 12 done in bridge 0.12.6 (`docs/handover-2026-11-27.md`, T3),
+deployed to live on 2026-11-27 (`occ upgrade` updated nothing else, container restarted; live then equal to HEAD,
+`project --dry-run` 0 for `own`, no warning or error logged, the kept OCS routes 401 without a user, the removed ones
+404 or 405).
 
 ---
 
