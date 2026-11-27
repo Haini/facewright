@@ -9,7 +9,7 @@ before any code changes.
 
 **Status (2026-11-25):** items 1 to 3 done (bridge 0.12.2), item 4 closed without a change (see there), items 5 and 6
 done (bridge 0.12.3), and their follow-up, stored sizes and covers (bridge 0.12.4, live since 2026-11-25). Items 7, 9, 10,
-11 and 13 done (bridge 0.12.5, live since 2026-11-25). Items 8 and 12 are open and need the user.
+11 and 13 done (bridge 0.12.5, live since 2026-11-25). Items 8 (remove the routes) and 12 (translatable strings) were decided on 2026-11-27 and are not done yet.
 
 ## How to work this list
 
@@ -245,7 +245,7 @@ which is the right answer for an `<img>`.
 **Verify:** `curl` an API route without credentials: still 401 (from the middleware). Every page
 action still works when logged in.
 
-### 8. Single-item OCS routes nothing calls — **Ask first**
+### 8. Single-item OCS routes nothing calls — decided 2026-11-27: remove them
 
 **Where:** `appinfo/routes.php` and `PeopleApiController`: `POST /people` (`createCluster`),
 `DELETE /people/{id}` (`deleteCluster`), `POST /people/{id}/merge` (`mergeClusters`),
@@ -326,7 +326,7 @@ removes, stop and leave it.
 **Verify:** Every view scrolls to the end, filters reset correctly, and removing tiles still pulls
 the next page when the grid empties.
 
-### 12. JS strings are not translatable — **Ask first**
+### 12. JS strings are not translatable — decided 2026-11-27: do it now
 
 **Where:** every user-visible string in `js/people.js` (the template already uses `$l->t()`).
 

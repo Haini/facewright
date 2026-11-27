@@ -32,12 +32,11 @@ again over the whole library. Losing the curation (names, merges, moves, ignores
   drill, no separate Option 1 code path). Stages F and H run in the order of "Decision after M11", Option 2, each live step with its own
   go-ahead and a fresh dump. A dump stays the way back for anything in between.
 
-Still to answer with the user, at the step that needs it:
-1. F.1 (blank the vectors, rebuild Recognize's table): pointless if H drops the tables anyway; skip unless the tables are
-   kept frozen for a while.
-2. Recognize: uninstall, or leave disabled with its tables frozen or dropped (Photos' People view is gone either way).
-3. F.3: the ~40 legacy rows (show the titled/untitled split first). With Recognize's tables going, this reduces to
-   whether any of their titles are worth carrying over by hand.
+Answered by the user on 2026-11-27:
+1. F.1 (blank the vectors, rebuild Recognize's table): **skipped**; H drops the tables after a dump.
+2. Recognize: **uninstalled in H, its tables dropped** (Photos' People view is gone either way). The way back is the
+   runbook below, which already covers re-running its migrations.
+3. F.3, the ~40 legacy rows: **dropped with the tables**, nothing carried over.
 
 ### Back to Recognize from the tag (runbook, not rehearsed)
 
@@ -112,8 +111,12 @@ These close out tracks that are done in code but whose evidence was never record
    script referenced it any more, so its origin, probably a one-off `docker run -v` of a missing file, stays unknown).
 3. **Stray `.work/` at the repo root** — removed 2026-11-21 (two dev app-password tokens from 2026-11-20, a run with
    `WORK_DIR` pointing there; `dev/lib.sh` defaults to `dev/.work`).
-4. **`docs/memories-fork.patch`** duplicates the fork's commit `bbb4f38c`. Decide: keep it as the reviewable diff
-   (then it must be refreshed on every M12 rebase, add that to M12), or replace it with a link to the commit.
+4. **`docs/memories-fork.patch`** duplicates the fork's commit `bbb4f38c`. Decided 2026-11-27: **replace it with a link**
+   to the fork's tag/commit (not done yet).
+5. **Fork nits** from the review of 2026-11-27, all approved, not done yet: a comment on `RecognizeController`'s API-key
+   guard (without it the endpoint 500s on every page load when Recognize is uninstalled); a log warning when
+   `memories.recognize.provider` fails its check; `facewright-build.sh` checking `git status --porcelain` (untracked
+   files) instead of `git diff --quiet`; `node:24` pinned by digest.
 
 ---
 
