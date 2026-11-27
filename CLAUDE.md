@@ -114,7 +114,7 @@ Services (`lib/Service/`):
   zero-face results (`faces_found = 0`) and permanent failures (`FACES_FAILED = -1`). This — not
   the detections table — is the idempotency check everywhere.
 - `PathFilterService` — per-user included-paths allowlist, exact-or-folder-prefix matching.
-  Empty list = nothing included. Also `resolveSearchRoots()` so enumeration and the "not yet
+  Empty list = all of the user's files included (no restriction). Also `resolveSearchRoots()` so enumeration and the "not yet
   processed" statistic walk the identical file set. `images()` is how anything here lists a
   folder's images: `searchByMime()` builds every Node in one array and is unaffordable on a large
   library. Only an empty page ends that walk: LIMIT is applied in SQL and core drops rejected rows

@@ -127,7 +127,7 @@ Then open <http://localhost:8080> (`admin` / `dev-admin-password`) and:
    "Automatically detect faces in new uploads" or press "Scan entire library" there later. Automatic
    detection is off by default, so uploading photos alone does nothing.
 3. **Personal settings > Facewright** (per user): tick "Find faces in my photos" and add the
-   folders to look at under "Folders to look at". An empty list means nothing is scanned. Users
+   folders to look at under "Folders to look at". An empty list means all of your files are scanned. Users
    are off until they turn this on (only users who had already logged in when the app was first
    enabled start switched on).
 4. Upload some photos into one of those folders. Grouping into people needs at least three faces

@@ -4,7 +4,7 @@
 >
 > **Done and live:** Stages A to E (our tables are the source of truth, the copy Memories reads is written by
 > `ProjectionService`; since 2026-11-06) and G (the fork of Memories reads the `own` copy and writes to our DAV tree;
-> since 2026-11-20, `docs/memories-fork.md`). Live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
+> since 2026-11-20, `docs/memories-fork.md`). Live runs bridge 0.12.5, the pinned fork of Memories 11.1.4 with
 > `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize
 > disabled, its tables frozen since 2026-11-21.
 >
@@ -913,7 +913,7 @@ fork on GitHub, and anything posted on pulsejet/memories#1812, also needs the go
 
 The steps (the fork, its build and pin, the bridge's `own` projection target and WebDAV tree, dev, the rollback drill,
 live, keeping the fork current) are in **`docs/memories-fork.md`**, written for a session that works from it cold. The
-fork's change is `docs/memories-fork.patch`. That document wins where the two differ.
+fork's change is the commit `bbb4f38c` of https://github.com/Haini/memories (branch `facewright`, on the tag `facewright-v11.1.4`). That document wins where the two differ.
 
 ---
 

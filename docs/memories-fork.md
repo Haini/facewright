@@ -15,7 +15,7 @@ Each step below keeps what was measured under its "Done".
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
   `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
-  tree of another app", exactly `docs/memories-fork.patch`, 9 files, +70/-20) and the commit `2adf50b6`
+  tree of another app", 9 files, +70/-20) and the commit `2adf50b6`
   (`scripts/facewright-build.sh`, M2). Both are pushed; the tag `facewright-v11.1.4` marks `2adf50b6`, the build on live.
 - **The clone is `/home/constantin/memories-fork`** (`$FORK`), with the remote `upstream` and its tags. Its `build/`
   holds the release tarball, the unpacked release and the fork build.
@@ -51,7 +51,7 @@ Each step below keeps what was measured under its "Done".
 - `github.com/Haini/memories`, a fork of `pulsejet/memories`. The branch `facewright` sits on a release tag (v11.1.4
   now) and carries the change as **one commit**, rebased onto each new tag (M12). The app id stays `memories` and the
   version stays exactly upstream's (`docs/own-tables.md` G.0).
-- The change (`docs/memories-fork.patch`):
+- The change (commit `bbb4f38c` of the fork, on the tag `facewright-v11.1.4`):
   - **The setting.** A system setting `memories.recognize.provider` (default `recognize`, an app id). It is in
     `SystemConfig::DEFAULTS`, and `recognizeProvider()` returns it if it matches `^[a-z0-9_]+$`, otherwise `recognize`.
   - **The tables.** `RecognizeBackend` reads `{provider}_face_detections` / `{provider}_face_clusters` through two
@@ -182,10 +182,7 @@ rebases.
    https://github.com/pulsejet/memories.git`, then run `git fetch upstream --tags`. The fork carries no tags, and
    M2 and M12 need them.
    - Check: `git log --oneline -2` shows `bbb4f38c` on top of "chore(release): bump to v11.1.4".
-   - Check: `git diff --abbrev=8 v11.1.4 facewright` is byte-identical to `docs/memories-fork.patch`. Without
-     `--abbrev=8` only the `index` lines differ, because Git abbreviates hashes to a length that depends on the
-     clone.
-3. `git switch -c facewright v11.1.4`, `git apply /path/to/facewright/docs/memories-fork.patch`.
+3. `git switch -c facewright v11.1.4`, `git cherry-pick bbb4f38c` (from the fork's remote).
 4. Checks: `npx vue-tsc --noEmit -p .`, `npx prettier --check` on the five changed `src/` files, and `php -l` on the
    four changed PHP files.
    - There is no Node on the host: run them in `docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v "$FORK":/src -w

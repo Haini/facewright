@@ -4,7 +4,7 @@ An inventory of what is left to tidy now that live runs the fork of Memories aga
 M11) and Recognize is disabled. Assessed 2026-11-21 against `master` at `beb5488`. Each item says where, what, and whether
 it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3), the three bugs of 6.1 (live).
 
-**State this assumes:** live runs bridge 0.12.1, the pinned fork of Memories 11.1.4 with
+**State this assumes:** live runs bridge 0.12.5, the pinned fork of Memories 11.1.4 with
 `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize 12.0.3
 installed but disabled (its tables frozen since 2026-11-21).
 
@@ -112,7 +112,7 @@ These close out tracks that are done in code but whose evidence was never record
 3. **Stray `.work/` at the repo root** — removed 2026-11-21 (two dev app-password tokens from 2026-11-20, a run with
    `WORK_DIR` pointing there; `dev/lib.sh` defaults to `dev/.work`).
 4. **`docs/memories-fork.patch`** duplicates the fork's commit `bbb4f38c`. Decided 2026-11-27: **replace it with a link**
-   to the fork's tag/commit (not done yet).
+   to the fork's tag/commit. **Done 2026-11-27:** the file is deleted; every reference points at the fork's commit `bbb4f38c`.
 5. **Fork nits** from the review of 2026-11-27, all approved, not done yet: a comment on `RecognizeController`'s API-key
    guard (without it the endpoint 500s on every page load when Recognize is uninstalled); a log warning when
    `memories.recognize.provider` fails its check; `facewright-build.sh` checking `git status --porcelain` (untracked
