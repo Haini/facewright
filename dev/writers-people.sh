@@ -1,7 +1,7 @@
 #!/bin/bash
-# Every People-level write, through the real API, with the invariant checker after each step: create, rename,
-# move faces into a person and into a new one, detach, ignore, unignore, move or detach one face, merge, delete a
-# person, delete the empty ones. Changes data (the last step removes the empty people the fixture has): restore
+# Every People-level write, through the real API, with the invariant checker after each step: create (DAV
+# MKCOL), rename, move faces into a person and into a new one, detach, ignore, unignore, merge, delete a person,
+# delete the empty ones. Changes data (the last step removes the empty people the fixture has): restore
 # a snapshot afterwards.   dev/writers-people.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 u=$ADMIN_USER
@@ -16,7 +16,9 @@ echo "  person $P, faces ${F[*]}"
 verify_step "nothing yet"
 
 echo "== create and rename"
-A=$(admin_ocs POST /people '{"title":"SC-A"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["ocs"]["data"]["id"])')
+# A person is created the way Memories does it: a MKCOL in the DAV tree (the OCS route for it was removed in 0.12.6)
+check "MKCOL SC-A" 201 "$(admin_dav MKCOL "facewright_bridge/$u/faces/SC-A")"
+A=$(one "SELECT id FROM oc_facewright_clusters WHERE user_id='$u' AND title='SC-A'"); need "SC-A exists" "${A:+1}" 1
 check "create SC-A (it is in our table)" SC-A "$(one "SELECT title FROM oc_facewright_clusters WHERE id=$A")"
 verify_step "create"
 check "rename SC-A -> SC-A2" 200 "$(admin_ocs PUT "/people/$A" '{"title":"SC-A2"}' | status)"
@@ -40,12 +42,8 @@ verify_step "ignore"
 check "unignore face 2" 200 "$(admin_ocs POST /faces/unignore "{\"ids\":[${F[1]}]}" | status)"
 check "   pending again (state 0)" "0/-" "$(state_of ${F[1]})"
 verify_step "unignore"
-check "move one face (PUT) into SC-B" 200 "$(admin_ocs PUT "/faces/${F[0]}/cluster" "{\"clusterId\":$B}" | status)"
-check "   in SC-B" "1/$B" "$(state_of ${F[0]})"
-verify_step "move one face"
-check "detach one face (DELETE)" 200 "$(admin_ocs DELETE "/faces/${F[0]}/cluster" | status)"
-check "   unassigned" "2/-" "$(state_of ${F[0]})"
-verify_step "detach one face"
+# The single-face moves and detaches (PUT / DELETE /faces/{id}/cluster) are not tested here any more: the routes were
+# removed in 0.12.6, and dev/battery.sh covers moveFace / detachFace through the DAV router (MOVE and DELETE of a face).
 
 echo "== merge and delete"
 before=$(one "SELECT COUNT(*) FROM oc_facewright_user_faces WHERE cluster_id=$A")
@@ -59,7 +57,7 @@ check "   the person is gone" 0 "$(one "SELECT COUNT(*) FROM oc_facewright_clust
 verify_step "delete person"
 
 echo "== empty people"
-admin_ocs POST /people '{"title":"SC-Empty"}' >/dev/null
+check "MKCOL SC-Empty" 201 "$(admin_dav MKCOL "facewright_bridge/$u/faces/SC-Empty")"
 dry=$(occ facewright:people "$u" --delete-empty --dry-run | grep -o '[0-9]\+' | head -1); need "empty people to delete (SC-Empty at least)" "${dry:-0}" 1
 verify_step "an empty person exists"
 check "delete-empty removes them" 0 "$(occ facewright:people "$u" --delete-empty >/dev/null; one "SELECT COUNT(*) FROM oc_recognize_face_clusters c WHERE c.user_id='$u' AND NOT EXISTS (SELECT 1 FROM oc_recognize_face_detections d WHERE d.cluster_id=c.id)")"

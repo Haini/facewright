@@ -32,7 +32,6 @@ return [
 	// swallow them; the {id} routes also require digits.
 	'ocs' => [
 		['name' => 'PeopleApi#listClusters', 'url' => '/api/v1/people', 'verb' => 'GET'],
-		['name' => 'PeopleApi#createCluster', 'url' => '/api/v1/people', 'verb' => 'POST'],
 		['name' => 'PeopleApi#listUnassignedFaces', 'url' => '/api/v1/people/unassigned', 'verb' => 'GET'],
 		['name' => 'PeopleApi#listIgnoredFaces', 'url' => '/api/v1/people/ignored', 'verb' => 'GET'],
 		['name' => 'PeopleApi#mergeMany', 'url' => '/api/v1/people/merge', 'verb' => 'POST'],
@@ -42,14 +41,10 @@ return [
 		['name' => 'PeopleApi#listFaces', 'url' => '/api/v1/people/{id}/faces', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#getCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#renameCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'PUT', 'requirements' => ['id' => '\d+']],
-		['name' => 'PeopleApi#deleteCluster', 'url' => '/api/v1/people/{id}', 'verb' => 'DELETE', 'requirements' => ['id' => '\d+']],
-		['name' => 'PeopleApi#mergeClusters', 'url' => '/api/v1/people/{id}/merge', 'verb' => 'POST', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#moveFaces', 'url' => '/api/v1/faces/move', 'verb' => 'POST'],
 		['name' => 'PeopleApi#detachFaces', 'url' => '/api/v1/faces/detach', 'verb' => 'POST'],
 		['name' => 'PeopleApi#ignoreFaces', 'url' => '/api/v1/faces/ignore', 'verb' => 'POST'],
 		['name' => 'PeopleApi#unignoreFaces', 'url' => '/api/v1/faces/unignore', 'verb' => 'POST'],
-		['name' => 'PeopleApi#moveFace', 'url' => '/api/v1/faces/{id}/cluster', 'verb' => 'PUT', 'requirements' => ['id' => '\d+']],
-		['name' => 'PeopleApi#detachFace', 'url' => '/api/v1/faces/{id}/cluster', 'verb' => 'DELETE', 'requirements' => ['id' => '\d+']],
 		['name' => 'PeopleApi#facesForFile', 'url' => '/api/v1/files/{fileId}/faces', 'verb' => 'GET', 'requirements' => ['fileId' => '\d+']],
 	],
 ];

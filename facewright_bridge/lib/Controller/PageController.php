@@ -37,6 +37,9 @@ class PageController extends Controller {
 		// Not #[PublicPage]: the framework has refused a request without a user before it gets here.
 		$userId = $this->userId ?? throw new \LogicException('No user session on a non-public route');
 
+		// The page's strings go through t() / n() in people.js; with no l10n/ folder this loads nothing, and the
+		// translations are picked up once one exists.
+		Util::addTranslations($this->appName);
 		Util::addScript($this->appName, 'people');
 		Util::addStyle($this->appName, 'people');
 

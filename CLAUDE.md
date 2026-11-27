@@ -189,6 +189,10 @@ another user) and `FacePreviewController` (`/faces/{id}/preview`, a square crop 
   crop is swapped for a placeholder element instead.
 - A name already taken answers 400 with `code: title_exists` (`DuplicateTitleException`), which the
   page turns into a merge offer; never match on the English message.
+- The page's strings go through `tr()` / `trn()` in `js/people.js` (Nextcloud's global `t()` / `n()`, which the page has no
+  build step to import around): both HTML-escape substituted values and run the result through DOMPurify by default,
+  which would show a name `A & B` as `A &amp; B` in text written with `textContent`, so every call passes `{escape:
+  false, sanitize: false}`. `admin.js` and `personal.js` are not translatable yet.
 
 `occ` commands: `facewright:detect <user> <path>` (forces re-detection), `facewright:scan`,
 `facewright:cluster <user> [--engine=php|exapp]`, `facewright:cluster-scan`, `facewright:cluster-compare <user> [--reopen] [--chunks=<n>]

@@ -69,18 +69,6 @@ class PeopleApiController extends OCSController {
 	}
 
 	#[NoAdminRequired]
-	public function createCluster(string $title): DataResponse {
-		try {
-			$id = $this->people->createCluster($this->uid(), $title);
-		} catch (DuplicateTitleException $e) {
-			return new DataResponse(['message' => $e->getMessage(), 'code' => 'title_exists', 'existingId' => $e->existingId], Http::STATUS_BAD_REQUEST);
-		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
-		}
-		return new DataResponse($this->people->getCluster($this->uid(), $id));
-	}
-
-	#[NoAdminRequired]
 	public function listFaces(int $id, int $limit = 120, int $offset = 0): DataResponse {
 		try {
 			$this->people->getCluster($this->uid(), $id);
@@ -104,26 +92,6 @@ class PeopleApiController extends OCSController {
 			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
 		return new DataResponse($this->people->getCluster($this->uid(), $id));
-	}
-
-	#[NoAdminRequired]
-	public function deleteCluster(int $id): DataResponse {
-		try {
-			$unassigned = $this->people->deleteCluster($this->uid(), $id);
-		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_NOT_FOUND);
-		}
-		return new DataResponse(['unassigned' => $unassigned]);
-	}
-
-	#[NoAdminRequired]
-	public function mergeClusters(int $id, string $merge, bool $dryRun = false): DataResponse {
-		try {
-			$result = $this->people->mergeClusters($this->uid(), (string)$id, $merge, $dryRun);
-		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
-		}
-		return new DataResponse($result);
 	}
 
 	#[NoAdminRequired]
@@ -234,26 +202,6 @@ class PeopleApiController extends OCSController {
 			throw new \InvalidArgumentException('Too many items in one request (maximum ' . self::MAX_IDS . ').');
 		}
 		return array_values(array_map('intval', $ids));
-	}
-
-	#[NoAdminRequired]
-	public function moveFace(int $id, int $clusterId): DataResponse {
-		try {
-			$this->people->moveFace($this->uid(), $id, $clusterId);
-		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
-		}
-		return new DataResponse([]);
-	}
-
-	#[NoAdminRequired]
-	public function detachFace(int $id): DataResponse {
-		try {
-			$this->people->detachFace($this->uid(), $id);
-		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['message' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
-		}
-		return new DataResponse([]);
 	}
 
 	#[NoAdminRequired]

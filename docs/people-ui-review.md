@@ -247,6 +247,14 @@ action still works when logged in.
 
 ### 8. Single-item OCS routes nothing calls — decided 2026-11-27: remove them
 
+**Done (bridge 0.12.6, 2026-11-27):** the five routes and their actions are removed from `routes.php` and
+`PeopleApiController`; every `PeopleService` method stays (the DAV router and `PeopleSettingsController` / `occ
+facewright:merge-clusters` use them). `js/people.js` called none of them. `dev/writers-people.sh` creates people with the
+DAV `MKCOL` Memories sends and no longer tests the single-face `PUT` / `DELETE`; `dev/battery.sh` covers `moveFace` /
+`detachFace` through the router (a face `MOVE` and a face `DELETE`). After `occ upgrade` and a restart, `POST
+/people/{id}/merge` and the two `/faces/{id}/cluster` routes answer HTTP 404 with `ocs.meta.statuscode` 998; `POST
+/people` and `DELETE /people/{id}` answer HTTP 405 (the path still exists for `GET` and `PUT`).
+
 **Where:** `appinfo/routes.php` and `PeopleApiController`: `POST /people` (`createCluster`),
 `DELETE /people/{id}` (`deleteCluster`), `POST /people/{id}/merge` (`mergeClusters`),
 `PUT /faces/{id}/cluster` (`moveFace`), `DELETE /faces/{id}/cluster` (`detachFace`).
@@ -327,6 +335,9 @@ removes, stop and leave it.
 the next page when the grid empties.
 
 ### 12. JS strings are not translatable — decided 2026-11-27: do it now
+
+**Done (bridge 0.12.6, 2026-11-27, `js/people.js` only):** see `docs/handover-2026-11-27.md`, T3b, and CLAUDE.md's People
+page section. `admin.js` and `personal.js` are not done.
 
 **Where:** every user-visible string in `js/people.js` (the template already uses `$l->t()`).
 

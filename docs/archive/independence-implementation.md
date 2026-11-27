@@ -195,6 +195,10 @@ the browser, so write it before the controller.
   | DELETE | `/api/v1/faces/{id}/cluster` | `detachFace` |
   | GET | `/api/v1/files/{fileId}/faces` | `facesForFile` |
 
+  *Note (bridge 0.12.6): `createCluster`, `deleteCluster`, `mergeClusters`, `moveFace` and `detachFace` were removed from
+  this API; the page uses the bulk forms and the DAV router calls `PeopleService` directly
+  (`docs/people-ui-review.md`, item 8).*
+
   Resulting URLs: `/ocs/v2.php/apps/facewright_bridge/api/v1/people…`. Callers send
   `OCS-APIRequest: true` and the request token.
 - `PeopleSettingsController::mergeClusters` (admin, takes `userId`) stays as the admin's
