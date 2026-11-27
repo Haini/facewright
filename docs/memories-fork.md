@@ -186,7 +186,7 @@ rebases.
 4. Checks: `npx vue-tsc --noEmit -p .`, `npx prettier --check` on the five changed `src/` files, and `php -l` on the
    four changed PHP files.
    - There is no Node on the host: run them in `docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v "$FORK":/src -w
-     /src node:24 ...` after `npm ci --ignore-scripts`.
+     /src "$NODE_IMAGE" ...` (`NODE_IMAGE` as set at the top of the build script) after `npm ci --ignore-scripts`.
    - Run `php -l` through the dev Nextcloud container: `docker exec -i recognaize-nextcloud-1 php -l < file`.
 5. **The two greps** that prove nothing escaped the setting:
    - `grep -rn "recognize_face_" lib | grep -v lib/Migration` prints **nothing**.
@@ -219,7 +219,7 @@ leave an old one next to its error:
 1. **The tarball.** Download `https://github.com/pulsejet/memories/releases/download/$TAG/memories.tar.gz` into
    `build/` (gitignored), unless it is already there. Print its sha256.
 2. **Unpack** it into `build/memories/`.
-3. **Build `js/`** in `node:24`, run as the user: `npm ci`, `bash scripts/patch-external.sh`, `npm run build`. This is
+3. **Build `js/`** in the script's `NODE_IMAGE` (`node:24` pinned by digest), run as the user: `npm ci`, `bash scripts/patch-external.sh`, `npm run build`. This is
    what `make js-init build-js-production` does; the Makefile is not used, so the host needs no `make` for Node.
 4. **Replace from the checkout:** `lib/ appinfo/ templates/ l10n/ img/ js/`, each with `rm -rf` first, then copy.
 5. **Assert there is no `appinfo/signature.json`**, and abort if there is. The `rm -rf` of step 4 should already have
@@ -629,9 +629,13 @@ On each Memories release:
 3. Read the release's changes to `lib/ClustersBackend/`, `lib/Settings/SystemConfig.php`,
    `lib/Controller/RecognizeController.php`, `src/services/dav/` and `src/components/modal/Face*`. A new place that
    names a Recognize table or path must take the setting.
-4. M2's build.
-5. On dev: the store update to that release, then M4 (swap in the fork, capture, compare) and M8 step 3 (the UI flows).
-6. Live with the user's go-ahead.
+4. Refresh the Node image's digest in `scripts/facewright-build.sh` (`NODE_IMAGE`; it is pinned, so it does not move on
+   its own): `docker pull node:24`, then `docker inspect --format '{{index .RepoDigests 0}}' node:24`, and write
+   `node:24@sha256:<digest>` into the variable (fixup into the build script's commit). Check that `package.json`
+   still asks for Node 24.
+5. M2's build.
+6. On dev: the store update to that release, then M4 (swap in the fork, capture, compare) and M8 step 3 (the UI flows).
+7. Live with the user's go-ahead.
 
 Security fixes reach us only this way. Watch the upstream repository's releases.
 
