@@ -14,13 +14,16 @@ see "Decision after M11" below and `docs/cleanup.md`). What stays is M12: rebasi
 Each step below keeps what was measured under its "Done".
 
 - **The fork:** https://github.com/Haini/memories (SSH remote `git@github.com:Haini/memories.git`). The branch
-  `facewright` is v11.1.4 plus the commit `bbb4f38c` ("Recognize provider setting: read Recognize-format tables and DAV
-  tree of another app", 9 files, +70/-20) and the commit `2adf50b6`
-  (`scripts/facewright-build.sh`, M2). Both are pushed; the tag `facewright-v11.1.4` marks `2adf50b6`, the build on live.
+  `facewright` is v11.1.4 plus three commits: `4c35f113e` ("Recognize provider setting: read Recognize-format tables
+  and DAV tree of another app"), `478617354` (`scripts/facewright-build.sh`, M2) and `333332823` (the admin page's
+  provider choice, `docs/memories-fork-admin-ui.md`). All are pushed. The tag `facewright-v11.1.4-2` marks
+  `333332823`, the build on live; `facewright-v11.1.4` marks `2adf50b67`, the build live ran from 2026-11-20 to
+  2026-11-27.
 - **The clone is `/home/constantin/memories-fork`** (`$FORK`), with the remote `upstream` and its tags. Its `build/`
   holds the release tarball, the unpacked release and the fork build.
-- **The build on live and dev:** `build/memories-v11.1.4-facewright.tar.gz`, sha256
-  `d540449f018bcc46215f8bdc801a9718e206e0ff5a7fac694a77dea3bd4d225c` (builds are not reproducible byte for byte).
+- **The build on live and dev (since 2026-11-27):** `build/memories-v11.1.4-facewright.tar.gz` of `333332823`, sha256
+  `bf870a316cf2a7273c9610052898da99bc28760ce1b45f02d5eb037f4f980acc` (builds are not reproducible byte for byte). The
+  one before it was `d540449f018bcc46215f8bdc801a9718e206e0ff5a7fac694a77dea3bd4d225c`.
 
 ## How to work this plan
 

@@ -279,7 +279,12 @@ plan" above. Where Part 3 differs from Parts 1 and 2, Part 3 wins.
 
 ## Afterwards (for the user, not this plan)
 
-- Push the fork and this repo.
+- Push the fork and this repo. **Done 2026-11-27.**
 - Deploy the new fork build to live (same version, swapped folder, `.git/` pin; `docs/memories-fork.md` M11), with a
-  fresh dump and a go-ahead. Then the live provider is visible on the admin page; nothing else changes.
+  fresh dump and a go-ahead. **Done 2026-11-27:** build `bf870a31…80acc` swapped in after a dump, container restarted
+  (status.php back after 3.6 s). The live tree equals the tarball (699 files); pinned, no `signature.json`, no update
+  offered for Memories, `setupchecks` reports no altered files. Both admin endpoints answer 401 unauthenticated (the new
+  route resolves). Called as an admin through PHP: `getFaceProviders()` 200 in 102 ms, listing only
+  `facewright_bridge` (Recognize is disabled); the status's `face_provider` is the same entry. `project --dry-run
+  --target=own`: 0 in every class; no log entries after the swap.
 - Optionally propose the admin UI to upstream together with the provider setting (#1812).
