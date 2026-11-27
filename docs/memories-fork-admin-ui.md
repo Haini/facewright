@@ -201,6 +201,82 @@ $status['face_providers'] = [
 
 **Done (2026-11-27):** `docs/memories-fork.md` ("The change" paragraph, M12 three commits, M8 and M9 occ notes; the stale "one commit" line says three now), `docs/cleanup.md` section 0 step 1, `README.md`, `CLAUDE.md` bullet (it also notes that a refused value answers HTTP 500), `docs/README.md` row set to done on dev. Nothing pushed, no tag touched.
 
+---
+
+# Part 3: Revision, discovery on demand (requested 2026-11-27)
+
+Parts 1 and 2 are done on dev (fork commit `f5742da6f`, not pushed). The user asked for one change: **app discovery
+runs only when the admin presses a button**, so `getSystemStatus()`, which the whole admin page loads and reloads
+500 ms after every setting change, no longer pays for it (+43 ms measured in step 2). Same rules as "How to work this
+plan" above. Where Part 3 differs from Parts 1 and 2, Part 3 wins.
+
+## Decisions
+
+1. **The status keeps only the current provider**: `face_provider` (singular), one entry of the same shape as today's
+   list entries, for `recognizeProvider()` only. That costs at most two `tableExists()` and one `getAppInfo()`, and it
+   keeps the note card live after a change (decision 3 of Part 1 still holds for the card). `face_providers` leaves the
+   status.
+2. **Discovery gets its own admin-only endpoint**, `GET /api/system-face-providers` (route name
+   `Admin#getFaceProviders`, next to the other `Admin#` routes in `appinfo/routes.php`), returning the list exactly as
+   `getFaceProviders()` builds it today (current value always included). Same admin protection as the neighbouring
+   actions: copy the annotations/attributes `getSystemStatus()` has, except `#[UseSession]`, which it does not need.
+3. **The UI:** the select starts with one option, the current provider. Next to it an `NcButton` "Find face
+   providers" calls the endpoint, shows that it is working (disabled while the request runs), and fills the select's
+   options with the result. A second press runs it again. The result lives in the component for this page view only;
+   nothing is cached on the server or in the browser. On failure: `showError(...)` as `AdminMain.vue` does, and the
+   options stay as they were.
+4. **One help line** says what the button does, e.g. "Checks every enabled app for face tables." Keep the existing
+   help line.
+5. **The fork's history:** `f5742da6f` is not pushed, so the revision is **folded into it** (fixup, then
+   `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash 478617354`, which touches only that last commit). The branch
+   stays three commits; the first two keep their hashes (check it). Update its commit message where it mentions the
+   status.
+
+## Step 6. Backend
+
+- `AdminController`: `getSystemStatus()` sets `face_provider` from a helper that builds the entry for one app id
+  (extract it from `getFaceProviders()`, so the list and the single entry cannot differ). Keep the `try/catch`: on
+  failure `face_provider` is `null` and a warning is logged.
+- New public action `getFaceProviders()` (rename the private builder if the name clashes), wrapped in `guardEx` like
+  the others, returning `JSONResponse($list)`.
+- `API.ts`: a `SYSTEM_FACE_PROVIDERS()` next to `SYSTEM_STATUS()`.
+- `AdminTypes.ts`: a named type for the entry (`IFaceProvider`), `face_provider: IFaceProvider | null` in
+  `ISystemStatus`, and drop `face_providers`.
+- **Checks on dev:**
+  - Timing: `GET /api/system-status`, median of five, before (current dev build) and after. Expect it back near the
+    316 ms baseline of step 2; record both. Also the median of five of the new endpoint.
+  - The new endpoint as a non-admin user: refused (record the status code). As admin: the same list as step 2 gave
+    (Facewright Bridge and Recognize with the provider unset).
+  - `system-status` has `face_provider` and no `face_providers`.
+
+**Done:** (fill in)
+
+## Step 7. Frontend
+
+`src/components/admin/sections/Apps.vue`:
+- Options: discovered list if the button has been pressed, otherwise just the current provider (from
+  `status.face_provider`, or the bare id while the status is loading, as today).
+- After a change of provider, the discovered list stays; the current value is still always an option (keep that rule).
+- The note card reads `status.face_provider` instead of searching `face_providers`.
+- `vue-tsc` and `prettier --check` must pass, in the container.
+
+**Done:** (fill in)
+
+## Step 8. Tests, build, docs
+
+1. `dev/memories-ui/admin_provider.py`: before the button, the select offers only the current provider; after
+   pressing it, both dev providers; then the existing checks (switch, key deleted for `recognize`, the new page's
+   config, the error card for `nosuchapp`). Also: loading the admin page makes **no** request to the new endpoint
+   (watch the requests, as `flows.py` does for DAV).
+2. Commit the fixup, autosquash, check `git log --oneline v11.1.4..facewright` (three commits, the first two
+   unchanged), build with `scripts/facewright-build.sh` (record both sha256 lines), `dev/fork-swap.sh fork`, run the
+   script alone, then `dev/run-all.sh --ui` (commit this repo first). Every suite must pass.
+3. Docs: `docs/memories-fork.md` ("The change" paragraph: `face_provider` in the status, discovery behind a button),
+   the `CLAUDE.md` bullet ("lists only enabled apps..." becomes "a button lists ..."), and this part's "Done"
+   sections. One commit in this repo. Do not push.
+
+**Done:** (fill in)
+
 ## Afterwards (for the user, not this plan)
 
 - Push the fork and this repo.
