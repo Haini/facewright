@@ -504,6 +504,10 @@ and the collection's `$principalBackend` constructor parameter resolves only thr
 - **The folder is swapped, not updated** (remove `custom_apps/memories`, unpack as `www-data`), and carries an empty `.git/`:
   Nextcloud then treats it as installed from git and never offers a store update over it. Its version is the upstream
   tag's exactly. `dev/fork-swap.sh` does this on dev.
+- **The provider can be chosen in Memories' admin page** ("Recommended Apps"), which lists only enabled apps with both
+  `{app}_face_detections` and `{app}_face_clusters` tables (and the value that is set, whatever its state); choosing
+  `recognize` deletes the key. `occ` stays what the runbooks use. A value that is not an app id is refused (HTTP 500:
+  `guardEx` maps every exception to it).
 - **A rollback is the same version.** Remove the system setting first (`occ config:system:delete
   memories.recognize.provider`, while the fork is still there), then swap the store build of the same version back. The
   store build ignores the setting and reads Recognize's tables, which is right only while Recognize is enabled and a

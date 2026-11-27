@@ -95,7 +95,7 @@ Stock Memories only reads Recognize's tables and writes to its DAV tree. The for
 setting (`memories.recognize.provider`). Set to `facewright_bridge`, Memories reads a copy of the people data that this
 project's bridge keeps in tables of its own (app config `projection_targets=own`; `recognize,own` keeps Recognize's
 copy current as well, for as long as Recognize is still enabled) and sends its edits to the bridge's DAV tree, so
-Recognize can be disabled. Unset, the fork behaves like stock Memories.
+Recognize can be disabled. The provider can also be chosen on Memories' admin page ("Recommended Apps"). Unset, the fork behaves like stock Memories.
 
 The fork is installed by building it (`scripts/facewright-build.sh` in the fork: the official release plus its changes), swapping the
 folder in `custom_apps` and pinning it so the App Store does not replace it. **Status: running on one production

@@ -49,7 +49,7 @@ Each step below keeps what was measured under its "Done".
 ### The fork
 
 - `github.com/Haini/memories`, a fork of `pulsejet/memories`. The branch `facewright` sits on a release tag (v11.1.4
-  now) and carries the change as **one commit**, rebased onto each new tag (M12). The app id stays `memories` and the
+  now) and carries the change as **one commit** (plus the build script and the admin UI, three commits in all, see below), rebased onto each new tag (M12). The app id stays `memories` and the
   version stays exactly upstream's (`docs/own-tables.md` G.0).
 - The change (commit `bbb4f38c` of the fork, on the tag `facewright-v11.1.4`):
   - **The setting.** A system setting `memories.recognize.provider` (default `recognize`, an app id). It is in
@@ -63,6 +63,13 @@ Each step below keeps what was measured under its "Done".
     `/{recognize_provider}/{user}`, in `src/services/dav/face.ts` (8 paths) and `src/components/modal/FaceMergeModal.vue`
     (3 paths).
   - **Unchanged.** With no setting the table names and paths are exactly upstream's.
+- **The admin UI** (a third commit on the branch, "Admin: choose the face provider from detected apps"; design in
+  `docs/memories-fork-admin-ui.md`). Memories' admin page, section "Recommended Apps", gets a dropdown for the setting,
+  so no `occ` is needed. It names no provider: `AdminController::getSystemStatus()` returns `face_providers`, the
+  enabled apps that have both `{app}_face_detections` and `{app}_face_clusters` tables (plus the value that is set,
+  whatever its state), and one note card says whether the chosen one works. `SystemConfig::set()` rejects a value that is
+  not an app id (`^[a-z0-9_]+$`), and choosing `recognize` deletes the key, like the rollback below. It is a separate
+  commit so it can be dropped or proposed upstream on its own.
 - **Pin.** The deployed folder contains an empty `.git/` directory. `Installer::isUpdateAvailable()` returns false for
   such an app (`isInstalledFromGit()`), so the App Store never replaces the fork.
 - **No signature.** The build has no `appinfo/signature.json`. Nextcloud verifies a non-shipped app only if it has
@@ -451,7 +458,7 @@ shows the expectation is right and not shaped to our code. The bytes of a face f
 ### M8 Dev: point the fork at the bridge — done 2026-11-20
 
 1. `projection_targets=recognize,own` and `occ facewright:project --target=own` clean. Then `occ config:system:set
-   memories.recognize.provider --value=facewright_bridge`.
+   memories.recognize.provider --value=facewright_bridge` (the admin page's "Recommended Apps" does the same).
 2. Capture, and compare with `stock.json`: identical. **Restore the snapshot first**: UI flows delete a person and make
    Memories write cover rows, so a capture taken after them differs for reasons that have nothing to do with the provider.
 3. **`dev/memories-ui/flows.py` takes `PROVIDER`** (default `recognize`). Its DAV filter (`"/dav/recognize"`) and its
@@ -492,7 +499,7 @@ shows the expectation is right and not shaped to our code. The bytes of a face f
 
 ### M9 Dev: rollback drill — done 2026-11-20
 
-1. Provider back to `recognize` (`occ config:system:delete memories.recognize.provider`). Capture and compare: identical.
+1. Provider back to `recognize` (`occ config:system:delete memories.recognize.provider`; the admin page's "Recommended Apps" does the same). Capture and compare: identical.
    Flows with `PROVIDER=recognize` pass.
 2. The store build back (M4's copy, without `.git/`). Capture and compare: identical.
 3. Forward again: the fork, `.git/`, provider ours. Capture and compare: identical.
@@ -624,7 +631,9 @@ written; whether F.1 is ever wanted; whether Recognize is ever uninstalled.
 ### M12 Keeping the fork current
 
 On each Memories release:
-1. `git fetch upstream --tags`, `git rebase --onto vX.Y.Z <old tag> facewright`.
+1. `git fetch upstream --tags`, `git rebase --onto vX.Y.Z <old tag> facewright`. The branch carries three commits (the
+   change, the build script, the admin UI); all three move, and a conflict in `SystemConfig.php`, `AdminController.php` or
+   `Apps.vue` is the admin UI's, which can be dropped on its own if it stops applying.
 2. M1's greps and checks.
 3. Read the release's changes to `lib/ClustersBackend/`, `lib/Settings/SystemConfig.php`,
    `lib/Controller/RecognizeController.php`, `src/services/dav/` and `src/components/modal/Face*`. A new place that

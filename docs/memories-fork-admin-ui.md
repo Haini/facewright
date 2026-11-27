@@ -96,7 +96,7 @@ shared with `recognizeProvider()` so the two cannot drift.
   `appinfo/routes.php`) with `{"value":"Bad-Value"}` answers an error, and `occ config:system:get
   memories.recognize.provider` is unchanged. On the old code the same request stores `Bad-Value` (show it).
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** `SystemConfig::PROVIDER_PATTERN` is shared by `set()` and `recognizeProvider()`; `php -l` clean (php:8.3-cli container). `guardEx` maps every exception to **HTTP 500** with the message, so a bad value answers 500 (not changed, as told). On the old code `PUT /apps/memories/api/system-config/memories.recognize.provider` with `{"value":"Bad-Value"}` answered 200 and `occ config:system:get` returned `Bad-Value`. On the new code: 500 `Invalid value for system config ...`, the setting unchanged (empty); `facewright_bridge` accepted (200); `Bad-Value` refused with it set (stays `facewright_bridge`); `recognize` accepted and the key gone (`occ config:system:get` exit 1).
 
 ## Step 2. Backend: detect providers in the system status
 
@@ -133,7 +133,7 @@ $status['face_providers'] = [
   (unless it is the current value). Set the provider to `nosuchapp` with `occ`, and it is listed with `enabled: false,
   tables: false`. Put everything back.
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** `getFaceProviders()` in `AdminController` (`IAppManager::getEnabledApps()`, not deprecated on NC 34; `IDBConnection::tableExists()` takes the name without prefix, read in `lib/private/DB/Connection.php`), in `try/catch` with a warning and `[]`. `ISystemStatus.face_providers` added. Cost, `GET /apps/memories/api/system-status`, median of the last 5 of 6 requests: **316 ms before, 359 ms after (+43 ms)**. Checks: unset gives Facewright Bridge and Recognize (`recognize_faces_enabled: true`); Recognize disabled and the setting unset still lists it (`enabled: false`, because it is the current value, as the plan says); with `nosuchapp` set, Recognize is gone and `nosuchapp` is listed with `enabled: false, tables: false`; everything put back (Recognize enabled, its jobs deleted, 0 left, `faces.enabled` true). The failure branch (`[]` plus warning) was not exercised.
 
 ## Step 3. Frontend: the dropdown and the note card
 
@@ -169,7 +169,7 @@ $status['face_providers'] = [
   5. With `nosuchapp` set by `occ`, the select shows it and the card is the error.
   Put the provider back to what it was before the check.
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** `Apps.vue`: `NcSelect` (`@nextcloud/vue/components/NcSelect`, `input-label`, not clearable, not searchable, disabled while `status` is null), help line, one note card from the status entry; the `userConfig.recognize_*` reads are gone from this file. `npx vue-tsc --noEmit -p .` printed no error (a planted type error in `AdminTypes.ts` made it fail, then removed); `prettier --check` passes (after one `--write` on `Apps.vue`). Checks 1, 2, 3 and 5 and the frontend config of check 4 are `dev/memories-ui/admin_provider.py` (headless Chromium, real admin login): 14 passed. Check 4 is only that a new Memories page's `/api/config` names the chosen provider; I did not click through the People view and watch the `/dav/{provider}/` requests here (`flows.py` with `PROVIDER=facewright_bridge` does that in `run-all.sh --ui`).
 
 ## Step 4. Commit, build, regression
 
@@ -183,7 +183,7 @@ $status['face_providers'] = [
    (e.g. `dev/memories-ui/admin_provider.py`) doing step 3's checks 1 to 3 and putting the value back, wired into
    `dev/run-all.sh` under `--ui` and listed in `dev/README.md`'s table. Run it alone and inside `run-all.sh --ui`.
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** fork commit `f5742da6f` "Admin: choose the face provider from detected apps" on top of the build script commit; `git log --oneline v11.1.4..facewright` shows three commits (change, build script, this). `scripts/facewright-build.sh` printed `fork build build/memories-v11.1.4-facewright.tar.gz sha256: 0eb526fff160d89735a5a45679b0d4685b37bb822b059b095f8ecafbba94fa20`; the release tarball it builds on: `39b5ec6bf175334432e8c409a0484da866fff903c634942ccb3c41809f906353`. Deployed with `dev/fork-swap.sh fork` (pinned, no signature). `dev/memories-ui/admin_provider.py` (wired into `run-all.sh --ui` as `memories-ui-admin-provider`, row in `dev/README.md`): 14 passed alone; against the previous build (swapped back from a tar of the old folder) it fails (the select never appears, timeout), then the new build was swapped in again. `dev/run-all.sh --ui` with this repo committed: **42 of 42 suites passed** (the 40 of M9 plus the 2 added since, plus the new one), including `memories-ui`, `-bridge`, `-bridge-off` and `memories-ui-admin-provider` (19 s). First attempt of the script's check 4 failed because the config request needs the `requesttoken` header; fixed in the script.
 
 ## Step 5. Docs (this repo)
 
@@ -199,7 +199,7 @@ $status['face_providers'] = [
 - `docs/README.md`: this document's row, status "done on dev".
 - One commit in this repo with the doc changes and this file's "Done" sections. Do not push.
 
-**Done:** (fill in)
+**Done (2026-11-27):** `docs/memories-fork.md` ("The change" paragraph, M12 three commits, M8 and M9 occ notes; the stale "one commit" line says three now), `docs/cleanup.md` section 0 step 1, `README.md`, `CLAUDE.md` bullet (it also notes that a refused value answers HTTP 500), `docs/README.md` row set to done on dev. Nothing pushed, no tag touched.
 
 ## Afterwards (for the user, not this plan)
 

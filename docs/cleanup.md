@@ -42,7 +42,7 @@ Answered by the user on 2026-11-27:
 
 The way back after Stages F and H. Everything of ours is rebuilt; nothing is restored. Take a dump first anyway.
 
-1. **Memories to stock.** `occ config:system:delete memories.recognize.provider` while the fork is still installed,
+1. **Memories to stock.** `occ config:system:delete memories.recognize.provider` (the admin page's "Recommended Apps" does the same) while the fork is still installed,
    then swap in the store build of the same version (or remove the folder's `.git/` and let the store update it).
 2. **Recognize back, before it can react to anything.** While it is disabled its `FileListener` is not registered, so:
    make sure the `.noimage` marker is at the root of every enabled user's `files/` *before* enabling it. If its tables
