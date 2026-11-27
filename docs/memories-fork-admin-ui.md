@@ -249,7 +249,7 @@ plan" above. Where Part 3 differs from Parts 1 and 2, Part 3 wins.
     (Facewright Bridge and Recognize with the provider unset).
   - `system-status` has `face_provider` and no `face_providers`.
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** `getSystemStatus()` sets `face_provider` from `getFaceProviderEntry($id)`, the helper the new `getFaceProviders()` action (`GET /api/system-face-providers`, `@AdminRequired`, `guardEx`, no `#[UseSession]`) also uses; on failure `face_provider` is `null` plus a warning (not exercised). `API.SYSTEM_FACE_PROVIDERS()`, `IFaceProvider`, `face_provider: IFaceProvider | null` added, `face_providers` dropped; `php -l` clean. Timing with curl as admin (basic auth), median of five on the deployed old build against the new one: `system-status` **684 ms before, 648 ms after** (the dev host is slower now than in step 2's 316 ms; before and after were measured within minutes of each other); the new endpoint **397 ms**. Non-admin (bob): **403** `Logged in account must be an admin` (the same as `system-status`). Admin, provider unset: `[Facewright Bridge, Recognize (recognize_faces_enabled: true)]`. The status has `face_provider` (Recognize entry) and no `face_providers`.
 
 ## Step 7. Frontend
 
@@ -260,7 +260,7 @@ plan" above. Where Part 3 differs from Parts 1 and 2, Part 3 wins.
 - The note card reads `status.face_provider` instead of searching `face_providers`.
 - `vue-tsc` and `prettier --check` must pass, in the container.
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** `Apps.vue`: `NcButton` "Find face providers" (disabled and "Searching ..." while the request runs), help line "Checks every enabled app for face tables.", `discovered` ref filled from the endpoint, `showError` on failure (the failure path was not exercised); options are the discovered list, or only the current provider (from `status.face_provider`, the bare id while loading), and the current value is always added. The note card reads `status.face_provider`. `vue-tsc` first failed on `e` being `unknown` in the catch (fixed with `e: any`, as `AdminMain.vue` does), then printed no error; `prettier --check` passes (after one `--write`).
 
 ## Step 8. Tests, build, docs
 
@@ -275,7 +275,7 @@ plan" above. Where Part 3 differs from Parts 1 and 2, Part 3 wins.
    the `CLAUDE.md` bullet ("lists only enabled apps..." becomes "a button lists ..."), and this part's "Done"
    sections. One commit in this repo. Do not push.
 
-**Done:** (fill in)
+**Done (2026-11-27, dev):** `admin_provider.py` extended (19 checks): no request to the endpoint on page load; before the button the select offers only `Recognize (recognize)`; after it, one request and both providers; the existing checks; and `nosuchapp` offers only itself before the button. Against the previous (Part 2) build it fails (no such button, timeout); against the new one 19 passed. Fork: fixup plus `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash 478617354`, message amended; `git log --oneline v11.1.4..facewright` shows three commits, `4c35f113e` and `478617354` unchanged, the last now `333332823`. Build: `release v11.1.4 sha256: 39b5ec6bf175334432e8c409a0484da866fff903c634942ccb3c41809f906353` (unchanged), `fork build build/memories-v11.1.4-facewright.tar.gz sha256: bf870a316cf2a7273c9610052898da99bc28760ce1b45f02d5eb037f4f980acc`; deployed with `dev/fork-swap.sh fork`. `dev/run-all.sh --ui` (this repo committed first): **42 of 42 suites passed**, including `memories-ui-admin-provider` (26 s). Docs: `docs/memories-fork.md` ("The change"), `CLAUDE.md` bullet.
 
 ## Afterwards (for the user, not this plan)
 

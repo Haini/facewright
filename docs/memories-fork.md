@@ -65,9 +65,11 @@ Each step below keeps what was measured under its "Done".
   - **Unchanged.** With no setting the table names and paths are exactly upstream's.
 - **The admin UI** (a third commit on the branch, "Admin: choose the face provider from detected apps"; design in
   `docs/memories-fork-admin-ui.md`). Memories' admin page, section "Recommended Apps", gets a dropdown for the setting,
-  so no `occ` is needed. It names no provider: `AdminController::getSystemStatus()` returns `face_providers`, the
-  enabled apps that have both `{app}_face_detections` and `{app}_face_clusters` tables (plus the value that is set,
-  whatever its state), and one note card says whether the chosen one works. `SystemConfig::set()` rejects a value that is
+  so no `occ` is needed. It names no provider: `AdminController::getSystemStatus()` returns `face_provider`, the entry of
+  the app that is set (whatever its state), and one note card says whether it works. The apps that can be chosen, the
+  enabled ones that have both `{app}_face_detections` and `{app}_face_clusters` tables, are found only when the admin
+  presses "Find face providers" (`GET /api/system-face-providers`), so the status the whole admin page loads does not go
+  through every app. `SystemConfig::set()` rejects a value that is
   not an app id (`^[a-z0-9_]+$`), and choosing `recognize` deletes the key, like the rollback below. It is a separate
   commit so it can be dropped or proposed upstream on its own.
 - **Pin.** The deployed folder contains an empty `.git/` directory. `Installer::isUpdateAvailable()` returns false for

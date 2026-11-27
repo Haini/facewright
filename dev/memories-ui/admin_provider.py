@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""The face provider dropdown on Memories' admin page (docs/memories-fork-admin-ui.md, step 3 checks 1 to 3).
+"""The face provider dropdown on Memories' admin page (docs/memories-fork-admin-ui.md, step 3 checks 1 to 3, and Part 3).
 
+0. Loading the page makes no request to the discovery endpoint; the select offers only the provider that is set until
+   "Find face providers" is pressed, then both dev providers.
 1. The select shows the provider that is set, and the card says it provides faces.
 2. Choosing the other provider stores it (`occ config:system:get`), and the card follows without a reload.
 3. Choosing `recognize` deletes the key from config.php (`occ config:system:get` exits 1), it is not stored as "recognize".
@@ -45,6 +47,15 @@ def card(page):
     loc = page.locator(".face-provider .notecard")
     return (loc.inner_text().strip(), loc.get_attribute("class")) if loc.count() else (None, None)
 
+def option_labels(page):
+    page.locator("#face-provider-select").locator("xpath=ancestor::div[contains(@class,'v-select')][1]").click(); page.wait_for_timeout(500)
+    labels = ["".join(t.split()) for t in page.locator("li.vs__dropdown-option").all_inner_texts()]
+    page.keyboard.press("Escape"); page.wait_for_timeout(300)
+    return labels
+
+def find_providers(page):
+    page.get_by_role("button", name="Find face providers").click(); page.wait_for_timeout(2500)
+
 def settle(page): page.wait_for_timeout(1500)   # the status is refreshed 500 ms after an update
 
 def choose(page, text):
@@ -56,12 +67,22 @@ def main():
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(); ctx = browser.new_context(viewport={"width": 1300, "height": 900}); page = ctx.new_page()
+            hits = []
+            page.on("request", lambda r: hits.append(r.url) if "system-face-providers" in r.url else None)
             page.goto(BASE + "/login"); page.fill("input[name=user]", USER); page.fill("input[name=password]", PASSWORD)
             page.click("button[type=submit]"); page.wait_for_url("**/apps/**", timeout=60000)
 
             print("== 0. start from the default")
             occ("config:system:delete", KEY)
             page.goto(BASE + "/settings/admin/memories"); page.wait_for_selector("#face-provider-select", timeout=30000); settle(page)
+
+            print("== 0b. discovery runs on the button only")
+            check("loading the admin page made no request to the discovery endpoint", [], hits)
+            check("before the button the select offers only the provider that is set", ["Recognize(recognize)"], option_labels(page))
+            find_providers(page)
+            check("the button made exactly one request", 1, len(hits))
+            labels = option_labels(page)
+            check("after the button both dev providers are offered", [True, True], [any(l.startswith("Recognize") for l in labels), any("(%s)" % OTHER in l for l in labels)])
 
             print("== 1. the select shows the provider that is set, the card says it works")
             check("the select shows Recognize", True, select_text(page).startswith("Recognize"))
@@ -95,6 +116,7 @@ def main():
             occ("config:system:set", KEY, "--value=nosuchapp")
             page.goto(BASE + "/settings/admin/memories"); page.wait_for_selector("#face-provider-select", timeout=30000); settle(page)
             check("the select shows nosuchapp", "nosuchapp", select_text(page))
+            check("   and offers only it before the button", ["nosuchapp"], option_labels(page))
             text, cls = card(page)
             check("the card says it is not enabled", "nosuchapp is not enabled. The People view is unavailable.", text)
             check("   and is an error card", True, "notecard--error" in (cls or ""))
