@@ -17,7 +17,7 @@ use Sabre\DAVACL\PrincipalBackend\BackendInterface;
  * and `{user}/unassigned-faces/{id}-{file}`), so the fork only swaps the root's name. The collection's name has to be
  * the app id: the fork builds the path from the provider setting.
  *
- * Reads only. The writes Memories sends are applied by RecognizeWriteRouterPlugin, which accepts this root too.
+ * Reads only. The writes Memories sends are applied by PeopleWritePlugin, which accepts this root too.
  * Registered through `info.xml` (`<sabre><collections>`), which needs the app to declare the `dav` type.
  */
 final class RootCollection extends AbstractPrincipalCollection {

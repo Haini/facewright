@@ -2,14 +2,14 @@
 <info>
 	<id>facewright_bridge</id>
 	<name>Facewright Bridge</name>
-	<summary>Bridges Facewright's InsightFace ExApp detections into Recognize's database tables</summary>
+	<summary>Bridges Facewright's InsightFace ExApp detections into people for Memories</summary>
 	<description>
 	<![CDATA[A thin, regular Nextcloud PHP app. Not an ExApp itself - it exists only because
 ExApps have no path to real database access. It calls the facewright ExApp for face detection
-and writes the results into Recognize's own oc_recognize_face_detections table via Nextcloud's
-QueryBuilder, since only first-party PHP code can do that.]]>
+and keeps the faces and people in tables of its own, plus the copy the fork of Memories reads,
+via Nextcloud's QueryBuilder, since only first-party PHP code can do that.]]>
 	</description>
-	<version>0.12.6</version>
+	<version>0.13.0</version>
 	<licence>agpl</licence>
 	<author>Constantin Schieber-Knoebl</author>
 	<namespace>FacewrightBridge</namespace>

@@ -101,16 +101,7 @@ need() {   # need LABEL ACTUAL MINIMUM
   else printf '  MISSING PRECONDITION: %s: have %s, need %s. Run dev/check-fixture.sh.\n' "$1" "${2:-none}" "$3"; exit 2; fi
 }
 # `occ facewright:own-tables --verify`: output in VOUT, exit code in VRC.
-# TEMPORARY (stage F/H step 1, S1 only; S2 deletes this clause): 0.12.6's --verify still compares Recognize's frozen
-# tables (A_, C_, D_, B_, legacy lines without the own_ prefix), which a snapshot no longer restores and which fail for
-# any change or reset. While the own_ lines are present those six are ignored; every other line, own_ ones included, counts.
-run_verify() {
-  VOUT=$(occ facewright:own-tables --verify 2>&1); VRC=$?
-  if [ $VRC -ne 0 ] && grep -q '^own_A_visible_faces_wrong' <<<"$VOUT" && grep -q '^Verification failed' <<<"$VOUT"; then
-    local bad; bad=$(grep -E 'must be' <<<"$VOUT" | grep -vE '^(A_visible_faces_wrong|C_stale_copies|D_people_missing|D_people_stale|B_hidden_remnants|legacy_rows_untouched) ')
-    [ -z "$bad" ] && VRC=0
-  fi
-}
+run_verify() { VOUT=$(occ facewright:own-tables --verify 2>&1); VRC=$?; }
 verify_rc() { run_verify; echo $VRC; }
 verify_step() {  # verify_step LABEL : the invariant checker after a step
   run_verify; local out=$VOUT rc=$VRC

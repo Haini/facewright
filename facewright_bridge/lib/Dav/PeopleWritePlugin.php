@@ -16,16 +16,13 @@ use Sabre\HTTP\RequestInterface;
 use Sabre\HTTP\ResponseInterface;
 
 /**
- * Takes over the writes Memories and Photos send into Recognize's WebDAV tree
- * (`recognize/{user}/faces/...`) and runs them through PeopleService instead, so they land in the
- * data this app owns rather than in Recognize's code (docs/own-tables.md).
+ * Applies the writes Memories sends to this app's WebDAV tree (`facewright_bridge/{user}/faces/...`, the read side is
+ * Dav\Tree\RootCollection, which the fork of Memories uses when its provider setting names this app,
+ * docs/memories-fork.md) by running them through PeopleService.
  *
- * The same requests are accepted under a second root, `facewright_bridge/`, which is this app's own tree
- * (Dav\Tree\RootCollection) and the one the fork of Memories writes to when its provider setting names this app
- * (docs/memories-fork.md). The two trees have the same shape and the same behaviour, and a request stays inside one
- * of them: a `Destination` under the other root is refused, so nothing moves from one tree into the other.
+ * A request stays inside the tree: a `Destination` under any other root is refused, so nothing moves out of it.
  *
- * The five requests those apps send, and what they become:
+ * The five requests Memories sends, and what they become:
  *
  *   MKCOL   faces/{name}                          create a person
  *   MOVE    faces/{name}      -> faces/{new}      rename a person
@@ -37,22 +34,18 @@ use Sabre\HTTP\ResponseInterface;
  *
  * A merge in Memories is a run of face moves, so it needs no case of its own.
  *
- * Anything else that would change the tree is refused with 403: a request shape this class does not
- * know must not fall through to Recognize, whose code writes to the tables directly. Reads are never
- * touched. The coupling to Recognize and Memories is therefore the path shapes above, the
- * Destination header and the status codes; if a release changes them, requests stop matching and
- * are refused, not misapplied.
+ * Anything else that would change the tree is refused with 403. Reads are never touched. The coupling to Memories is
+ * therefore the path shapes above, the Destination header and the status codes; if a release changes them, requests
+ * stop matching and are refused, not misapplied.
  *
- * Everything is scoped to the logged-in user: the user id in the path must be theirs, and every
- * PeopleService call takes it from the session, never from the request.
+ * Everything is scoped to the logged-in user: the user id in the path must be theirs, and every PeopleService call
+ * takes it from the session, never from the request.
  *
- * There is no switch to hand these writes back to Recognize (Stage E): Recognize's own handlers need real vectors
- * and its own tables to be the source of truth, and neither is true any more. Rolling back is
- * `occ facewright:project --hydrate` plus the Stage D files (docs/own-tables.md, Rollback).
+ * There is no switch to turn this off.
  */
-class RecognizeWriteRouterPlugin extends ServerPlugin {
-	/** The two trees this class answers writes for. The fork of Memories uses the second. */
-	private const ROOTS = ['recognize', 'facewright_bridge'];
+class PeopleWritePlugin extends ServerPlugin {
+	/** The tree this class answers writes for. */
+	private const ROOTS = ['facewright_bridge'];
 
 	/** Methods this class turns into PeopleService calls. */
 	private const ROUTED_METHODS = ['MKCOL', 'MOVE', 'DELETE'];
@@ -73,8 +66,7 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 		// Priority 20: after Sabre's authentication (10), so an unauthenticated request is still
 		// answered as unauthenticated rather than learning what is refused here.
 		$server->on('beforeMethod:*', [$this, 'guard'], 20);
-		// Before CorePlugin's own handlers (priority 100), which would try to apply the request to
-		// Recognize's node tree.
+		// Before CorePlugin's own handlers (priority 100), which would try to apply the request to the node tree.
 		foreach (self::ROUTED_METHODS as $method) {
 			$server->on('method:' . $method, [$this, 'route'], 90);
 		}
@@ -288,13 +280,13 @@ class RecognizeWriteRouterPlugin extends ServerPlugin {
 	}
 
 	public function getPluginName(): string {
-		return 'facewright-recognize-write-router';
+		return 'facewright-people-write';
 	}
 
 	public function getPluginInfo(): array {
 		return [
 			'name' => $this->getPluginName(),
-			'description' => 'Runs writes to the recognize/ DAV tree through Facewright\'s people service instead of Recognize\'s own code.',
+			'description' => 'Runs the writes Memories sends to the facewright_bridge/ DAV tree through the people service.',
 		];
 	}
 }

@@ -1,6 +1,5 @@
 <?php
 /** @var array $_ */
-$enabled = !empty($_['enabled']);
 $automaticDetectionEnabled = !empty($_['automaticDetectionEnabled']);
 $automaticClusteringEnabled = !empty($_['automaticClusteringEnabled']);
 $processingPaused = !empty($_['processingPaused']);
@@ -20,13 +19,7 @@ $users = $_['users'] ?? [];
 ?>
 <div id="facewright-people-settings" class="section">
 	<h2><?php p($l->t('Facewright')); ?></h2>
-	<p><?php p($l->t('Controls whether Memories\' People page is shown. This only flips the visibility flag Memories checks - it does not enable Recognize\'s own face classifier, which Facewright replaces.')); ?></p>
-	<p><?php p($l->t('Changes made from Memories (rename, delete, merge, move or remove a face) are applied through this app, the same way as on the People page, rather than by Recognize.')); ?></p>
-	<p>
-		<input type="checkbox" id="facewright-people-enabled" class="checkbox" <?php p($enabled ? 'checked' : ''); ?>>
-		<label for="facewright-people-enabled"><?php p($l->t('Show the People page')); ?></label>
-	</p>
-	<p id="facewright-people-status"></p>
+	<p><?php p($l->t('Face detection and people for Memories: the fork of Memories reads the people this app keeps, and every change made in Memories (rename, delete, merge, move or remove a face) is applied through this app, the same way as on the People page.')); ?></p>
 </div>
 <div id="facewright-trigger-settings" class="section">
 	<h2><?php p($l->t('Detection triggers')); ?></h2>

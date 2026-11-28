@@ -229,34 +229,16 @@ class OwnTablesMigrationService {
 			'faces_in_store' => [$this->count("SELECT COUNT(*) FROM {$uf}"), 'info'],
 		];
 
-		// Recognize's tables against ours (what Memories shows): the projection's own reconcile, read-only.
-		if (!$this->projection->availableFor(ProjectionService::TARGET_RECOGNIZE)) {
+		// The copy Memories reads against ours: the projection's own reconcile, read-only.
+		if (!$this->projection->available()) {
 			$checks['projection_available'] = [1, 'zero'];
 			return $checks;
 		}
 		$r = $this->projection->reconcile(true);
 		$checks['A_visible_faces_wrong'] = [$r['A'], 'zero'];
-		$checks['C_stale_copies'] = [$r['C'], 'zero'];
+		$checks['C_stale_rows'] = [$r['C'], 'zero'];
 		$checks['D_people_missing'] = [$r['D_missing'], 'zero'];
 		$checks['D_people_stale'] = [$r['D_stale'], 'zero'];
-		$checks['B_hidden_remnants'] = [$r['B'], 'info'];
-		$checks['legacy_rows_untouched'] = [$r['legacy'], 'info'];
-
-		// Every other configured target, the same way (`projection_targets`; none unless the config names one).
-		foreach ($this->projection->targets() as $target) {
-			if ($target === ProjectionService::TARGET_RECOGNIZE) {
-				continue;
-			}
-			if (!$this->projection->availableFor($target)) {
-				$checks["{$target}_projection_available"] = [1, 'zero'];
-				continue;
-			}
-			$t = $this->projection->reconcile(true, null, 0, $target);
-			$checks["{$target}_A_visible_faces_wrong"] = [$t['A'], 'zero'];
-			$checks["{$target}_C_stale_rows"] = [$t['C'], 'zero'];
-			$checks["{$target}_D_people_missing"] = [$t['D_missing'], 'zero'];
-			$checks["{$target}_D_people_stale"] = [$t['D_stale'], 'zero'];
-		}
 		return $checks;
 	}
 

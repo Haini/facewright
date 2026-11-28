@@ -45,7 +45,7 @@ class Application extends App implements IBootstrap {
 		$context->registerEventListener(BeforeNodeRenamedEvent::class, FileAccessListener::class);
 		$context->registerEventListener(NodeRenamedEvent::class, FileAccessListener::class);
 
-		// Refuses writes to Recognize's DAV tree - see RecognizeWriteRouterPlugin.
+		// Applies the writes Memories sends to our DAV tree, and refuses any other change - see PeopleWritePlugin.
 		$context->registerEventListener(SabrePluginAddEvent::class, SabrePluginListener::class);
 
 		// The collection of our own DAV tree (Dav\Tree\RootCollection, registered in info.xml) takes the principal

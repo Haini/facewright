@@ -29,7 +29,6 @@
 	}
 
 	document.addEventListener('DOMContentLoaded', function () {
-		bindToggle('facewright-people-enabled', 'facewright-people-status', 'people-enabled', 'enabled');
 		bindToggle('facewright-automatic-detection-enabled', 'facewright-automatic-detection-status', 'automatic-detection-enabled', 'enabled');
 		bindToggle('facewright-automatic-clustering-enabled', 'facewright-automatic-clustering-status', 'automatic-clustering-enabled', 'enabled');
 		bindToggle('facewright-processing-paused', 'facewright-processing-paused-status', 'processing-paused', 'paused');

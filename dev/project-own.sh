@@ -23,7 +23,7 @@ cat_ds() { rep | grep 'nothing references' | grep -oE '[0-9]+$'; }
 n_det() { one "SELECT COUNT(*) FROM $DET"; }
 n_clu() { one "SELECT COUNT(*) FROM $CLU"; }
 sync_state() { docker exec -u www-data "$NC_CONTAINER" php -r 'define("OC_CONSOLE",1); require_once "/var/www/html/lib/base.php"; $s=\OCP\Server::get(\OCA\FacewrightBridge\Service\ProjectionService::class)->status(); echo $s["dirty"] ? "dirty" : "clean", "|", $s["error"];'; }
-log_count() { docker exec "$NC_CONTAINER" sh -c "grep -c 'projection push to the own target failed' $LOG 2>/dev/null || true" | tail -1; }
+log_count() { docker exec "$NC_CONTAINER" sh -c "grep -c 'projection push failed' $LOG 2>/dev/null || true" | tail -1; }
 
 echo "== data"
 VIS=$(one "SELECT COUNT(*) FROM oc_facewright_user_faces WHERE state IN (1,2)"); PEOPLE=$(one "SELECT COUNT(*) FROM oc_facewright_clusters")
@@ -85,7 +85,7 @@ check "the title is back" "$(one "SELECT title FROM oc_facewright_clusters WHERE
 echo "== a failing push must not stop a People write (a broken column in the face upsert)"
 python3 - "$SRC" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
-a=s.index("	private function upsertFacesOwn"); b=s.index("ON DUPLICATE KEY UPDATE", a)
+a=s.index("	private function upsertFaces"); b=s.index("ON DUPLICATE KEY UPDATE", a)
 seg=s[a:b]; assert "height, cluster_id) " in seg
 s=s[:a]+seg.replace("height, cluster_id) ","height, cluster_idx) ",1)+s[b:]
 open(p,"w").write(s)
@@ -102,8 +102,8 @@ check "   ours has the move" "$B" "$(one "SELECT cluster_id FROM oc_facewright_u
 check "   the copy does not (it failed)" "$A" "$(one "SELECT cluster_id FROM $DET WHERE id=$F")"
 check "   the copy is flagged dirty" "dirty" "$(sync_state | cut -d'|' -f1)"
 echo "     error: $(sync_state | cut -d'|' -f2 | cut -c1-110)"
-check "   the flagged error names the target and the column" 1 "$(sync_state | grep -c 'own: .*cluster_idx')"
-check "   one error was logged, naming the target" 1 "$(( $(log_count) - L0 ))"
+check "   the flagged error names the column" 1 "$(sync_state | grep -c 'cluster_idx')"
+check "   one error was logged" 1 "$(( $(log_count) - L0 ))"
 check "the dry run: the copy differs by that one face" 1 "$(cat_a)"
 
 echo "== repair through the hourly job once the code is back"
@@ -114,4 +114,4 @@ check "the copy has the move" "$B" "$(one "SELECT cluster_id FROM $DET WHERE id=
 check "the copy is clean again" "clean|" "$(sync_state | sed 's/|.*$/|/')"
 check "the dry run is clean" 0 "$(occ facewright:project --dry-run >/dev/null 2>&1; echo $?)"
 verify_step "the repair"
-summary "the own projection target"
+summary "the projection"

@@ -26,7 +26,7 @@ check "the copy agrees for the face we will move" "$A" "$(copy_cluster ${F[0]})"
 echo "== break the push (one column name in the face upsert)"
 python3 - "$SRC" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
-a=s.index("	private function upsertFacesOwn"); b=s.index("ON DUPLICATE KEY UPDATE", a)
+a=s.index("	private function upsertFaces"); b=s.index("ON DUPLICATE KEY UPDATE", a)
 seg=s[a:b]; assert "height, cluster_id) " in seg
 s=s[:a]+seg.replace("height, cluster_id) ","height, cluster_idx) ",1)+s[b:]
 open(p,"w").write(s)

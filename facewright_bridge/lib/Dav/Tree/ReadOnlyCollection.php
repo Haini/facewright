@@ -11,7 +11,7 @@ use Sabre\DAV\ICollection;
 /**
  * What every collection of the tree shares: nothing can be created, renamed or deleted through the nodes.
  *
- * The writes Memories sends are answered by RecognizeWriteRouterPlugin before Sabre reaches a node (it takes the
+ * The writes Memories sends are answered by PeopleWritePlugin before Sabre reaches a node (it takes the
  * request on `method:*` at priority 90, ahead of CorePlugin), and the nodes do not implement IMoveTarget. If the router
  * ever failed to answer one, Sabre would reach these methods and be refused instead of changing something.
  */

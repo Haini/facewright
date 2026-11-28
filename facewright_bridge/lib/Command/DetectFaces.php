@@ -38,7 +38,7 @@ class DetectFaces extends Command {
 
 	protected function configure(): void {
 		$this->setName('facewright:detect')
-			->setDescription("Detect faces in a file via the facewright ExApp and store results in Recognize's tables")
+			->setDescription("Detect faces in a file via the facewright ExApp and store the results in our tables")
 			->addArgument('user', InputArgument::REQUIRED, 'Nextcloud user id who can access the file')
 			->addArgument('path', InputArgument::REQUIRED, "File path relative to that user's files root")
 			->addOption('all-users', null, InputOption::VALUE_NONE, 'Write rows for every user with access to the file, not just the named one');

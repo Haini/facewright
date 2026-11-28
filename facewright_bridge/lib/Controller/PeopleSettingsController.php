@@ -15,20 +15,14 @@ use OCP\IAppConfig;
 use OCP\IRequest;
 
 /**
- * Backs the Facewright admin settings page (kept the name from when it only handled the
- * People-page toggle; now also handles automatic detection, the batch trigger and clustering -
- * not worth the risk of renaming the class/route once routing was working, see CLAUDE.md on
- * routes.php changes needing a container restart).
+ * Backs the Facewright admin settings page: automatic detection, pausing, the batch and scan
+ * triggers, clustering and the merge form. (The name is from when it only handled a toggle;
+ * renaming the class would change every route, see CLAUDE.md on routes.php changes needing a
+ * container restart.)
  *
  * Everything here is instance-wide. Per-user settings (whether face recognition runs for someone
  * at all, which of their folders it looks at, their clustering thresholds) live on
  * PersonalSettingsController, and are deliberately not editable from here.
- *
- * setEnabled: toggles Memories' People page visibility. Memories checks Recognize's own
- * `faces.enabled` appconfig key directly (Util::recognizeIsEnabled()), but Recognize's own
- * admin toggle for that key (SettingsService::setSetting) also re-schedules Recognize's own
- * real face classifier crawl - which Facewright exists to replace, not race. So this writes
- * the same appconfig key directly, bypassing Recognize's own service and that side effect.
  *
  * Routes registered in appinfo/routes.php (mirrors Recognize's own convention).
  * No #[NoAdminRequired] - Controller actions require admin by default.
@@ -44,11 +38,6 @@ class PeopleSettingsController extends Controller {
 		private IJobList $jobList,
 	) {
 		parent::__construct($appName, $request);
-	}
-
-	public function setEnabled(bool $enabled): JSONResponse {
-		$this->appConfig->setValueString('recognize', 'faces.enabled', $enabled ? 'true' : 'false');
-		return new JSONResponse(['enabled' => $enabled]);
 	}
 
 	public function setAutomaticDetectionEnabled(bool $enabled): JSONResponse {

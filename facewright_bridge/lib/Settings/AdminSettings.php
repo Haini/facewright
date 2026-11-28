@@ -34,7 +34,6 @@ class AdminSettings implements ISettings {
 	}
 
 	public function getForm(): TemplateResponse {
-		$enabled = $this->appConfig->getValueString('recognize', 'faces.enabled', 'false') === 'true';
 		$automaticDetectionEnabled = $this->appConfig->getValueString('facewright_bridge', 'automatic_detection_enabled', 'false') === 'true';
 		$automaticClusteringEnabled = $this->appConfig->getValueString('facewright_bridge', 'automatic_clustering_enabled', 'true') === 'true';
 		$processingPaused = $this->appConfig->getValueString('facewright_bridge', 'processing_paused', 'false') === 'true';
@@ -52,7 +51,6 @@ class AdminSettings implements ISettings {
 
 		Util::addScript('facewright_bridge', 'admin');
 		return new TemplateResponse('facewright_bridge', 'admin', [
-			'enabled' => $enabled,
 			'automaticDetectionEnabled' => $automaticDetectionEnabled,
 			'automaticClusteringEnabled' => $automaticClusteringEnabled,
 			'processingPaused' => $processingPaused,
