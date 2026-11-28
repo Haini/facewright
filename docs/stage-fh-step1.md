@@ -344,6 +344,10 @@ still does after that, `occ upgrade` with the version unchanged does nothing, so
   ("Deleted 8 empty person(s)": the 7 empty people that the legacy clause used to protect went with it). On 0.12.6 it was kept, by reasoning from the removed `NOT EXISTS (... recognize_face_detections
   ... no row of ours)` clause, which matched exactly this row (not re-run on the old code).
 - `occ facewright:own-tables --verify` exit 0, no `link` line in its output.
+- `dev/run-all.sh --ui` after S3 (the harness moved it to the background after 180 s, so it was not a true foreground run): first run 26 of 29: `reads-direct-stable`
+  and `writers-cluster` (plus its exapp twin) still called the removed `ReopenUnassigned` (`reads_direct.php`, `reads.sh`, `writers-cluster.sh`). Fixed in a follow-up commit
+  (`writers-cluster.sh` sets the unassigned faces to pending directly and repairs the copy with `occ facewright:project`; `live-capture.sh` lost its reopen line). Second run:
+  **29 of 29 suites passed.**
 
 ---
 
@@ -381,7 +385,18 @@ Make the docs describe 0.13.0. Keep each change to what the code change makes un
 finds only historical mentions that say they are gone. Run `dev/run-all.sh --ui` once more after the docs commit only
 if a doc change touched `dev/`.
 
-**Done:**
+**Done:** (2026-11-28)
+- `CLAUDE.md`: fork mode is the only mode (one sentence: stock Memories and Photos' People view no longer work, the way back is the tag `pre-stage-f`); "Writes from Memories" has one root
+  and `PeopleWritePlugin`; the stock-mode section is gone; Components: `DetectionService`, `ProjectionService` (one copy, `clear()`), `lib/Dav/`, `ResetService`, the admin section (no People
+  toggle), the `occ` list (removed commands and options named once as gone); Invariants: "Schema" (fractions; own tables' column order `x, y, width, height` from
+  `Version000009000Date20261120000000`; embedding of record; `facewright_detection_faces` "dropped in 0.14.0"), sentinels via `FaceState::SENTINEL_*`, "Our own tables, and the copy for Memories"
+  (no remnants, squatters, legacy test or `--hydrate`; ids ours alone; Recognize's tables frozen); "Telling our rows from Recognize's" removed; "Coexisting with Recognize" kept with the
+  0.13.0 warning line at its top; Database bullets about `face_vector`/compaction reworded; Open item 6 without the link insert.
+- `README.md`: the fork is required, Recognize is not; the stock-mode paragraphs, the People toggle step and the `projection_targets` sentence are gone. `docs/own-tables.md` (top, F.1 skipped, F.2 done
+  except the link table, F.3 done, H.1 done), `docs/cleanup.md` (4.1, 4.2), `docs/memories-fork.md` (Option 2 step 1 built on dev), `docs/README.md` (status of this document), `dev/README.md`
+  (suites removed, baseline, snapshot format; already committed with the S3 follow-up).
+- `grep -n 'hydrate\|--target\|seed-ids\|precheck\|compact-vectors\|migrate-faces\|reopen-unassigned\|people-enabled\|stock mode' CLAUDE.md README.md` finds only `CLAUDE.md` lines 187-188
+  ("Gone in 0.13.0: ..."). No `dev/` file changed in the docs commit beyond what the S3 follow-up already ran, so no further `run-all.sh`.
 
 ---
 

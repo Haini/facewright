@@ -15,8 +15,8 @@ lots of architectural decisions that come with using an ExApp setup (e.g., split
 Nextcloud App and external Docker container for image recognition).
 It actually does work for my setup and produces great results with the CPU only build on over
 54000 pictures that span over 15 years.
-The face and people data live in this project's own tables; Recognize's tables are only a copy kept for stock
-Memories, and with the Memories fork they are not used at all. Versions before November 2026 wrote straight into
+The face and people data live in this project's own tables, and Recognize's tables are not used at all (since 0.13.0).
+Versions before November 2026 wrote straight into
 Recognize's tables, so if you ran one of those, expect some manual cleanup of `oc_recognize_face_detections` when
 you deploy this to your production instance.
 
@@ -26,12 +26,10 @@ Nextcloud's [Memories](https://github.com/pulsejet/memories) app has a People pa
 face-detection logic of its own - it reads two Recognize-format tables, one of faces (bounding boxes) and one of
 "people", and sends every edit as a WebDAV request to a Recognize tree. Recognize's own detector uses
 face-api.js/tfjs-node; this project replaces it with [InsightFace](https://github.com/deepinsight/insightface) and
-provides those tables and that tree itself, in one of two ways:
-
-- **With stock Memories**, it keeps a copy of its data in Recognize's own tables and answers Memories' edits on
-  Recognize's DAV paths. Recognize has to stay installed and enabled, with its own face detection kept off.
-- **With the Memories fork** (see "Running without Recognize" below), Memories reads a copy in tables of this project
-  and sends its edits to this project's DAV tree. Recognize can be disabled.
+provides those tables and that tree itself, for a small fork of Memories (see "Running without Recognize" below): the
+fork reads a copy in tables of this project and sends its edits to this project's DAV tree. Recognize is not needed.
+Stock Memories, and Nextcloud's Photos People view, no longer work with this app (the tag `pre-stage-f` is the code
+that still supports them).
 
 Two apps live in this repo to make that possible:
 
@@ -68,11 +66,8 @@ full design history and every incident/gotcha hit building this, if you want the
   [Immich](https://github.com/immich-app/immich)'s InsightFace defaults (cosine distance 0.5,
   min 3 faces), since Immich uses the same `buffalo_l` model. Spot-checked against real photos
   from one library and looked correct, but not yet validated against a large, diverse dataset.
-- **Stock Memories needs Recognize, and the fork needs keeping up.** With stock Memories, the copy sits in
-  Recognize's internal tables and edits go to Recognize's DAV paths; both are undocumented and could change in a
-  future release, which would break Memories' People page (not the data). The fork removes that dependency but has to
-  be rebased onto each Memories release, security fixes included (`docs/memories-fork.md`, M12). Nextcloud's own
-  Photos app has no fork and loses its People view without Recognize.
+- **The fork needs keeping up.** It has to be rebased onto each Memories release, security fixes included
+  (`docs/memories-fork.md`, M12). Nextcloud's own Photos app has no fork and has no People view without Recognize.
 - **The People page has only been tried by hand, on a throwaway instance with generated data,**
   not yet on a real library. A face marked "not a face" is forgotten by a full reset
   (`occ facewright:reset`).
@@ -81,21 +76,19 @@ full design history and every incident/gotcha hit building this, if you want the
 
 ## Requirements
 
-- Nextcloud 33 to 35, with AppAPI (shipped enabled on recent versions) and Memories. With stock Memories also
-  Recognize ≥ 3.8, installed and enabled: stock Memories only shows its People page when it is. With the Memories
-  fork, Recognize is not needed.
+- Nextcloud 33 to 35, with AppAPI (shipped enabled on recent versions) and the fork of Memories (required: stock
+  Memories does not work with this app). Recognize is not needed.
 - Docker with BuildKit (the default since Docker 23) to build the ExApp image. Python dependencies
   are pinned exactly in `requirements.txt`, so a clean build gets the versions known to work.
 - For a real instance: an AppAPI manual-install daemon behind HaRP (see below).
 
 ## Running without Recognize (a fork of Memories)
 
-Stock Memories only reads Recognize's tables and writes to its DAV tree. The fork of Memories,
+Stock Memories only reads Recognize's tables and writes to Recognize's DAV tree. The fork of Memories,
 [Haini/memories](https://github.com/Haini/memories) (branch `facewright`), takes the app to read from as a system
 setting (`memories.recognize.provider`). Set to `facewright_bridge`, Memories reads a copy of the people data that this
-project's bridge keeps in tables of its own (app config `projection_targets=own`; `recognize,own` keeps Recognize's
-copy current as well, for as long as Recognize is still enabled) and sends its edits to the bridge's DAV tree, so
-Recognize can be disabled. The provider can also be chosen on Memories' admin page ("Recommended Apps"). Unset, the fork behaves like stock Memories.
+project's bridge keeps in tables of its own and sends its edits to the bridge's DAV tree, so Recognize can be
+disabled. The provider can also be chosen on Memories' admin page ("Recommended Apps").
 
 The fork is installed by building it (`scripts/facewright-build.sh` in the fork: the official release plus its changes), swapping the
 folder in `custom_apps` and pinning it so the App Store does not replace it. **Status: running on one production
@@ -121,9 +114,9 @@ starts, so the container needs internet access then.
 
 Then open <http://localhost:8080> (`admin` / `dev-admin-password`) and:
 
-1. Put an empty file named `.noimage` at the top of the user's Files (see "Keeping Recognize's
-   own face detection off" below for why), **before** turning on the People page.
-2. **Administration settings > Facewright:** tick "Show the People page", and either tick
+1. Only if Recognize is installed and enabled (it is not needed): put an empty file named `.noimage` at the top of
+   the user's Files (see "Keeping Recognize's own face detection off" below for why).
+2. **Administration settings > Facewright:** either tick
    "Automatically detect faces in new uploads" or press "Scan entire library" there later. Automatic
    detection is off by default, so uploading photos alone does nothing.
 3. **Personal settings > Facewright** (per user): tick "Find faces in my photos" and add the
@@ -136,11 +129,11 @@ Then open <http://localhost:8080> (`admin` / `dev-admin-password`) and:
 
 ## Keeping Recognize's own face detection off
 
-Only needed while Recognize is enabled (stock Memories). With the fork and Recognize disabled, none of this runs; do
-it before Recognize is ever enabled again.
+Only needed on the way back to the tag `pre-stage-f` while Recognize is enabled. With Recognize disabled none of this runs;
+do it before Recognize is ever enabled again, and note that 0.13.0 has no router for Recognize's DAV tree, so Recognize
+must not be enabled while it runs.
 
-Turning on the People page sets Recognize's `faces.enabled` to `true`, because Memories reads it.
-Recognize also uses that same setting to decide whether to run its **own** face detection on new
+Recognize's `faces.enabled` setting is what stock Memories reads, and Recognize also uses it to decide whether to run its **own** face detection on new
 uploads. Left alone, it then writes its own faces next to ours and starts its own clustering
 job, which cannot handle Facewright's embeddings and can use several GB of memory. Two steps
 prevent this:

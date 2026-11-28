@@ -178,6 +178,8 @@ current one keeps a short pointer to `pre-stage-f` and the runbook in section 0.
 
 ### 4.1 One-time code, removable first
 
+**Done in 0.13.0 on dev (2026-11-28, `docs/stage-fh-step1.md`), not deployed.** `MergeClusters` was kept (out of scope there).
+
 Migration and backfill code whose job is done on live. With the tag as the way back, nothing of the running code has to
 support a rollback any more, so these can go in the first F/H release (0.13.0) together with 4.2's first step.
 
@@ -191,6 +193,9 @@ Each removal also touches `info.xml` (command registration, so a version bump), 
 `dev/` suite that calls it.
 
 ### 4.2 Stages F and H **[F/H]**
+
+**Done in 0.13.0 on dev (2026-11-28):** everything below except the migration dropping `facewright_detection_faces` (0.14.0) and the
+dev rehearsal of section 0 (5.2). Not deployed.
 
 As listed in `docs/memories-fork.md` "Decision after M11", Option 2, and `docs/own-tables.md` F.2 / H.1:
 the `recognize` projection target, `project --hydrate`, reconcile categories B / squatters / legacy, the router's

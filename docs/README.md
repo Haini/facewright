@@ -6,7 +6,7 @@ work list is `cleanup.md`; the next session starts at `stage-fh-step1.md`.
 | Doc | What it is | Status |
 |---|---|---|
 | `handover-2026-11-27.md` | Tasks for a fresh session: docs, fork nits, People API routes and translations | done |
-| `stage-fh-step1.md` | Stages F and H, step 1: bridge 0.13.0 (one copy, one DAV root, dead code removed): implementation plan | handed to Sonnet |
+| `stage-fh-step1.md` | Stages F and H, step 1: bridge 0.13.0 (one copy, one DAV root, dead code removed): implementation plan | built on dev (0.13.0), not deployed |
 | `memories-fork-admin-ui.md` | Choosing the face provider on Memories' admin page (fork feature): plan | done; live since 2026-11-27 |
 | `cleanup.md` | What is left to tidy after the fork, and the plan for Stages F and H | current |
 | `own-tables.md` | Our own tables as the source of truth, Recognize's as a copy (Stages A to H) | A to E and G done; F and H next |

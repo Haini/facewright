@@ -616,7 +616,7 @@ not `app:remove`d), and the saved store build. Then:
 
 **Option 2: Stages H and F as written (a one-way door).** Sequence, each live step with its own go-ahead and a fresh
 dump, dev first:
-1. Code (bridge 0.13.0): remove the `recognize` target, `project --hydrate`, reconcile's B/squatter/legacy categories
+1. Code (bridge 0.13.0; **built on dev 2026-11-28, `docs/stage-fh-step1.md`**): remove the `recognize` target, `project --hydrate`, reconcile's B/squatter/legacy categories
    (H.1); the router's `recognize` root; F.2's dead code (`ownRowsExpr`, `encodeVector`, `VectorCompactionService`,
    `MigrateFaces`, `ReopenUnassigned`, `--precheck/--migrate/--seed-ids`; sentinels into `FaceState`); the legacy-member
    reads of Recognize's tables (F.3, after the user has seen the titled and untitled split of the 40 legacy rows).

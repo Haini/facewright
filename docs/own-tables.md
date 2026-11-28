@@ -8,6 +8,10 @@
 > `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize
 > disabled, its tables frozen since 2026-11-21.
 >
+> **Bridge 0.13.0 is built and passes the dev suites (2026-11-28), not deployed** (`docs/stage-fh-step1.md`). F.1 skipped
+> (decided 2026-11-27: Recognize's tables stay frozen as they are), F.2 done except dropping `facewright_detection_faces`
+> (0.14.0), F.3 done (legacy rows dropped, not carried), H.1 done. Still to do: deploy 0.13.0, soak, 0.14.0, H.2.
+>
 > **Next: Stages F and H**, decided 2026-11-21 (Option 2 of `docs/memories-fork.md`, "Decision after M11"). Not started.
 > The way back from them is the tag `pre-stage-f` on a database rebuilt from scratch, not a data rollback; the runbook
 > and the order of work are in `docs/cleanup.md`, sections 0 and 4. Each live step needs the user's go-ahead and a
@@ -808,6 +812,8 @@ the pre-cutover one will be too old to restore.
 
 ### F.1 Empty the hidden rows, blank the vectors
 
+**Skipped (decided 2026-11-27, 0.13.0).** Recognize's tables are left exactly as they are, frozen, and dropped in step 5.
+
 Stage E leaves the hidden-state rows (pending, unclusterable, ignored) in Recognize's table; reconcile reports them
 as category B and tolerates them. Here they are removed in bulk: dump the id list to a file, delete by that list in
 chunks, and print `before - listed = after`, which must reconcile exactly. No command exists for this yet: add one to
@@ -847,6 +853,8 @@ claim in the Stage D files before acting on it; pulling it forward is the user's
 
 ### F.2 Delete the transitional code
 
+**Done in 0.13.0 (dev, 2026-11-28), except the migration dropping `facewright_detection_faces`: that is 0.14.0.**
+
 Ends rollback tier R2: Stage D code needs the links table.
 
 Delete `DetectionService::ownRowsExpr()`, `encodeVector()`, `VECTOR_PRECISION`. Move `VECTOR_LENGTH_FLOOR` to
@@ -863,6 +871,8 @@ from that migration. Stop the writes in `DetectionService` and `AccessSyncServic
 `ResetService` first. The links table is kept until here on purpose: rollback to Stage D code needs it.
 
 ### F.3 Legacy rows: **user decision**
+
+**Done in 0.13.0 (dev): dropped, not carried.** A person whose only members were legacy rows now counts as empty.
 
 Before F.2. Report the legacy count from `project --dry-run` and `--precheck`'s numbers for clusters with no own member,
 split titled and untitled. Do not delete anything without an explicit answer. If the user approves: dump the id list to
@@ -918,6 +928,8 @@ fork's change is the commit `bbb4f38c` of https://github.com/Haini/memories (bra
 ---
 
 ## Stage H: Retire the coupling to Recognize
+
+**H.1 done in 0.13.0 (dev, 2026-11-28).**
 
 Only after M11 of `docs/memories-fork.md` runs on production.
 
