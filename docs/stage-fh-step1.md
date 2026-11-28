@@ -417,5 +417,12 @@ site down), container restart. With `projection_targets=own` still set, 0.12.6 w
 `--verify` then reports `copies_without_link` for every face created under 0.13.0; that is expected, and nothing but
 `--verify` and a full `occ facewright:reset` read the link table.
 
+**Done 2026-11-28 ~18:56 UTC.** `app:update --showonly` listed only the three disabled apps, and `occ upgrade` updated
+nothing else. The folder was swapped, not unpacked over (staged next to `custom_apps`, then the old folder removed and the
+new one moved in), so the files 0.13.0 deletes are gone; the live tree matches `git archive HEAD` file for file. Checks
+after the restart: `project --dry-run` A=C=D=0; `own-tables --verify` exit 0 (4,680 people, 201,469 faces); 13
+`facewright:*` commands; `/people-enabled` 404 unauthenticated, kept routes 401; no `projection_last_error`, no warnings
+in the log. Not yet done: one People-page action and one Memories rename by the user.
+
 After a week on live: step 3 of the sequence (the dev rehearsal of the way back from the tag, `docs/cleanup.md`
 section 0), then 0.14.0 (drop the link table).

@@ -4,7 +4,7 @@ An inventory of what is left to tidy now that live runs the fork of Memories aga
 M11) and Recognize is disabled. Assessed 2026-11-21 against `master` at `beb5488`. Each item says where, what, and whether
 it waits on something. Done so far: the decision and the tags (section 0), the live checks (section 1, apart from 1.3), the stray folders (2.2, 2.3), the stale statements and status blocks (3.1, 3.2), the archive (3.3), the three bugs of 6.1 (live).
 
-**State this assumes:** live runs bridge 0.12.5, the pinned fork of Memories 11.1.4 with
+**State this assumes:** live runs bridge 0.13.0 (since 2026-11-28), the pinned fork of Memories 11.1.4 with
 `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize 12.0.3
 installed but disabled (its tables frozen since 2026-11-21).
 
@@ -178,7 +178,7 @@ current one keeps a short pointer to `pre-stage-f` and the runbook in section 0.
 
 ### 4.1 One-time code, removable first
 
-**Done in 0.13.0 on dev (2026-11-28, `docs/stage-fh-step1.md`), not deployed.** `MergeClusters` was kept (out of scope there).
+**Done in 0.13.0 (2026-11-28, `docs/stage-fh-step1.md`), live since 2026-11-28.** `MergeClusters` was kept (out of scope there).
 
 Migration and backfill code whose job is done on live. With the tag as the way back, nothing of the running code has to
 support a rollback any more, so these can go in the first F/H release (0.13.0) together with 4.2's first step.

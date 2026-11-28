@@ -1,18 +1,18 @@
 # Owning the face data: review and implementation plan
 
-> ## Where things stand (2026-11-21) — read this first
+> ## Where things stand (2026-11-28) — read this first
 >
 > **Done and live:** Stages A to E (our tables are the source of truth, the copy Memories reads is written by
 > `ProjectionService`; since 2026-11-06) and G (the fork of Memories reads the `own` copy and writes to our DAV tree;
-> since 2026-11-20, `docs/memories-fork.md`). Live runs bridge 0.12.5, the pinned fork of Memories 11.1.4 with
+> since 2026-11-20, `docs/memories-fork.md`). Live runs bridge 0.13.0, the pinned fork of Memories 11.1.4 with
 > `memories.recognize.provider=facewright_bridge`, `projection_targets=own`, `clustering_engine=exapp`, and Recognize
 > disabled, its tables frozen since 2026-11-21.
 >
-> **Bridge 0.13.0 is built and passes the dev suites (2026-11-28), not deployed** (`docs/stage-fh-step1.md`). F.1 skipped
+> **Bridge 0.13.0 is live since 2026-11-28** (`docs/stage-fh-step1.md`). F.1 skipped
 > (decided 2026-11-27: Recognize's tables stay frozen as they are), F.2 done except dropping `facewright_detection_faces`
-> (0.14.0), F.3 done (legacy rows dropped, not carried), H.1 done. Still to do: deploy 0.13.0, soak, 0.14.0, H.2.
+> (0.14.0), F.3 done (legacy rows dropped, not carried), H.1 done. Still to do: a week on live (to 2026-12-05), the dev rehearsal of the way back, 0.14.0, H.2.
 >
-> **Next: Stages F and H**, decided 2026-11-21 (Option 2 of `docs/memories-fork.md`, "Decision after M11"). Not started.
+> **Next: Stages F and H**, decided 2026-11-21 (Option 2 of `docs/memories-fork.md`, "Decision after M11"). Step 1 (0.13.0) done and live; the sequence is in `docs/stage-fh-step1.md`.
 > The way back from them is the tag `pre-stage-f` on a database rebuilt from scratch, not a data rollback; the runbook
 > and the order of work are in `docs/cleanup.md`, sections 0 and 4. Each live step needs the user's go-ahead and a
 > fresh dump.
