@@ -10,7 +10,7 @@ num() { rep | grep -E "^$1 " | head -1 | grep -oE '[0-9]+$'; }   # num "A" -> th
 cat_a() { rep | grep '^A ' | grep -oE '[0-9]+$'; }
 cat_c() { rep | grep '^C ' | grep -oE '[0-9]+$'; }
 cat_dm() { rep | grep 'missing or different there' | grep -oE '[0-9]+$'; }
-cat_ds() { rep | grep 'nothing references' | grep -oE '[0-9]+$'; }
+cat_ds() { rep | grep 'no longer exist' | grep -oE '[0-9]+$'; }
 
 # One ignored face, made through the API before the baseline: a row for it in the copy is a stale row (C).
 IGN=$(one "SELECT id FROM oc_facewright_user_faces WHERE user_id='$u' AND state=1 ORDER BY id DESC LIMIT 1")

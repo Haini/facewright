@@ -247,7 +247,19 @@ Bump `facewright_bridge/appinfo/info.xml` to **0.13.0** here (routes change), `o
   `upsertFaces()` write nothing (return early) and run `writers-people.sh`: it must fail; remove the fault.
 - `dev/run-all.sh --ui` (commit first): every suite of S1 passes.
 
-**Done:**
+**Done:** (2026-11-28)
+- Built 0.13.0 as described: `ProjectionService` single copy with `clear()`; `Project` without `--hydrate`/`--target`; one reconcile in the job and in `verify()`
+  (`A_visible_faces_wrong`, `C_stale_rows`, `D_people_missing`, `D_people_stale`); `PeopleWritePlugin` with `ROOTS=['facewright_bridge']`; People toggle,
+  route, JS and `AdminSettings` read removed; `info.xml` texts reworded. `dev/lib.sh`'s temporary 0.12.6 verify clause deleted; `project-failure.sh`/`project-own.sh` follow the
+  `upsertFaces` rename. `php -l` clean; `occ upgrade` + container restart; `occ app:list`: `facewright_bridge: 0.13.0`.
+- Checks: `project --dry-run` 0/0/0/0 exit 0; `--target=own` and `--hydrate`: "option does not exist", exit 1; `own-tables --verify` exit 0, no `B_`/`legacy`
+  line (link checks still there until S3); unauthenticated `PUT .../people-enabled` 404; admin settings page 200 without the checkbox; `MKCOL recognize/admin/faces/X`
+  as admin: 409, no person created; `battery.sh` passes.
+- Planted faults: `'recognize'` back in `ROOTS`: `battery.sh` passed 59/0 (the same-tree rule holds) but `MKCOL recognize/admin/faces/PlantedX` answered 201 and made the
+  person, i.e. a write under `recognize/` is applied again; removed (cmp against the backup). `upsertFaces()` returning early: `writers-people.sh` passed 27, failed 9; removed.
+- First `run-all.sh --ui`: 27 of 29. Both failures (`project-drift`, `project-own`) were a parser mismatch: their `cat_ds()` helpers grepped "nothing references", while
+  `Project.php` now prints "D  people there that no longer exist"; every other check passed. Fixed both helpers (wording kept in `Project.php`); after a restore each suite
+  passes alone (project-drift passed 22/0, project-own passed 39/0). The full run is repeated after S3.
 
 ---
 

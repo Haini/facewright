@@ -19,7 +19,7 @@ rep() { occ facewright:project --dry-run "$@"; }
 cat_a() { rep | grep '^A ' | grep -oE '[0-9]+$'; }
 cat_c() { rep | grep '^C ' | grep -oE '[0-9]+$'; }
 cat_dm() { rep | grep 'missing or different there' | grep -oE '[0-9]+$'; }
-cat_ds() { rep | grep 'nothing references' | grep -oE '[0-9]+$'; }
+cat_ds() { rep | grep 'no longer exist' | grep -oE '[0-9]+$'; }
 n_det() { one "SELECT COUNT(*) FROM $DET"; }
 n_clu() { one "SELECT COUNT(*) FROM $CLU"; }
 sync_state() { docker exec -u www-data "$NC_CONTAINER" php -r 'define("OC_CONSOLE",1); require_once "/var/www/html/lib/base.php"; $s=\OCP\Server::get(\OCA\FacewrightBridge\Service\ProjectionService::class)->status(); echo $s["dirty"] ? "dirty" : "clean", "|", $s["error"];'; }
