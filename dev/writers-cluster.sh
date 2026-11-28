@@ -1,5 +1,5 @@
 #!/bin/bash
-# The clustering writers: reopen-unassigned, a pass that assigns, a pass that assigns nothing (marks faces
+# The clustering writers: reopening the unassigned faces (set up directly, then the copy repaired), a pass that assigns, a pass that assigns nothing (marks faces
 # unclusterable), clearing those marks, and a full reset for a small and a large user. Each step checks that
 # something actually changed, because a step with nothing to do passes without testing anything. Changes data:
 # restore a snapshot afterwards.   dev/writers-cluster.sh
@@ -13,11 +13,12 @@ unas=$(n $u 2); need "$u: unassigned faces to reopen" "$unas" 1
 echo "  $u: $(dist $u)"; echo "  $BOB_USER: $(dist $BOB_USER)"
 verify_step "baseline"
 
-echo "== reopen-unassigned"
-check "reopened exactly the unassigned faces" "$unas" "$(occ facewright:reopen-unassigned --user=$u | grep -o 'Reopened [0-9]*' | grep -o '[0-9]*')"
+echo "== reopen the unassigned faces (set up as a reset would leave them: pending, then the copy repaired)"
+sql "UPDATE oc_facewright_user_faces SET state=0, cluster_id=NULL WHERE user_id='$u' AND state=2"
+occ facewright:project >/dev/null
 check "   they are pending now" "$unas" "$(n $u 0)"
 check "   none unassigned left" 0 "$(n $u 2)"
-verify_step "reopen-unassigned"
+verify_step "reopen"
 
 echo "== a pass that assigns"
 pend=$(n $u 0)

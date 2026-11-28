@@ -7,7 +7,7 @@
 define('OC_CONSOLE', 1);
 require_once '/var/www/html/lib/base.php';
 
-use OCA\FacewrightBridge\Command\{ClusterFaces, ReopenUnassigned, ResetFacewrightData};
+use OCA\FacewrightBridge\Command\{ClusterFaces, ResetFacewrightData};
 use OCA\FacewrightBridge\Service\{AccessSyncService, ClusteringService, DetectionService, ResetService};
 use OCP\Server;
 use Symfony\Component\Console\Output\BufferedOutput;
@@ -54,7 +54,4 @@ foreach ($users as $user) {
 	$o = new BufferedOutput(); $priv(Server::get(ClusterFaces::class), 'printClusterSizes', [$o, $user]);
 	$lines = array_filter(explode("\n", $o->fetch())); sort($lines); $out['clusterSizes'][$user] = array_values($lines);
 }
-$re = Server::get(ReopenUnassigned::class);
-$out['reopen_countMatching'] = ['all' => $priv($re, 'countMatching', [null])];
-foreach ($users as $user) { $out['reopen_countMatching'][$user] = $priv($re, 'countMatching', [$user]); }
 echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";

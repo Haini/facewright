@@ -16,7 +16,6 @@ for u in $(words "$users"); do
   occ facewright:people "$u" --delete-empty --dry-run     > "$out/empty-$u.txt" 2>&1
 done
 occ facewright:reset --dry-run                            > "$out/reset-dry.txt" 2>&1
-occ facewright:reopen-unassigned --dry-run                > "$out/reopen-dry.txt" 2>&1
 USERS=$users "$DEV_DIR/reads-direct.sh" capture "$out/direct.json" > "$out/direct.log"
 bad=0
 for u in $(words "$users"); do   # an unknown user prints nothing and no error, so an empty people list is the signal

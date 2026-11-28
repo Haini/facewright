@@ -22,6 +22,14 @@ processed, centroids, merge dismissals, Memories' covers) with their id counters
 (`facewright_bridge_face_*`), refills it with `occ facewright:project` and runs `own-tables --verify`. It refuses a file
 that holds Recognize's tables (the old format; the last one is `.work/snapshots/original-stock.sql`).
 
+## Suites removed with bridge 0.13.0
+
+`project-recognize-trap`, `project-recognize-copies`, `rollback-drill` (Stage D; the tag `pre-stage-f` keeps it), the `recognize/` battery,
+the stock `memories-ui` flow and the `-own` / `-bridge` / `-bridge-off` duplicates went because the code they exercise
+(the `recognize` projection target, Recognize's tree, the way back to Stage D) is gone or the baseline made them identical to their
+plain versions. `own-traps.sh` lost its `--migrate` / `migrate-faces` traps. `admin_provider.py` still needs Recognize enabled
+(`with_stock_memories` in `run-all.sh`); uninstalling Recognize changes it.
+
 ## Start
 
     dev/snapshot.sh save original      # once, from a healthy dev stack
@@ -42,7 +50,7 @@ that holds Recognize's tables (the old format; the last one is `.work/snapshots/
 | `writers-files.sh` | detection with a real face, copy, prune, a real share, delete | cleans up |
 | `chain-loop-test.sh dangling\|assignable` | the clustering chain ends; fails on code from before "progress means rows written" | yes (restore) |
 | `clustering-sets.sh save\|compare` (+ `members.py`) | who ends up with whom, independent of numbering | yes (restore) |
-| `clustering-truth.sh` (+ `truth.py`, `fetch-dataset.sh`) | clustering against labelled identities (Georgia Tech set, downloaded into `.work/`, never committed: no stated licence); the oracle `truth.py USER` checks pure / complete / same in Recognize's table and is proven able to fail | yes (restore) |
+| `clustering-truth.sh` (+ `truth.py`, `fetch-dataset.sh`) | clustering against labelled identities (Georgia Tech set, downloaded into `.work/`, never committed: no stated licence); the oracle `truth.py USER` checks pure / complete / same in the own copy and is proven able to fail | yes (restore) |
 | `project-drift.sh` | reconcile: plants kinds of drift in the own copy, requires the dry run to report exactly those, repairs, checks Memories | yes (restore) |
 | `project-failure.sh` | a broken push must not break People writes; the admin page says so; the hourly job repairs | yes (restore) |
 | `people-stats.sh` | each person's stored size and cover: the cover face leaving, a better face joining, opposite moves at once, merge, delete, reset, `--recount` | yes (restore) |

@@ -10,7 +10,7 @@
 # What is captured: the People API (list with covers, search, paging, minimum size, unassigned, ignored, one
 # person and its faces, the boxes on six files, suggestions) for the admin user and for the second user, the
 # requests that must fail (the second user asking for the admin's people), face crops for the owner and for
-# the other user (status, ETag and a hash of the image), the People CLI views, the reset, reopen and backfill
+# the other user (status, ETag and a hash of the image), the People CLI views, the reset and backfill
 # dry-runs, the unclustered count, and every suggestion centroid recomputed from the embeddings and hashed.
 # Which people and files are used is chosen from the database, so the same data gives the same capture.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -78,7 +78,6 @@ capture() {
   occ facewright:people "$u" --faces="${P[0]}" > "$O/cli-faces.txt" 2>&1
   occ facewright:people "$u" --suggest --faces="${P[0]}" --no-store 2>&1 | sed -E 's/ *(centroid-time|distance-time|total|peak-memory)=[^ ]*//g' > "$O/cli-suggest.txt"
   occ facewright:reset --dry-run > "$O/cli-reset-dry.txt" 2>&1
-  occ facewright:reopen-unassigned --dry-run > "$O/cli-reopen-dry.txt" 2>&1
   occ facewright:backfill-access --dry-run 2>&1 | grep -viE 'elapsed|seconds' > "$O/cli-backfill-dry.txt"
   docker exec -u www-data "$NC_CONTAINER" php -r 'define("OC_CONSOLE",1); require_once "/var/www/html/lib/base.php"; $r=\OCP\Server::get(\OCA\FacewrightBridge\Service\ClusteringService::class)->countUnclusteredByUser(); ksort($r); echo json_encode($r), "\n";' > "$O/unclustered-counts.txt" 2>&1
   sql "SELECT cluster_id, user_id, member_count, MD5(centroid) FROM oc_facewright_cluster_centroids ORDER BY cluster_id" > "$O/centroids.txt"
