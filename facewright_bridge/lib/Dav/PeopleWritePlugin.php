@@ -6,6 +6,7 @@ namespace OCA\FacewrightBridge\Dav;
 
 use OCA\FacewrightBridge\Service\DeadlockRetry;
 use OCA\FacewrightBridge\Service\DuplicateTitleException;
+use OCA\FacewrightBridge\Service\FaceState;
 use OCA\FacewrightBridge\Service\PeopleService;
 use OCP\IUserSession;
 use Sabre\DAV\Exception\Forbidden;
@@ -246,7 +247,7 @@ class PeopleWritePlugin extends ServerPlugin {
 		$targetId = $this->person($userId, $target);
 		if ($name === null) {
 			// From the unassigned list: the face has to be there.
-			$this->requireFaceIn($userId, $faceId, \OCA\FacewrightBridge\Service\ClusteringService::UNASSIGNED);
+			$this->requireFaceIn($userId, $faceId, FaceState::SENTINEL_UNASSIGNED);
 		} else {
 			$this->requireFaceIn($userId, $faceId, $this->person($userId, $name));
 		}

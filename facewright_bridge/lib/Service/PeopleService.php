@@ -28,7 +28,7 @@ class PeopleService {
 	}
 
 	/**
-	 * Runs $work in one transaction, then pushes what it touched to Recognize's tables (what Memories reads).
+	 * Runs $work in one transaction, then pushes what it touched to the copy Memories reads.
 	 * $work returns [result, face ids touched, person ids touched]. The push runs after the commit, never
 	 * inside it, and never throws: a failed push marks the projection dirty and the hourly job repairs it.
 	 *
@@ -59,9 +59,7 @@ class PeopleService {
 		$qb = $this->clusterListQuery($userId, $minCount, $search);
 		$qb->select('c.id', 'c.title', 's.cover_id')
 			->selectAlias($qb->createFunction('COALESCE(s.face_count, 0)'), 'face_count')
-			// Named clusters first, then largest first, then stable by id - matches Recognize's
-			// own FacesHome::getChildren() ordering closely enough for Memories' list to look
-			// sane without depending on it.
+			// Named clusters first, then largest first, then stable by id.
 			->orderBy($qb->createFunction("(c.title <> '')"), 'DESC')
 			->addOrderBy('face_count', 'DESC')
 			->addOrderBy('c.id', 'ASC')
@@ -196,7 +194,7 @@ class PeopleService {
 		return $this->listFacesWhere($userId, FaceState::IGNORED, null, $limit, $offset);
 	}
 
-	/** Faces at $clusterId, which may be a real cluster or one of ClusteringService's sentinels. */
+	/** Faces at $clusterId, which may be a real cluster or one of FaceState's sentinels. */
 	public function countFaces(string $userId, int $clusterId): int {
 		try {
 			$match = FaceState::fromSentinel($clusterId);
@@ -215,7 +213,7 @@ class PeopleService {
 	}
 
 	/**
-	 * Where one of $userId's faces currently sits: a person's id, or one of ClusteringService's
+	 * Where one of $userId's faces currently sits: a person's id, or one of FaceState's
 	 * sentinels, or null while it is still pending. The DAV router needs it to refuse a request
 	 * whose path names the wrong person.
 	 *
@@ -300,8 +298,7 @@ class PeopleService {
 
 	/**
 	 * Every one of $userId's own faces on
-	 * one file, with the person title if assigned. Reads facewright_user_faces, so a legacy
-	 * 128-dim row never reaches a UI through us.
+	 * one file, with the person title if assigned. Reads facewright_user_faces.
 	 *
 	 * @return list<array{id: int, x: float, y: float, width: float, height: float, cluster_id: ?int, title: ?string}>
 	 */
@@ -382,12 +379,8 @@ class PeopleService {
 	}
 
 	/**
-	 * Merges two of $userId's clusters that turned out to be the same real person - something
-	 * Recognize's own DAV rename endpoint has no path to at all (it throws Forbidden on a
-	 * duplicate title rather than treating it as a merge signal; see renameCluster()/
-	 * assertValidTitle()). Deliberately not dimension-scoped: merging is a human judgement about
-	 * identity, not a computed distance, so a legacy 128-dim cluster and one of ours can validly
-	 * be the same person.
+	 * Merges two of $userId's clusters that turned out to be the same real person. A rename to an existing title is refused with DuplicateTitleException, never treated as a merge (see
+	 * renameCluster()/assertValidTitle()). Merging is a human judgement about identity, not a computed distance.
 	 *
 	 * @return array{keepId: int, mergeId: int, moved: int}
 	 * @throws \InvalidArgumentException if either side can't be resolved for $userId, or they
@@ -439,12 +432,11 @@ class PeopleService {
 
 		return $this->writeAndPush(function () use ($userId, $keepId, $mergeIds): array {
 			$members = $this->faceStore->moveMembers($userId, $mergeIds, FaceState::ASSIGNED, $keepId);
-			$legacy = $this->moveLegacyMembers($userId, $mergeIds, $keepId);
 			$this->faceStore->deleteClusters($userId, $mergeIds);
 			$this->forgetClusters($userId, $mergeIds);
 			$this->forgetCentroids($userId, [$keepId]); // its size changed
 			return [
-				['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => count($members) + $legacy],
+				['keepId' => $keepId, 'merged' => $mergeIds, 'moved' => count($members)],
 				$members,
 				array_merge($mergeIds, [$keepId]),
 			];
@@ -452,8 +444,7 @@ class PeopleService {
 	}
 
 	/**
-	 * Unassigns every member and deletes the cluster: the same result as Recognize's own
-	 * FaceClusterMapper::delete(), which is what Memories expects from deleting a person.
+	 * Unassigns every member and deletes the cluster, which is what Memories expects from deleting a person.
 	 *
 	 * @return int members unassigned
 	 * @throws \InvalidArgumentException if $clusterId doesn't exist for $userId
@@ -480,10 +471,9 @@ class PeopleService {
 
 		return $this->writeAndPush(function () use ($userId, $clusterIds): array {
 			$members = $this->faceStore->moveMembers($userId, $clusterIds, FaceState::UNASSIGNED, null);
-			$legacy = $this->moveLegacyMembers($userId, $clusterIds, ClusteringService::UNASSIGNED);
 			$this->faceStore->deleteClusters($userId, $clusterIds);
 			$this->forgetClusters($userId, $clusterIds);
-			return [count($members) + $legacy, $members, $clusterIds];
+			return [count($members), $members, $clusterIds];
 		});
 	}
 
@@ -623,26 +613,6 @@ class PeopleService {
 	}
 
 	/**
-	 * Recognize's own legacy rows (rows with no row of ours) that point at one of these people move with them:
-	 * to the surviving person on a merge, to -1 on a delete, which is what Recognize's own code does.
-	 *
-	 * @param list<int> $fromClusterIds
-	 * @return int legacy rows moved
-	 */
-	private function moveLegacyMembers(string $userId, array $fromClusterIds, int $to): int {
-		$ids = array_values(array_unique(array_map('intval', $fromClusterIds)));
-		if ($ids === []) {
-			return 0;
-		}
-		return $this->db->executeStatement(
-			'UPDATE ' . $this->db->getQueryBuilder()->getTableName('recognize_face_detections') . ' SET cluster_id = ' . $to
-			. ' WHERE user_id = ? AND cluster_id IN (' . implode(',', $ids) . ') AND id NOT IN (SELECT id FROM '
-			. $this->db->getQueryBuilder()->getTableName('facewright_user_faces') . ')',
-			[$userId]
-		);
-	}
-
-	/**
 	 * Drops what SuggestionService keeps about people that no longer exist: their cached
 	 * centroids and every dismissal that mentions them. Only the merge and delete paths call
 	 * this; a person removed from Memories' side leaves rows behind that are inert, since cluster
@@ -686,8 +656,7 @@ class PeopleService {
 	 * @return int clusters deleted
 	 */
 	public function deleteEmptyClusters(string $userId): int {
-		// The decision lives in FaceStore::emptyClusterIds(): no face of ours points at the person, and neither
-		// does a legacy row of Recognize's, so a person whose only members are legacy rows is never chosen.
+		// The decision lives in FaceStore::emptyClusterIds(): no face of ours points at the person.
 		$ids = $this->faceStore->emptyClusterIds($userId);
 		return $this->writeAndPush(function () use ($userId, $ids): array {
 			$deleted = $this->faceStore->deleteClusters($userId, $ids);

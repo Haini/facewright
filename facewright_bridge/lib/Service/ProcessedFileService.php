@@ -12,7 +12,7 @@ use OCP\IUserManager;
 
 /**
  * Tracks which files facewright has attempted detection on, in its own facewright_processed
- * table - not recognize_face_detections, which never gets a row for a zero-face photo and so
+ * table, because a zero-face photo never gets a face row and so a face table
  * can't answer "has this file been processed" on its own (that gap let zero-face files get
  * reprocessed forever by the batch trigger). Backs both the idempotency check DetectQueuedJob
  * and BatchTriggerService rely on, and the admin-page stats.

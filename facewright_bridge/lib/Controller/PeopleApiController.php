@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\FacewrightBridge\Controller;
 
-use OCA\FacewrightBridge\Service\ClusteringService;
+use OCA\FacewrightBridge\Service\FaceState;
 use OCA\FacewrightBridge\Service\DuplicateTitleException;
 use OCA\FacewrightBridge\Service\PeopleService;
 use OCP\AppFramework\Http;
@@ -99,7 +99,7 @@ class PeopleApiController extends OCSController {
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
 			'items' => $this->people->listUnassignedFaces($this->uid(), $limit, $offset),
-			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), ClusteringService::UNASSIGNED) : null,
+			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), FaceState::SENTINEL_UNASSIGNED) : null,
 		]);
 	}
 
@@ -108,7 +108,7 @@ class PeopleApiController extends OCSController {
 		[$limit, $offset] = $this->page($limit, $offset);
 		return new DataResponse([
 			'items' => $this->people->listIgnoredFaces($this->uid(), $limit, $offset),
-			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), ClusteringService::IGNORED) : null,
+			'total' => $offset === 0 ? $this->people->countFaces($this->uid(), FaceState::SENTINEL_IGNORED) : null,
 		]);
 	}
 

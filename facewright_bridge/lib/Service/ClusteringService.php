@@ -14,7 +14,7 @@ use Psr\Log\LoggerInterface;
 /**
  * Prototype clustering, extracted from the facewright:cluster command so both it and the admin
  * page's "Run now" trigger share one implementation. Incremental nearest-neighbor assignment
- * modeled on Immich's approach rather than Recognize's own batch HDBSCAN (see CLAUDE.md for
+ * modeled on Immich's approach (see CLAUDE.md for
  * why): a face joins/starts a cluster once it has at least $minFaces matches (including itself)
  * within $maxDistance cosine distance of an existing detection. Reclusters everything from
  * scratch each run, but only ever touches detections with no cluster_id yet, so a re-run after
@@ -26,56 +26,6 @@ use Psr\Log\LoggerInterface;
  * face beyond the initial match set. Close enough for threshold experimentation.
  */
 class ClusteringService {
-	// Sentinel written to cluster_id for a detection Facewright has evaluated against the full
-	// candidate pool and found unclusterable at the current thresholds. It does NOT mean
-	// "excluded forever": such rows stay in the matching pool and are still assignable as a
-	// side effect of a later face matching them (see assignClusters()), so a person who only
-	// becomes clusterable once a third photo of them lands still clusters.
-	//
-	// The reason for marking at all is that a NULL cluster_id is what Recognize's own
-	// MaintenanceJob queries (FaceDetectionMapper::getUsersForUnclustered(), filtered only on
-	// "cluster_id IS NULL" plus a minimum detection size - no embedding-dimension filter). Any
-	// row left NULL keeps that job enqueueing Recognize's ClusterFacesJob, which loads our
-	// 512-dim vectors into its 128-dim HDBSCAN, balloons to ~3.2 GB (it does
-	// ini_set('memory_limit', '-1')) and dies on "Column at offset 128 does not exist".
-	//
-	// -2 rather than -1, which looks like the natural choice since -1 is Recognize's own noise
-	// label: Recognize *deliberately re-reads* its -1 rows via
-	// FaceDetectionMapper::sampleRejectedDetectionsByUserId() ("WHERE cluster_id = -1") and
-	// feeds them straight back into the same HDBSCAN run. Marking -1 would therefore hide our
-	// rows from the trigger while leaving them in the crash path. Recognize has no predicate
-	// matching -2 anywhere (its only cluster_id filters are IS NULL, = -1, = <real id>, and
-	// IS NOT NULL), and Memories inner-joins detections to recognize_face_clusters, so a
-	// sentinel with no cluster row is invisible there too.
-	public const UNCLUSTERABLE = -2;
-
-	// -1 means "unassigned: excluded from clustering until a human assigns it" - not "pending,
-	// re-evaluate me". Every consumer other than our own clustering already agreed on this
-	// reading before this constant existed: it is what Memories' "unassigned faces" view
-	// selects, what Memories' "move to person" action operates on, and what a Memories person
-	// delete writes to its members via Recognize's own FaceClusterMapper::delete() - deleting a
-	// person in Memories un-clusters its faces, it does not erase them. Recognize's now-disabled
-	// HDBSCAN also wrote -1 as its own "noise" verdict, including on rows it had no business
-	// judging (analyzing our 512-dim vectors in its 128-dim space is meaningless) - those legacy
-	// rows were reopened once by `occ facewright:reopen-unassigned` before this meaning shipped,
-	// so this constant never needs to treat -1 as "not yet evaluated".
-	//
-	// Clustering therefore never seeds a match from a -1 row, never matches a candidate against
-	// one, and never assigns -1 as a side effect of matching some other face - the same as any
-	// row a human has deliberately taken out of a cluster. resetUser() is the one thing that
-	// reopens -1 rows back to NULL, and it does so as part of what "reset" means generally, not
-	// as special-cased -1 handling.
-	public const UNASSIGNED = -1;
-
-	// -3 means "not a face, or not someone the user wants to see": set only by a human, from the
-	// People page. Clustering never seeds from it, never matches against it and never changes it,
-	// and resetUser() keeps it - an ignore is a judgement about the detection, not about how it
-	// was clustered. Invisible to Memories (it inner-joins recognize_face_clusters, and its
-	// unassigned view reads -1 only) and to Recognize (its cluster_id predicates are IS NULL,
-	// = -1 and = <real id>; only its own resetClusters() would wipe it, like every other
-	// assignment). Not a cluster: nothing may ever create a recognize_face_clusters row for it.
-	public const IGNORED = -3;
-
 	// Once a pre-existing cluster has this many representatives loaded in loadDetections(),
 	// further members are skipped entirely (never fetched, decoded, or held in memory) instead
 	// of loading the full cluster - at this project's current scale (a handful of clusters
@@ -383,7 +333,7 @@ class ClusteringService {
 	 * actually need a fresh ClusterScanJob rather than starting one for every seen user
 	 * regardless of whether they have anything unclustered.
 	 *
-	 * Reads facewright_user_faces, like loadDetections(), so Recognize's legacy rows are never
+	 * Reads facewright_user_faces, like loadDetections(), so
 	 * counted: they have no row there.
 	 *
 	 * Counts exactly what loadDetections() treats as pending - state PENDING - and
@@ -416,8 +366,8 @@ class ClusteringService {
 
 	/**
 	 * Marks the given detections UNCLUSTERABLE. Called only once a full pass has demonstrably
-	 * assigned nothing - see UNCLUSTERABLE's docblock for why leaving rows NULL is what keeps
-	 * Recognize's MaintenanceJob re-arming its 3.2 GB ClusterFacesJob.
+	 * assigned nothing - see FaceState::UNCLUSTERABLE: those rows stay in the matching pool but are not
+	 * tried again as seeds.
 	 *
 	 * Takes an explicit id list rather than a sweep of everything pending on purpose: the caller passes exactly
 	 * the ids it loaded and found no cluster for, so a face that arrived meanwhile has not been judged.
@@ -434,7 +384,7 @@ class ClusteringService {
 				$userId, $batch, FaceState::UNCLUSTERABLE, null, [FaceState::PENDING, FaceState::UNCLUSTERABLE],
 			));
 			$marked += count($matched);
-			// Hidden states are not in Recognize's table: this is what removes a remnant left there.
+			// Hidden states are not in the copy Memories reads: this removes what was there.
 			$this->projection->push($matched);
 		}
 		return $marked;
@@ -488,7 +438,7 @@ class ClusteringService {
 			}
 			return $touched;
 		});
-		// Faces back to hidden leave Recognize's table, and the people with them.
+		// Faces back to hidden leave the copy, and the people with them.
 		$this->projection->push($touched['faces'], $touched['clusters']);
 	}
 
@@ -589,8 +539,8 @@ class ClusteringService {
 	 * all. Pass 1 selects no embedding at all (clustered-index leaf pages only, never faulting in
 	 * a BLOB page) purely to decide *which* ids are wanted, and pass 2 fetches embeddings for just
 	 * those - via facewright_faces (Stage 1 of docs/archive/independence-implementation.md), a
-	 * 2 KB-per-row blob rather than recognize_face_detections.face_vector's ~4.8 KB JSON, so this
-	 * pass is cheaper again than the ~340 MB it was measured at against that column (see CLAUDE.md's
+	 * 2 KB-per-row blob, so this
+	 * pass is cheaper than the ~340 MB it was measured at against a JSON column (see CLAUDE.md's
 	 * "Capping rows in PHP saves no I/O").
 	 *
 	 * Note $skippedForeign now counts embedding-decode failures only among the faces actually
@@ -642,7 +592,7 @@ class ClusteringService {
 					$clusterId = $wanted[$id]['clusterId'];
 					if ($clusterId === null) {
 						$pendingIds[] = $id;
-					} elseif ($clusterId === self::UNCLUSTERABLE) {
+					} elseif ($clusterId === FaceState::SENTINEL_UNCLUSTERABLE) {
 						// Evaluated already: matchable, but not attempted again - see the docblock.
 						$clusterId = null;
 					}
@@ -702,7 +652,7 @@ class ClusteringService {
 			// UNCLUSTERABLE marker, or a person's id.
 			$clusterId = match ((int)$row['state']) {
 				FaceState::ASSIGNED => (int)$row['cluster_id'],
-				FaceState::UNCLUSTERABLE => self::UNCLUSTERABLE,
+				FaceState::UNCLUSTERABLE => FaceState::SENTINEL_UNCLUSTERABLE,
 				default => null,
 			};
 			// Only real clusters (positive ids) get capped. UNCLUSTERABLE is not a cluster, and

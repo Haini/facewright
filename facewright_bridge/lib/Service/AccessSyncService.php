@@ -389,18 +389,9 @@ class AccessSyncService {
 				}
 				// The copy starts PENDING (no person): people are per user, so the donor's person means nothing in
 				// this user's namespace, and names do not travel with a share. The recipient's own clustering
-				// picks the face up. Pending is hidden from Memories, so nothing is written to Recognize's table.
-				$newRowId = $this->faceStore->addPendingFace($toUser, $faceId);
+				// picks the face up. Pending is hidden from Memories, so nothing reaches the copy.
+				$this->faceStore->addPendingFace($toUser, $faceId);
 				$written++;
-
-				$link = $this->db->getQueryBuilder();
-				$link->insert('facewright_detection_faces')
-					->values([
-						'detection_id' => $link->createNamedParameter($newRowId, IQueryBuilder::PARAM_INT),
-						'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
-						'user_id' => $link->createNamedParameter($toUser),
-					]);
-				$link->executeStatement();
 			}
 			$this->db->commit();
 		} catch (\Throwable $e) {
@@ -425,9 +416,7 @@ class AccessSyncService {
 		// file_id = ?)" against the rows already being deleted, which is exactly the kind of
 		// re-run-the-selecting-query trap this project's own working practices warn against.
 		$idQb = $this->db->getQueryBuilder();
-		// Ours only, by construction: the ids come from our own table. Recognize's own
-		// removeDetectionsForFileFromUsersNotInList() has no such guard, and copying its shape here
-		// would delete this instance's legacy 128-dim rows - data this project has never claimed.
+		// Ours only, by construction: the ids come from our own table, never a delete by file id alone.
 		$idQb->select('u.id')
 			->from('facewright_user_faces', 'u')
 			->innerJoin('u', 'facewright_faces', 'f', $idQb->expr()->eq('f.id', 'u.face_id'))
@@ -442,11 +431,6 @@ class AccessSyncService {
 			foreach (array_chunk($idsToDelete, 1000) as $chunk) {
 				$this->db->beginTransaction();
 				try {
-					$linkQb = $this->db->getQueryBuilder();
-					$linkQb->delete('facewright_detection_faces')
-						->where($linkQb->expr()->in('detection_id', $linkQb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
-					$linkQb->executeStatement();
-
 					$this->faceStore->deleteFaces($chunk);
 					$deleted += count($chunk);
 					$this->db->commit();
@@ -457,7 +441,7 @@ class AccessSyncService {
 			}
 		}
 
-		// What Memories shows follows ours: the deleted faces leave Recognize's table too.
+		// What Memories shows follows ours: the deleted faces leave the copy too.
 		$this->projection->push($idsToDelete);
 
 		// Nobody has any path to the file left (the forgetFile() case) - the physical faces

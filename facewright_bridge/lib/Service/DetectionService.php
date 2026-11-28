@@ -12,7 +12,7 @@ use OCP\IDBConnection;
 /**
  * Core detection logic shared by the manual occ command, the automatic file-event job, and the
  * batch trigger. Calls the facewright ExApp and stores the physical face in facewright_faces and, through
- * FaceStore, a pending row per user with access. Recognize's table is a copy, written by ProjectionService.
+ * FaceStore, a pending row per user with access. The copy Memories reads is written by ProjectionService.
  */
 class DetectionService {
 	/**
@@ -26,66 +26,6 @@ class DetectionService {
 	 * queue can outlive a change here.
 	 */
 	public const SUPPORTED_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
-
-	/**
-	 * Decimal places kept when encoding an embedding.
-	 *
-	 * InsightFace emits float32, but PHP floats are doubles and serialize_precision=-1 asks
-	 * json_encode for the shortest round-trip of a *double* - so every component was being written
-	 * at 21 characters when ~9 carries the entire float32 value. Measured on the live table: 10,752
-	 * bytes per vector against 4,805 at 6 decimal places, and re-packing a stored vector through
-	 * float32 and back changes its cosine distance by exactly 0.0, i.e. the extra characters
-	 * carried no information at all.
-	 *
-	 * 6 was chosen over the alternatives because it is free: 4, 5 and 6 decimal places all yield 3
-	 * rows per 16 KB InnoDB page, so the extra fidelity costs nothing. The resulting cosine error
-	 * is 3.3e-7 against a clustering threshold of 0.5.
-	 *
-	 * The size effect is bigger than the byte count suggests. At ~10.7 KB a row exceeded InnoDB
-	 * DYNAMIC's ~8,126-byte limit and its vector went off-page, taking a dedicated 16 KB page
-	 * whatever the payload - which is why 195,883 rows occupied 3,087 MB for 2,008 MB of vectors,
-	 * and why every vector fetch cost a page read read-ahead could not batch.
-	 */
-	public const VECTOR_PRECISION = 6;
-
-	/**
-	 * char_length(face_vector) above which a row of Recognize's table that has no row of ours is a stale
-	 * copy of ours (512-dim InsightFace) rather than Recognize's legacy 128-dim face-api.js data; see
-	 * ProjectionService::reconcile(). Used instead of decoding the JSON because it keeps the test set-based.
-	 *
-	 * Measured on the live table, there are three bands, not two, because re-encoding is
-	 * incremental and old and new rows coexist while it runs:
-	 *
-	 *   legacy 128-dim          2,621 -  2,655   (39 rows)
-	 *   ours, VECTOR_PRECISION  4,748 -  4,863
-	 *   ours, pre-compaction   10,672 - 10,827
-	 *
-	 * 3500 is the only floor that reads all three correctly, with 2,093 characters of room below
-	 * and 1,248 above. It replaced 6000, which was correct for two bands but would have silently
-	 * reclassified every compacted row as Recognize's the moment the first one was written - across
-	 * all 14 call sites at once, with no error anywhere.
-	 *
-	 * One row escapes the proxy and always has: id 31948 is a 512-dim embedding of all zeros, so it
-	 * encodes to 1,292 characters and reads as legacy. It is a degenerate detection - cosine
-	 * distance against an all-zero vector is undefined - and it is already parked at UNCLUSTERABLE,
-	 * so the misclassification costs nothing beyond reset never collecting it. Worth knowing
-	 * because the 1,292 lower bound previously recorded for the legacy band was in fact this row;
-	 * the real legacy floor is 2,621.
-	 */
-	public const VECTOR_LENGTH_FLOOR = 3500;
-
-	/**
-	 * The one place an embedding becomes text. Anything writing face_vector goes through here, so
-	 * the encoding cannot drift between the detection path and the compaction command.
-	 *
-	 * @param list<float> $embedding
-	 */
-	public static function encodeVector(array $embedding): string {
-		return json_encode(array_map(
-			static fn (float $f): float => round($f, self::VECTOR_PRECISION),
-			$embedding,
-		));
-	}
 
 	public function __construct(
 		private IDBConnection $db,
@@ -154,7 +94,7 @@ class DetectionService {
 		// every pass forever.
 		$insertTargets = array_values(array_diff($targets, $this->usersWithRowsFor($fileId, $targets)));
 
-		// One transaction for the whole file: the physical faces, each user's row and the links are written together
+		// One transaction for the whole file: the physical faces and each user's rows are written together
 		// or not at all, so a crash cannot leave them disagreeing.
 		// The processed marker stays outside and after it - see the invariant below.
 		$this->db->beginTransaction();
@@ -186,7 +126,7 @@ class DetectionService {
 	}
 
 	/**
-	 * Writes one file's faces: the physical face, then one detection row, link and own-table row per
+	 * Writes one file's faces: the physical face, then one pending row of ours per
 	 * target user. Runs inside the caller's transaction.
 	 *
 	 * @param array<int, array<string, mixed>> $faces
@@ -203,23 +143,13 @@ class DetectionService {
 			$width = ($x2 - $x1) / $imageWidth;
 			$height = ($y2 - $y1) / $imageHeight;
 
-			// The physical face, then the per-user row, then its link.
+			// The physical face, then the per-user row.
 			$faceId = $this->upsertFace($fileId, $faceIndex, $x, $y, $width, $height, $face['det_score'] ?? null, $face['embedding']);
 
 			foreach ($insertTargets as $userId) {
-				// Pending faces are hidden from Memories, so nothing is written to Recognize's table here, and the
-				// embedding is not encoded as text any more: it lives in facewright_faces.embedding.
-				$detectionId = $this->faceStore->addPendingFace($userId, $faceId);
-
-				$link = $this->db->getQueryBuilder();
-				$link->insert('facewright_detection_faces')
-					->values([
-						'detection_id' => $link->createNamedParameter($detectionId, IQueryBuilder::PARAM_INT),
-						'face_id' => $link->createNamedParameter($faceId, IQueryBuilder::PARAM_INT),
-						'user_id' => $link->createNamedParameter($userId),
-					]);
-				$link->executeStatement();
-
+				// Pending faces are hidden from Memories, so nothing reaches the copy here. The embedding lives in
+				// facewright_faces.embedding.
+				$this->faceStore->addPendingFace($userId, $faceId);
 				$inserted++;
 			}
 		}
@@ -235,18 +165,8 @@ class DetectionService {
 	/**
 	 * Which of $userIds already hold *our* detection rows for this file.
 	 *
-	 * Counting Recognize's legacy rows here as well - which this did until it caused a real
-	 * incident - loses the file permanently. Recognize's classifier is enqueued unconditionally by
-	 * its own FsActionService (no faces.enabled check), so on a busy instance it routinely wins the
-	 * race to a newly uploaded photo and writes its 128-dim rows first. We would then skip our own
-	 * insert for that user but still mark them processed, leaving them with vectors that
-	 * ClusteringService's dimensionality filter can never cluster and that Memories - which inner
-	 * joins detections to recognize_face_clusters - can never display. Nothing revisits the file,
-	 * because the marker says it is done.
-	 *
-	 * Restricting the test to our own rows means the worst case is a user holding both a legacy row
-	 * and ours for one file. That is visible and self-correcting; the alternative is silent and
-	 * permanent.
+	 * Only rows of our own table count: anything else would skip the insert for a user and still mark them processed,
+	 * and nothing revisits a file whose marker says it is done.
 	 *
 	 * @param list<string> $userIds
 	 *
@@ -297,25 +217,5 @@ class DetectionService {
 			->where($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, IQueryBuilder::PARAM_INT)))
 			->andWhere($qb->expr()->eq('face_index', $qb->createNamedParameter($faceIndex, IQueryBuilder::PARAM_INT)));
 		return (int)$qb->executeQuery()->fetchOne();
-	}
-
-	/**
-	 * What told our rows from Recognize's legacy ones in Recognize's table, while that table was the source of
-	 * truth: a facewright_detection_faces link, or a face_vector longer than VECTOR_LENGTH_FLOOR. It has no reader
-	 * since Stage E (a row of ours is a row of facewright_user_faces) and goes in Stage F of docs/own-tables.md.
-	 */
-	public static function ownRowsExpr(IQueryBuilder $qb, string $alias = ''): string {
-		$prefix = $alias === '' ? '' : $alias . '.';
-
-		$linked = $qb->getConnection()->getQueryBuilder();
-		$linked->select('detection_id')->from('facewright_detection_faces');
-
-		$byLength = $qb->expr()->gt(
-			$qb->func()->charLength($prefix . 'face_vector'),
-			$qb->createNamedParameter(self::VECTOR_LENGTH_FLOOR, IQueryBuilder::PARAM_INT),
-		);
-		$byLink = $qb->expr()->in($prefix . 'id', $qb->createFunction($linked->getSQL()));
-
-		return (string)$qb->expr()->orX($byLink, $byLength);
 	}
 }

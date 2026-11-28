@@ -9,20 +9,16 @@ use OCP\IDBConnection;
 
 /**
  * The only writer of facewright_user_faces, facewright_clusters and facewright_cluster_stats: people and face assignments, as the source
- * of truth (docs/own-tables.md, Stage E). Recognize's tables are a copy that ProjectionService writes.
+ * of truth (docs/own-tables.md, Stage E). The copy Memories reads is written by ProjectionService.
  *
  * Callers wrap these methods in their own transaction, and push what they touched to ProjectionService after it
  * has committed. Every method that changes rows returns the ids it changed; that list, not what the caller meant
  * to do, is what gets pushed, so a guard that skipped a row or a concurrent edit that won decides for the copy
- * too. Nothing here opens a transaction or reads Recognize's face_vector.
+ * too. Nothing here opens a transaction.
  *
  * Locking: a write that targets a person takes a shared lock on that person's row first (so a concurrent delete
  * of the person waits, and the face never lands in a person that is gone), then locks the face rows it will
  * change. Parallel moves into one person therefore do not block each other.
- *
- * The one place Recognize's table is read: emptyClusterIds() / deleteEmptyUntitled() also treat a person that
- * one of Recognize's own legacy rows (a row with no row of ours) still points at as not empty, so a person whose
- * only members are legacy rows is never deleted (docs/own-tables.md, F.3).
  */
 class FaceStore {
 	private const CHUNK = 1000;
@@ -43,8 +39,7 @@ class FaceStore {
 	// ---------------------------------------------------------------------------------------------------
 
 	/**
-	 * Adds one face for a user in state PENDING; the id comes from our own counter (seeded above Recognize's by
-	 * `occ facewright:own-tables --seed-ids`).
+	 * Adds one face for a user in state PENDING; the id comes from our own counter.
 	 */
 	public function addPendingFace(string $userId, int $faceId): int {
 		$qb = $this->db->getQueryBuilder();
@@ -169,8 +164,8 @@ class FaceStore {
 
 	/**
 	 * Every one of $userId's faces goes back to PENDING except the ones a human ignored, and all their people are
-	 * deleted. Returns what changed so the caller can push it: the faces whose state or person changed (this is
-	 * how hidden remnants leave Recognize's table) and every deleted person.
+	 * deleted. Returns what changed so the caller can push it: the faces whose state or person changed (faces that
+	 * went back to hidden leave the copy) and every deleted person.
 	 *
 	 * @return array{faces: list<int>, clusters: list<int>}
 	 */
@@ -256,7 +251,7 @@ class FaceStore {
 	}
 
 	/**
-	 * Which of $userId's people have no member: no face of ours points at them and no Recognize legacy row does.
+	 * Which of $userId's people have no member: no face of ours points at them.
 	 * Optionally restricted to $among, and to untitled ones.
 	 *
 	 * @param list<int>|null $among
@@ -268,13 +263,10 @@ class FaceStore {
 		}
 		$fc = $this->table('facewright_clusters');
 		$uf = $this->table('facewright_user_faces');
-		$rfd = $this->table('recognize_face_detections');
 		$sql = "SELECT c.id FROM {$fc} c WHERE c.user_id = ?"
 			. ($among !== null ? ' AND c.id IN (' . implode(',', $this->ints($among)) . ')' : '')
 			. ($untitledOnly ? " AND c.title = ''" : '')
 			. " AND NOT EXISTS (SELECT 1 FROM {$uf} u WHERE u.user_id = c.user_id AND u.cluster_id = c.id)"
-			// A row of Recognize's own that points at the person and has no row of ours: not ours to orphan.
-			. " AND NOT EXISTS (SELECT 1 FROM {$rfd} d WHERE d.cluster_id = c.id AND NOT EXISTS (SELECT 1 FROM {$uf} u2 WHERE u2.id = d.id))"
 			. ' ORDER BY c.id';
 		return $this->column($sql, [$userId]);
 	}

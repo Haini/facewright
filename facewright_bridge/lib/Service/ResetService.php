@@ -9,22 +9,13 @@ use OCP\IDBConnection;
 use Psr\Log\LoggerInterface;
 
 /**
- * Wipes facewright's own contributions to Recognize's tables (512-dim InsightFace detections,
- * and any cluster made up of them) plus our own facewright_processed tracking, for a "clean
- * start" during clustering-threshold experimentation - without touching Recognize's own legacy
- * 128-dim data (the ~539 pre-existing named people/clusters found still living in this instance's
- * tables, see CLAUDE.md). This is instance-wide, not scoped to one user, unlike
- * ClusteringService::resetUser() (which only clears cluster_id for one user and, critically, does
- * so without any dimensionality filter - safe for its own narrow purpose, but not a substitute
- * for this).
+ * Wipes facewright's own data: every face and person of ours (facewright_user_faces, facewright_clusters and what hangs
+ * on them), the physical faces nothing refers to any more, and the processed-file tracking, for a "clean start" during
+ * clustering-threshold experimentation. Then the copy Memories reads is emptied (ProjectionService::clear()), and the
+ * ExApp's embedding cache. This is instance-wide, not scoped to one user, unlike ClusteringService::resetUser()
+ * (which only clears the people of one user and puts their faces back to pending).
  *
- * Relies on the same invariant ClusteringService's algorithm guarantees: a cluster is only ever
- * populated from detections of one dimensionality, since clustering strictly filters to 512-dim
- * before matching. So "every cluster referenced by a 512-dim detection" and "every cluster we
- * ever created" are the same set - safe to delete outright rather than requiring it to end up
- * empty first.
- *
- * "Ours" is a row of facewright_user_faces, read without touching face_vector - see findOwnRows().
+ * Nothing of Recognize's is read or written.
  */
 class ResetService {
 	private const CHUNK_SIZE = 500;
@@ -32,6 +23,7 @@ class ResetService {
 	public function __construct(
 		private IDBConnection $db,
 		private FaceStore $faceStore,
+		private ProjectionService $projection,
 		private ExAppClusteringClient $exApp,
 		private LoggerInterface $logger,
 	) {
@@ -46,16 +38,6 @@ class ResetService {
 	public function resetFacewrightData(): array {
 		[$detectionIds, $clusterIds, $faceIds] = $this->findOwnRows();
 
-		// Links before detections before faces: a face is only ours to delete once nothing still
-		// links to it (Stage 1 of docs/archive/independence-implementation.md - fan-out can mean a face is
-		// shared, though a whole-instance reset removes every one of our own detection rows, so in
-		// practice every face this collected becomes orphaned).
-		$this->deleteByIds('facewright_detection_faces', 'detection_id', $detectionIds);
-		$deletedDetections = $this->deleteByIds('recognize_face_detections', 'id', $detectionIds);
-		$deletedClusters = $this->deleteByIds('recognize_face_clusters', 'id', $clusterIds);
-		// Ours: exactly those faces and people. Not "everything": the people table also holds copies of
-		// Recognize's own legacy people, which this reset deliberately leaves alone. The Recognize rows above
-		// were deleted directly, not through the projection: a full reset must not depend on it.
 		// People first: deleting their faces then has no stored size left to recount.
 		$this->faceStore->deleteClustersById($clusterIds);
 		$this->faceStore->deleteFaces($detectionIds);
@@ -72,7 +54,9 @@ class ResetService {
 			$qb->executeStatement();
 		}
 
-		// Every face of ours is gone, so the whole cache is (docs/exapp-clustering.md, S4).
+		// Every face of ours is gone, so the copy Memories reads is empty (outside any transaction), and so is the
+		// ExApp's whole cache (docs/exapp-clustering.md, S4).
+		$this->projection->clear();
 		$cacheCleared = true;
 		try {
 			$this->exApp->clear();
@@ -83,25 +67,20 @@ class ResetService {
 
 		return [
 			'cacheCleared' => $cacheCleared,
-			'deletedDetections' => $deletedDetections,
-			'deletedClusters' => $deletedClusters,
+			'deletedDetections' => count($detectionIds),
+			'deletedClusters' => count($clusterIds),
 			'deletedFaces' => $deletedFaces,
 			'clearedProcessed' => $clearedProcessed,
 		];
 	}
 
 	/**
-	 * The ids to delete, decided entirely in the SELECT.
-	 *
-	 * It reads our own table, never face_vector: decoding vectors to test their dimension needed ~2.1 GB of
-	 * off-page BLOB on a real library and died on PHP's memory_limit. Recognize's legacy rows have no row
-	 * there, so they are never collected.
+	 * The ids to delete, decided entirely in the SELECT, from our own table.
 	 *
 	 * @return array{0: list<int>, 1: list<int>, 2: list<int>} [detectionIds, clusterIds, faceIds]
 	 */
 	private function findOwnRows(): array {
-		// Every row of ours, from our own table: it holds nothing of Recognize's legacy data, so no
-		// ownership test is needed, and the vector column is never touched.
+		// Every row of ours.
 		$qb = $this->db->getQueryBuilder();
 		$qb->select('id', 'cluster_id', 'face_id')
 			->from('facewright_user_faces');
@@ -121,25 +100,21 @@ class ResetService {
 		}
 		$result->closeCursor();
 
+		// Every person of ours too, including the ones with no face left (a named person with no faces is still ours).
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('id')->from('facewright_clusters');
+		$result = $qb->executeQuery();
+		while (($id = $result->fetchOne()) !== false) {
+			$clusterIds[(int)$id] = true;
+		}
+		$result->closeCursor();
+
 		return [$detectionIds, array_keys($clusterIds), array_keys($faceIds)];
 	}
 
-	/** @param list<int> $ids */
-	private function deleteByIds(string $table, string $column, array $ids): int {
-		$deleted = 0;
-		foreach (array_chunk($ids, self::CHUNK_SIZE) as $chunk) {
-			$qb = $this->db->getQueryBuilder();
-			$qb->delete($table)
-				->where($qb->expr()->in($column, $qb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
-			$deleted += $qb->executeStatement();
-		}
-		return $deleted;
-	}
-
 	/**
-	 * Deletes $faceIds that no longer have any facewright_detection_faces link - called after
-	 * detection rows and their links are already gone, so a face fan-out shared with a user this
-	 * reset didn't touch (not possible for the instance-wide reset today, but the check costs
+	 * Deletes $faceIds that no row of facewright_user_faces refers to - called after our rows are gone, so a face
+	 * shared with a user this reset didn't touch (not possible for the instance-wide reset today, but the check costs
 	 * nothing) survives.
 	 *
 	 * @param list<int> $faceIds
@@ -150,7 +125,7 @@ class ResetService {
 			// Correlated on the real table name: MariaDB before 11.6 rejects an alias on a single-table DELETE.
 			$existsQb = $this->db->getQueryBuilder();
 			$existsQb->select($existsQb->expr()->literal(1))
-				->from('facewright_detection_faces')
+				->from('facewright_user_faces')
 				->where($existsQb->expr()->eq('face_id', $existsQb->createFunction($existsQb->getTableName('facewright_faces') . '.id')));
 
 			$qb = $this->db->getQueryBuilder();

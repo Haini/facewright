@@ -258,7 +258,7 @@ class ProjectionService {
 
 	/** What the copy's cluster_id is for a visible face: the person, or -1 for unassigned. */
 	private function visibleClusterExpr(string $alias): string {
-		return "CASE WHEN {$alias}.state = " . FaceState::ASSIGNED . " THEN {$alias}.cluster_id ELSE " . ClusteringService::UNASSIGNED . ' END';
+		return "CASE WHEN {$alias}.state = " . FaceState::ASSIGNED . " THEN {$alias}.cluster_id ELSE " . FaceState::SENTINEL_UNASSIGNED . ' END';
 	}
 
 	// ---------------------------------------------------------------------------------------------------

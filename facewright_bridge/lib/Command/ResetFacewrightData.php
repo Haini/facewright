@@ -13,9 +13,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\ConfirmationQuestion;
 
 /**
- * Wipes facewright's own detections/clusters/processed-tracking for a clean slate, leaving
- * Recognize's own legacy 128-dim data (pre-existing named people) untouched. See ResetService
- * for why this is safe and instance-wide rather than per-user.
+ * Wipes facewright's own faces, people and processed-file tracking for a clean slate, and empties the copy Memories
+ * reads. See ResetService for why it is instance-wide rather than per-user.
  */
 class ResetFacewrightData extends Command {
 	public function __construct(
@@ -27,7 +26,7 @@ class ResetFacewrightData extends Command {
 
 	protected function configure(): void {
 		$this->setName('facewright:reset')
-			->setDescription("Delete all of facewright's own face detections/clusters (512-dim InsightFace data) and processed-file tracking, instance-wide. Leaves Recognize's own legacy data untouched.")
+			->setDescription("Delete all of facewright's own faces and people and the processed-file tracking, instance-wide, and empty the copy Memories reads")
 			->addOption('dry-run', null, InputOption::VALUE_NONE, 'Report what would be deleted without deleting anything')
 			->addOption('yes', null, InputOption::VALUE_NONE, 'Skip the confirmation prompt');
 	}
@@ -78,11 +77,10 @@ class ResetFacewrightData extends Command {
 	 *
 	 * Aggregates rather than the fetchAll()-and-decode this used to do - the preview was the first
 	 * thing to hit the memory_limit, which is the worst place for it: the safety rail on a
-	 * destructive command is exactly what has to keep working. See ResetService::findOwnRows() for
-	 * the measurements and for why the char_length proxy is safe on this path.
+	 * destructive command is exactly what has to keep working.
 	 *
-	 * The predicates deliberately mirror findOwnRows() line for line, cluster_id > 0 included, so
-	 * the numbers printed here are the numbers the delete will report back.
+	 * The counts mirror what ResetService::findOwnRows() collects, so the numbers printed here are the numbers the
+	 * delete will report back.
 	 *
 	 * @return array{detections: int, clusters: int, processed: int}
 	 */
@@ -93,10 +91,8 @@ class ResetFacewrightData extends Command {
 		$detections = (int)$qb->executeQuery()->fetchOne();
 
 		$qb = $this->db->getQueryBuilder();
-		// createFunction rather than func()->count(): IFunctionBuilder has no distinct().
-		$qb->select($qb->createFunction('COUNT(DISTINCT ' . $qb->getColumnName('cluster_id') . ')'))
-			->from('facewright_user_faces')
-			->where($qb->expr()->isNotNull('cluster_id'));
+		$qb->select($qb->func()->count('*'))
+			->from('facewright_clusters');
 		$clusters = (int)$qb->executeQuery()->fetchOne();
 
 		$qb = $this->db->getQueryBuilder();

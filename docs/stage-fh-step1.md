@@ -321,7 +321,29 @@ still does after that, `occ upgrade` with the version unchanged does nothing, so
 - `occ facewright:own-tables --verify` exits 0; the three link checks are gone from its output.
 - `dev/run-all.sh --ui` (commit first): every suite passes.
 
-**Done:**
+**Done:** (2026-11-28)
+- Deleted `VectorCompactionService`, `CompactVectors`, `FaceMigrationService`, `MigrateFaces`, `ReopenUnassigned` (and their `info.xml` lines). `DetectionService`: constants,
+  `encodeVector()`, `ownRowsExpr()` and the link insert gone (the per-user loop is otherwise unchanged). `AccessSyncService`: link insert and delete gone. `ResetService`:
+  no Recognize or link statement, calls `ProjectionService::clear()` after our deletes, `deleteOrphanedFaces()` tests `facewright_user_faces`. Sentinels are
+  `FaceState::SENTINEL_UNASSIGNED/UNCLUSTERABLE/IGNORED` (callers updated, the long Recognize comments replaced by one line each). `FaceStore::emptyClusterIds()` lost the
+  legacy clause; `PeopleService::moveLegacyMembers()` and the `+ $legacy` are gone. `OwnTablesMigrationService` is now `OwnTablesCheckService` (verify only, without the three
+  link checks); `facewright:own-tables` takes `--verify` and `--recount` only. Comments reworded in the files named in item 8, plus the ones in files touched anyway.
+  `dev/snapshot.sh`: the S1 link-table sync statements removed.
+- Deviation: `ResetService::findOwnRows()` now also collects every id of `facewright_clusters` (not only people that hold a face), and `ResetFacewrightData`'s dry-run count follows;
+  without it a reset left the 7 empty people of ours (they were copies of Recognize's legacy people) and the plan's "our tables are empty" did not hold.
+- `php -l` clean; container restarted. `occ list facewright`: backfill-access, cluster, cluster-compare, cluster-scan, detect, embedding-checksums, init-user-settings,
+  merge-clusters, own-tables, people, project, reset, scan (13, the plan's list).
+- Greps over `facewright_bridge/lib` excluding `lib/Migration/` for `recognize_face`, `detection_faces`, `VECTOR_LENGTH_FLOOR`, `VECTOR_PRECISION`, `ownRowsExpr`, `encodeVector`,
+  `moveLegacyMembers`, `ClusteringService::UNASSIGNED|UNCLUSTERABLE|IGNORED`, `hydrate`, `TARGET_`: all empty (the only hits are comments and the table definition in `lib/Migration/`).
+- Link table not written: `writers-files.sh` (passed 21/0): `COUNT(*), MAX(detection_id)` of `oc_facewright_detection_faces` 2797 / 202711 before and after, while
+  `oc_facewright_user_faces`' next AUTO_INCREMENT went 223383 -> 223386 (rows were created and deleted).
+- Reset on a restored snapshot (`occ facewright:reset --yes`): user_faces 2797 -> 0, clusters 311 -> 0, cluster_stats 311 -> 0, faces 2797 -> 0, copy detections 2791 -> 0, copy
+  clusters 311 -> 0, centroids 301 -> 0; `oc_recognize_face_detections` 1 -> 1 and `oc_recognize_face_clusters` 7 -> 7 (unchanged); `project --dry-run` 0 in every class, exit 0.
+  (A first try, before the deviation above, left 7 people and reported D 7.)
+- Legacy: an untitled person of ours with no face of ours and one planted `oc_recognize_face_detections` row pointing at it: `occ facewright:people admin --delete-empty` deleted it
+  ("Deleted 8 empty person(s)": the 7 empty people that the legacy clause used to protect went with it). On 0.12.6 it was kept, by reasoning from the removed `NOT EXISTS (... recognize_face_detections
+  ... no row of ours)` clause, which matched exactly this row (not re-run on the old code).
+- `occ facewright:own-tables --verify` exit 0, no `link` line in its output.
 
 ---
 

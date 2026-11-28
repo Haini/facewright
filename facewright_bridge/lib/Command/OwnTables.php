@@ -5,29 +5,24 @@ declare(strict_types=1);
 namespace OCA\FacewrightBridge\Command;
 
 use OCA\FacewrightBridge\Service\FaceStore;
-use OCA\FacewrightBridge\Service\OwnTablesMigrationService;
+use OCA\FacewrightBridge\Service\OwnTablesCheckService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
- * Moves people and face assignments into tables we own (docs/own-tables.md).
+ * Checks and repairs the tables we own (docs/own-tables.md).
  *
- *   --precheck  read-only: count what the backfill would trip over
- *   --migrate   copy people and assignments into facewright_clusters / facewright_user_faces,
- *               resumable, and verify afterwards
- *   --verify    read-only: check ours internally and against Recognize's tables (via the projection's reconcile),
- *               exit 1 on any mismatch
- *   --seed-ids  Stage E: raise our id counters above Recognize's
+ *   --verify    read-only: check ours internally and the copy Memories reads against them (via the projection's
+ *               reconcile), exit 1 on any mismatch
  *   --recount   rebuild each person's stored size and cover (facewright_cluster_stats) from our tables
  *
- * The copies are kept in step by every writer from then on (FaceStore); --verify failing after a
- * period of normal use means a writer was missed, and the fix is the writer, not another backfill.
+ * --verify failing after a period of normal use means a writer was missed, and the fix is the writer.
  */
 class OwnTables extends Command {
 	public function __construct(
-		private OwnTablesMigrationService $migration,
+		private OwnTablesCheckService $check,
 		private FaceStore $faceStore,
 	) {
 		parent::__construct();
@@ -35,116 +30,25 @@ class OwnTables extends Command {
 
 	protected function configure(): void {
 		$this->setName('facewright:own-tables')
-			->setDescription('Move people and face assignments into tables owned by Facewright (docs/own-tables.md)')
-			->addOption('precheck', null, InputOption::VALUE_NONE, 'Read-only: count what the backfill would trip over')
-			->addOption('migrate', null, InputOption::VALUE_NONE, 'Copy people and assignments into the new tables (processing must be paused)')
-			->addOption('verify', null, InputOption::VALUE_NONE, 'Read-only: check our tables and that Recognize\'s copy matches them, exit 1 on a mismatch')
-			->addOption('recount', null, InputOption::VALUE_NONE, 'Rebuild every person\'s stored size and cover from our tables (the repair for --verify\'s people_stats checks)')
-			->addOption('seed-ids', null, InputOption::VALUE_NONE, 'Raise our id counters above Recognize\'s (Stage E; with --dry-run reports only)')
-			->addOption('dry-run', null, InputOption::VALUE_NONE, 'With --migrate or --seed-ids: report what would happen, write nothing')
-			->addOption('chunk', null, InputOption::VALUE_REQUIRED, 'With --migrate: id range per step', '5000')
-			->addOption('reset-cursor', null, InputOption::VALUE_NONE, 'With --migrate: start again from the first row');
+			->setDescription('Check our people and face tables, and rebuild the stored sizes (docs/own-tables.md)')
+			->addOption('verify', null, InputOption::VALUE_NONE, 'Read-only: check our tables and that the copy Memories reads matches them, exit 1 on a mismatch')
+			->addOption('recount', null, InputOption::VALUE_NONE, 'Rebuild every person\'s stored size and cover from our tables (the repair for --verify\'s people_stats checks)');
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$modes = array_filter([
-			'precheck' => $input->getOption('precheck'),
-			'migrate' => $input->getOption('migrate'),
 			'verify' => $input->getOption('verify'),
-			'seed' => $input->getOption('seed-ids'),
 			'recount' => $input->getOption('recount'),
 		]);
 		if (count($modes) !== 1) {
-			$output->writeln('<error>Pass exactly one of --precheck, --migrate, --verify, --seed-ids, --recount.</error>');
+			$output->writeln('<error>Pass exactly one of --verify, --recount.</error>');
 			return 1;
 		}
 
 		return match (array_key_first($modes)) {
-			'precheck' => $this->precheck($output),
-			'migrate' => $this->migrate($input, $output),
 			'verify' => $this->verify($output),
-			'seed' => $this->seed($input, $output),
 			'recount' => $this->recount($output),
 		};
-	}
-
-	private function precheck(OutputInterface $output): int {
-		$blocked = $this->blockers($output, true);
-		if ($blocked !== []) {
-			$output->writeln('');
-			$output->writeln('<error>Do not start the backfill: ' . implode(', ', $blocked) . '.</error>');
-			return 1;
-		}
-		return 0;
-	}
-
-	/** @return list<string> the must-be-zero counts that are not zero */
-	private function blockers(OutputInterface $output, bool $print): array {
-		$blocked = [];
-		foreach ($this->migration->precheck() as $name => $count) {
-			$mustBeZero = in_array($name, OwnTablesMigrationService::MUST_BE_ZERO, true);
-			if ($print) {
-				$flag = $mustBeZero ? ($count === 0 ? ' ok' : ' <error>must be 0</error>') : '';
-				$output->writeln(sprintf('%-36s %10d%s', $name, $count, $flag));
-			}
-			if ($mustBeZero && $count !== 0) {
-				$blocked[] = $name;
-			}
-		}
-		return $blocked;
-	}
-
-	private function migrate(InputInterface $input, OutputInterface $output): int {
-		$dryRun = (bool)$input->getOption('dry-run');
-		$chunk = max(1, (int)$input->getOption('chunk'));
-
-		if (!$this->usable($output)) {
-			return 1;
-		}
-		if (!$dryRun && !$this->migration->isPaused()) {
-			$output->writeln('<error>Pause processing first (admin page, "Pause processing"): a row changing between a chunk\'s read and its write would be copied stale.</error>');
-			return 1;
-		}
-		$resuming = $this->migration->getCursor() > 0 && !$input->getOption('reset-cursor');
-		if (!$dryRun && !$resuming && $this->migration->storeHoldsData()) {
-			$output->writeln('<error>Refusing: our tables already hold faces and are the source of truth since Stage E. This would overwrite them from Recognize\'s copy. To repair that copy, use occ facewright:project.</error>');
-			return 1;
-		}
-		$blocked = $this->blockers($output, false);
-		if ($blocked !== []) {
-			$output->writeln('<error>Not starting: ' . implode(', ', $blocked) . ' must be 0 (occ facewright:own-tables --precheck).</error>');
-			return 1;
-		}
-
-		if ($input->getOption('reset-cursor')) {
-			$this->migration->resetCursor();
-			$output->writeln('Cursor reset: the next run starts from the first row.');
-		}
-
-		$people = $this->migration->migrateClusters($chunk, $dryRun);
-		$output->writeln(sprintf('people: %d in Recognize\'s table, %d in ours%s', $people['source'], $people['inStore'], $dryRun ? ' (dry run)' : ''));
-
-		$after = $this->migration->getCursor();
-		$max = $this->migration->maxDetectionId();
-		$total = 0;
-		while ($after < $max) {
-			$step = $this->migration->migrateFaceRange($after, $chunk, $dryRun);
-			$total += $step['source'];
-			$after = $step['upper'];
-			$output->writeln(sprintf('faces up to id %d: %d linked row(s) in range%s', min($after, $max), $step['source'], $dryRun ? ' (dry run)' : ''));
-			if (!$dryRun) {
-				$this->migration->setCursor($after);
-			}
-		}
-		$output->writeln(sprintf('Total: %d face row(s)%s.', $total, $dryRun ? ' would be copied (dry run, nothing written)' : ' copied'));
-
-		if ($dryRun) {
-			return 0;
-		}
-		$this->migration->resetCursor();
-		$output->writeln(sprintf('people: stored the size and cover of %d', $this->faceStore->rebuildPeopleStats()));
-		$output->writeln('');
-		return $this->verify($output);
 	}
 
 	private function recount(OutputInterface $output): int {
@@ -155,23 +59,11 @@ class OwnTables extends Command {
 		return 0;
 	}
 
-	private function seed(InputInterface $input, OutputInterface $output): int {
-		if (!$this->usable($output)) {
-			return 1;
-		}
-		$dry = (bool)$input->getOption('dry-run');
-		foreach ($this->migration->seedIds($dry) as $table => $r) {
-			$output->writeln(sprintf('%-28s counter %9d -> floor %9d  %s', $table, $r['current'], $r['floor'],
-				$r['raised'] ? ($dry ? 'would raise' : 'raised') : 'already above'));
-		}
-		return 0;
-	}
-
 	private function verify(OutputInterface $output): int {
 		if (!$this->usable($output)) {
 			return 1;
 		}
-		$results = $this->migration->verify();
+		$results = $this->check->verify();
 		$failed = [];
 		foreach ($results as $name => $entry) {
 			[$value, $kind] = $entry;
@@ -195,11 +87,11 @@ class OwnTables extends Command {
 	}
 
 	private function usable(OutputInterface $output): bool {
-		if (!$this->migration->isSupportedPlatform()) {
+		if (!$this->check->isSupportedPlatform()) {
 			$output->writeln('<error>This needs MySQL or MariaDB.</error>');
 			return false;
 		}
-		if (!$this->migration->tablesExist()) {
+		if (!$this->check->tablesExist()) {
 			$output->writeln('<error>The new tables do not exist yet: run occ upgrade first.</error>');
 			return false;
 		}

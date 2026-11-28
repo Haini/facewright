@@ -7,10 +7,8 @@ namespace OCA\FacewrightBridge\Service;
 /**
  * Where a face stands for one user, as stored in facewright_user_faces.state.
  *
- * Recognize's table has no such column; it overloads cluster_id with sentinel values, and the
- * constants on ClusteringService (UNASSIGNED, UNCLUSTERABLE, IGNORED) are those values. This class is
- * the translation in both directions, so the rest of the code can stop reasoning in sentinels once the
- * copies end (docs/own-tables.md, Stage D).
+ * The API and js/people.js read a state as a number, the "sentinel" (SENTINEL_* below, or the person's id for
+ * ASSIGNED, or null for PENDING); fromSentinel() / toSentinel() translate in both directions.
  *
  * cluster_id is set if and only if the state is ASSIGNED.
  */
@@ -26,8 +24,15 @@ final class FaceState {
 	/** Marked "not a face" by a human: cluster_id -3. */
 	public const IGNORED = 4;
 
-	/** What Memories sees: the states copied to Recognize's tables. */
+	/** What Memories sees: the states copied to the table it reads. */
 	public const VISIBLE = [self::ASSIGNED, self::UNASSIGNED];
+
+	/** The number for UNASSIGNED in the API, in the copy Memories reads and in the People page: excluded from clustering until a human assigns it. */
+	public const SENTINEL_UNASSIGNED = -1;
+	/** The number for UNCLUSTERABLE: evaluated in a full pass, nothing matched; still in the matching pool, not tried again as a seed. */
+	public const SENTINEL_UNCLUSTERABLE = -2;
+	/** The number for IGNORED: not a face or not someone to group, set only by a human; clustering skips it and a reset keeps it. */
+	public const SENTINEL_IGNORED = -3;
 
 	/**
 	 * @return array{state: int, cluster_id: ?int} cluster_id is only non-null for ASSIGNED
@@ -41,15 +46,15 @@ final class FaceState {
 			return ['state' => self::ASSIGNED, 'cluster_id' => $clusterId];
 		}
 		return match ($clusterId) {
-			ClusteringService::UNASSIGNED => ['state' => self::UNASSIGNED, 'cluster_id' => null],
-			ClusteringService::UNCLUSTERABLE => ['state' => self::UNCLUSTERABLE, 'cluster_id' => null],
-			ClusteringService::IGNORED => ['state' => self::IGNORED, 'cluster_id' => null],
+			self::SENTINEL_UNASSIGNED => ['state' => self::UNASSIGNED, 'cluster_id' => null],
+			self::SENTINEL_UNCLUSTERABLE => ['state' => self::UNCLUSTERABLE, 'cluster_id' => null],
+			self::SENTINEL_IGNORED => ['state' => self::IGNORED, 'cluster_id' => null],
 			default => throw new \InvalidArgumentException("Unknown cluster_id value {$clusterId}."),
 		};
 	}
 
 	/**
-	 * The value Recognize's table, and the API, use for a state.
+	 * The number the API and the People page use for a state.
 	 *
 	 * @throws \InvalidArgumentException for an unknown state, or ASSIGNED without a cluster
 	 */
@@ -59,9 +64,9 @@ final class FaceState {
 			self::ASSIGNED => $clusterId !== null && $clusterId > 0
 				? $clusterId
 				: throw new \InvalidArgumentException('An assigned face needs a person.'),
-			self::UNASSIGNED => ClusteringService::UNASSIGNED,
-			self::UNCLUSTERABLE => ClusteringService::UNCLUSTERABLE,
-			self::IGNORED => ClusteringService::IGNORED,
+			self::UNASSIGNED => self::SENTINEL_UNASSIGNED,
+			self::UNCLUSTERABLE => self::SENTINEL_UNCLUSTERABLE,
+			self::IGNORED => self::SENTINEL_IGNORED,
 			default => throw new \InvalidArgumentException("Unknown face state {$state}."),
 		};
 	}

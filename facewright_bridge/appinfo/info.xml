@@ -31,10 +31,7 @@ via Nextcloud's QueryBuilder, since only first-party PHP code can do that.]]>
 		<command>OCA\FacewrightBridge\Command\MergeClusters</command>
 		<command>OCA\FacewrightBridge\Command\BackfillAccess</command>
 		<command>OCA\FacewrightBridge\Command\InitUserSettings</command>
-		<command>OCA\FacewrightBridge\Command\CompactVectors</command>
-		<command>OCA\FacewrightBridge\Command\ReopenUnassigned</command>
 		<command>OCA\FacewrightBridge\Command\People</command>
-		<command>OCA\FacewrightBridge\Command\MigrateFaces</command>
 		<command>OCA\FacewrightBridge\Command\OwnTables</command>
 		<command>OCA\FacewrightBridge\Command\Project</command>
 	</commands>
