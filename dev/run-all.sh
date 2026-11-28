@@ -11,6 +11,10 @@ ui=no; [ "${1:-}" = "--ui" ] && ui=yes
 exec 9>"$WORK_DIR/run-all.lock"
 flock -n 9 || { echo "another dev run is active (lock: $WORK_DIR/run-all.lock); wait for it"; exit 2; }
 ls "$WORK_DIR/snapshots/original"* >/dev/null 2>&1 || { echo "no snapshot 'original': run dev/snapshot.sh save original"; exit 2; }
+# The baseline every suite starts from (dev/README.md): fork mode, Recognize disabled, one projection target.
+[ "$(occ config:system:get memories.recognize.provider 2>/dev/null)" = facewright_bridge ] && [ "$(occ config:app:get facewright_bridge projection_targets 2>/dev/null)" = own ] \
+  && occ app:list 2>/dev/null | sed -n '/^Disabled/,$p' | grep -q ' recognize:' \
+  || { echo "not at the baseline: provider facewright_bridge, projection_targets=own, Recognize disabled (dev/README.md)"; exit 2; }
 declare -a names results
 run() { local name=$1; shift
   "$DEV_DIR/snapshot.sh" restore original >/dev/null

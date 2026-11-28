@@ -13,6 +13,15 @@ Defaults match `docker-compose.yml`; override `NC_CONTAINER`, `DB_CONTAINER`, `D
 - After each data-changing step `verify_step` runs `occ facewright:own-tables --verify`.
 - Each checker has been shown to fail: a planted fault, or the pre-fix code.
 
+## Baseline and snapshots
+
+The dev stack is in the live shape: fork of Memories as the reader (system config `memories.recognize.provider=
+facewright_bridge`), Recognize installed but disabled, app config `projection_targets=own`. `run-all.sh` refuses to start
+otherwise. A snapshot (`dev/snapshot.sh`) holds **our** tables only (faces, user_faces, clusters, cluster_stats,
+processed, centroids, merge dismissals, Memories' covers) with their id counters; `restore` loads it, empties the own copy
+(`facewright_bridge_face_*`), refills it with `occ facewright:project` and runs `own-tables --verify`. It refuses a file
+that holds Recognize's tables (the old format; the last one is `.work/snapshots/original-stock.sql`).
+
 ## Start
 
     dev/snapshot.sh save original      # once, from a healthy dev stack

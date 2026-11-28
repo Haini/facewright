@@ -99,7 +99,16 @@ prove the suites on the old code before any code is removed.
 - `occ app:list` shows `recognize` disabled; `occ config:system:get memories.recognize.provider` prints
   `facewright_bridge`.
 
-**Done:**
+**Done:** (2026-11-28, 0.12.6 code)
+- Kept `original.sql` as `original-stock.sql`; restored it with the old script (311 people, 2797 faces); set `projection_targets=own`,
+  `occ facewright:project` (2791 faces, 311 people repaired, "now match ours"), provider `facewright_bridge`, `app:disable recognize`,
+  `reload_web`; no Recognize job rows left in `oc_jobs`. Counts after that: user_faces 2797, clusters 311, own detections 2791.
+- New `dev/snapshot.sh` (our eight tables, restore refills the copy by `occ facewright:project`, guard for the old format);
+  saved `original` with it. `run-all.sh` got a baseline check (exit 2 unless provider, target and Recognize-disabled hold); the
+  wrappers and suite list are untouched (S1). `dev/README.md` got a "Baseline and snapshots" section.
+- Verify: `restore original` twice printed "verify clean" both times, counts 2797 / 311 / 2791 each time (equal to after step 3);
+  `project --dry-run` 0/0/0/0 for `own`; `restore original-stock` printed the refusal naming `original-stock.sql`, rc 2;
+  `occ app:list` lists recognize under Disabled; provider prints `facewright_bridge`.
 
 ---
 
