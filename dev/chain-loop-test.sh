@@ -1,13 +1,13 @@
 #!/bin/bash
 # Regression for the clustering chain that looped on a live instance: faces pending in OUR table whose row in
-# Recognize's table carried the id of a person that no longer exists. Clustering matched them every pass, the
+# the copy Memories reads carried the id of a person that no longer exists. Clustering matched them every pass, the
 # write was rejected, and progress counted matches instead of rows written, so the chain restarted forever.
 #
-#   dev/chain-loop-test.sh dangling     the live case: the chain must END. Stage D code (read ours, guard Recognize's):
-#                                       the faces end up unclusterable, and code from before "progress means rows
-#                                       written" never ends at all. Stage E code (read and guard both ours): the
-#                                       faces are simply assigned and the projection corrects Recognize's bad value.
-#   dev/chain-loop-test.sh assignable   the normal case: pending faces that can be assigned are, and the chain ends.
+#   dev/chain-loop-test.sh dangling     the live case: the chain must END; the faces are simply assigned (the pass reads
+#                                       and guards on ours) and the projection corrects the copy's bad value. Code from
+#                                       before "progress means rows written" never ends at all.
+#   dev/chain-loop-test.sh assignable   the normal case: pending faces that can be assigned are (they have no row in the
+#                                       copy meanwhile: it is sparse), and the chain ends.
 #
 # The queued jobs are run by hand, one at a time, as cron would. Changes data: restore a snapshot afterwards.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -19,16 +19,16 @@ P=$(one "SELECT cluster_id FROM oc_facewright_user_faces WHERE user_id='$u' AND 
 IDS=$(csv "SELECT id FROM oc_facewright_user_faces WHERE user_id='$u' AND cluster_id=$P ORDER BY id LIMIT 5")
 need "faces of the largest person" "$(wc -w <<<"$(words "$IDS")")" 5
 case $mode in
-  dangling)   sql "UPDATE oc_recognize_face_detections SET cluster_id=999999 WHERE id IN ($IDS)" ;;
-  assignable) sql "UPDATE oc_recognize_face_detections SET cluster_id=NULL WHERE id IN ($IDS)" ;;
+  dangling)   sql "UPDATE oc_facewright_bridge_face_detections SET cluster_id=999999 WHERE id IN ($IDS)" ;;
+  assignable) sql "DELETE FROM oc_facewright_bridge_face_detections WHERE id IN ($IDS)" ;;
   *) echo "mode must be dangling or assignable"; exit 2 ;;
 esac
 sql "UPDATE oc_facewright_user_faces SET state=0, cluster_id=NULL WHERE id IN ($IDS)"
 echo "== fixture ($mode): 5 faces of person $P ($IDS)"
 need "faces pending in our table" "$(one "SELECT COUNT(*) FROM oc_facewright_user_faces WHERE state=0 AND id IN ($IDS)")" 5
 if [ $mode = dangling ]; then
-  need "Recognize rows pointing at the dead person" "$(one "SELECT COUNT(*) FROM oc_recognize_face_detections WHERE cluster_id=999999")" 5
-  check "   that person does not exist" 0 "$(one "SELECT COUNT(*) FROM oc_recognize_face_clusters WHERE id=999999")"
+  need "copy rows pointing at the dead person" "$(one "SELECT COUNT(*) FROM oc_facewright_bridge_face_detections WHERE cluster_id=999999")" 5
+  check "   that person does not exist" 0 "$(one "SELECT COUNT(*) FROM oc_facewright_bridge_face_clusters WHERE id=999999")"
 fi
 
 echo "== run the chain by hand (at most $max runs)"
@@ -45,14 +45,14 @@ done
 check "the chain ended within $max runs" yes "$ended"
 echo "== outcome"
 st() { one "SELECT GROUP_CONCAT(CONCAT(state,'/',IFNULL(cluster_id,'-')) ORDER BY id) FROM oc_facewright_user_faces WHERE id IN ($IDS)"; }
-rf() { one "SELECT GROUP_CONCAT(IFNULL(cluster_id,'NULL') ORDER BY id) FROM oc_recognize_face_detections WHERE id IN ($IDS)"; }
+rf() { one "SELECT GROUP_CONCAT(IFNULL(cluster_id,'NULL') ORDER BY id) FROM oc_facewright_bridge_face_detections WHERE id IN ($IDS)"; }
 n5() { local s=$1; for _ in 1 2 3 4; do s="$s,$1"; done; echo "$s"; }
 if [ $mode = dangling ]; then
   check "faces are assigned to their person in our table" "$(n5 1/$P)" "$(st)"
-  check "   and the projection replaced the dead person id in Recognize's table" "$(n5 $P)" "$(rf)"
+  check "   and the projection replaced the dead person id in the copy" "$(n5 $P)" "$(rf)"
 else
   check "faces are assigned again, to their person" "$(n5 1/$P)" "$(st)"
-  check "   in Recognize's table too" "$(n5 $P)" "$(rf)"
+  check "   in the copy too" "$(n5 $P)" "$(rf)"
 fi
 verify_step "the chain"
 summary "clustering chain ($mode)"

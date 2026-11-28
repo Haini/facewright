@@ -1,6 +1,6 @@
 #!/bin/bash
 # Two parallel loops of overlapping People writes (moves between three people, detaches, ignores, renames) on the
-# same faces. Afterwards Recognize's tables must still match ours (A, C, D all 0): the case a delete-then-insert
+# same faces. Afterwards the own copy must still match ours (A, C, D all 0): the case a delete-then-insert
 # projection would fail with duplicate keys, and where two pushes of the same rows race.
 # Every response status is counted; a request that fails is allowed (a deadlock victim), a copy that disagrees is not.
 # Changes data: restore a snapshot afterwards.   dev/project-concurrency.sh   (LOOPS=40 per worker, WORKERS=2)
@@ -43,6 +43,6 @@ ok=$(cat "$out"/* | grep -c '^200$'); bad=$((total - ok))
 check "every request succeeded (no failed responses)" 0 "$bad"
 echo "== afterwards"
 occ facewright:project --dry-run | sed 's/^/    /'
-check "Recognize's tables match ours (A, C, D all 0)" 0 "$(occ facewright:project --dry-run >/dev/null 2>&1; echo $?)"
+check "the copy matches ours (A, C, D all 0)" 0 "$(occ facewright:project --dry-run >/dev/null 2>&1; echo $?)"
 verify_step "the concurrent writes"
 summary "projection under concurrent writes"

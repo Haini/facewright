@@ -1,7 +1,7 @@
 #!/bin/bash
 # Clustering against ground truth, and a regression net for "consistent but wrong" table states.
 # Loads PEOPLE (default 20) people from the Georgia Tech set under a user of their own, runs detection and
-# clustering, and asks dev/truth.py whether the result is pure, complete and the same in Recognize's table.
+# clustering, and asks dev/truth.py whether the result is pure, complete and the same in the own copy.
 # Then it makes mistakes on purpose (a face moved to the wrong person, two people merged) and requires the oracle to
 # CATCH each one, and finally recovers by reclustering. Changes data: restore a snapshot afterwards.
 #   dev/clustering-truth.sh          PEOPLE=50 for the whole set (about 750 detections)
@@ -54,7 +54,7 @@ check "one face found in every photo" "$want" "$(one "SELECT COUNT(*) FROM oc_fa
 
 echo "== clustering"
 occ facewright:cluster "$GT_USER" | grep -E 'cluster\(s\)|written'
-truth --people "$PEOPLE" --each 15; check "$PEOPLE people of 15, pure, complete, same in Recognize's table" 0 "$(st --people $PEOPLE --each 15)"
+truth --people "$PEOPLE" --each 15; check "$PEOPLE people of 15, pure, complete, same in the own copy" 0 "$(st --people $PEOPLE --each 15)"
 verify_step "clustering the dataset"
 
 echo "== the oracle must catch mistakes (a checker that cannot fail proves nothing)"
@@ -62,15 +62,15 @@ C=($(words "$(ids 3)")); need "three people to play with" "${#C[@]}" 3
 A=${C[0]}; B=${C[1]}; F=$(face_of $A)
 gt_ocs POST /faces/move "{\"ids\":[$F],\"clusterId\":$B}" >/dev/null
 check "a face moved to the wrong person is caught (impure)" 1 "$(st)"
-check "   and nothing else is wrong with the tables" 0 "$(occ facewright:own-tables --verify >/dev/null 2>&1; echo $?)"
+check "   and nothing else is wrong with the tables" 0 "$(verify_rc)"
 gt_ocs POST /faces/move "{\"ids\":[$F],\"clusterId\":$A}" >/dev/null
 check "moved back: clean again" 0 "$(st --people $PEOPLE --each 15)"
 gt_ocs POST /people/merge "{\"keep\":$A,\"merge\":[$B]}" >/dev/null
 check "two people merged into one are caught (impure, and the wrong count)" 1 "$(st --people $PEOPLE)"
 D=$(one "SELECT id FROM oc_facewright_user_faces WHERE user_id='$GT_USER' AND cluster_id=$A ORDER BY id LIMIT 1")
-sql "UPDATE oc_recognize_face_detections SET cluster_id=${C[2]} WHERE id=$D"
-check "Recognize's table drifting from ours is caught (agree)" 1 "$(st)"
-sql "UPDATE oc_recognize_face_detections SET cluster_id=$A WHERE id=$D"
+sql "UPDATE oc_facewright_bridge_face_detections SET cluster_id=${C[2]} WHERE id=$D"
+check "the copy drifting from ours is caught (agree)" 1 "$(st)"
+sql "UPDATE oc_facewright_bridge_face_detections SET cluster_id=$A WHERE id=$D"
 check "   restored, still impure only by the merge" 1 "$(st --people $PEOPLE)"
 
 F2=$(face_of ${C[2]})

@@ -9,9 +9,9 @@ from what the People page lists and from the database, so the flows work on any 
 Needs the virtualenv (dev/setup-venv.sh) and a People page that lists at least five titled people.
 Run:   dev/.work/venv/bin/python dev/memories-ui/flows.py        (restore a snapshot afterwards: flows 4 and 5 change data)
 Environment: MEMORIES_URL (default http://127.0.0.1:8080), ADMIN_USER, ADMIN_PASS, DB_CONTAINER, DB_USER, DB_PASS,
-DB_NAME, NC_CONTAINER, and PROVIDER (default recognize): the app the fork of Memories is set to read (`occ config:system:set
-memories.recognize.provider`). With `facewright_bridge` the database checks look at the `own` projection target's tables,
-and every flow also asserts that no request went to the other DAV tree (docs/memories-fork.md, M8).
+DB_NAME, NC_CONTAINER. The fork of Memories reads the own copy tables (system config `memories.recognize.provider=
+facewright_bridge`, the dev baseline), so the database checks look at those, and every flow also asserts that no
+request went to Recognize's DAV tree (docs/memories-fork.md, M8).
 """
 import json, os, re, subprocess, sys, urllib.parse
 from playwright.sync_api import sync_playwright
@@ -21,13 +21,9 @@ USER = os.environ.get("ADMIN_USER", "admin"); PASSWORD = os.environ.get("ADMIN_P
 DB = [os.environ.get("DB_CONTAINER", "recognaize-db-1"), os.environ.get("DB_USER", "nextcloud"), os.environ.get("DB_PASS", "dev-nextcloud-password"), os.environ.get("DB_NAME", "nextcloud")]
 NC = os.environ.get("NC_CONTAINER", "recognaize-nextcloud-1")
 PASS = FAIL = 0
-PROVIDER = os.environ.get("PROVIDER", "recognize")
-# The tables Memories reads for each provider: Recognize's own, or the bridge's `own` projection target.
-TABLES = {"recognize": ("oc_recognize_face_detections", "oc_recognize_face_clusters"),
-          "facewright_bridge": ("oc_facewright_bridge_face_detections", "oc_facewright_bridge_face_clusters")}
-if PROVIDER not in TABLES: sys.exit(f"PROVIDER must be one of {', '.join(TABLES)}")
-DET, CLU = TABLES[PROVIDER]
-OTHER = next(t for t in TABLES if t != PROVIDER)   # the DAV tree no request may go to
+PROVIDER = "facewright_bridge"
+DET, CLU = "oc_facewright_bridge_face_detections", "oc_facewright_bridge_face_clusters"
+OTHER = "recognize"   # the DAV tree no request may go to
 
 def sql(q):
     r = subprocess.run(["docker", "exec", DB[0], "mariadb", "-u" + DB[1], "-p" + DB[2], DB[3], "-N", "-e", q], capture_output=True, text=True)

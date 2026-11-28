@@ -17,28 +17,22 @@ ls "$WORK_DIR/snapshots/original"* >/dev/null 2>&1 || { echo "no snapshot 'origi
   || { echo "not at the baseline: provider facewright_bridge, projection_targets=own, Recognize disabled (dev/README.md)"; exit 2; }
 declare -a names results
 run() { local name=$1; shift
-  "$DEV_DIR/snapshot.sh" restore original >/dev/null
+  "$DEV_DIR/snapshot.sh" restore original > "$WORK_DIR/last-restore.log" 2>&1 || { names+=("$name"); results+=(99); printf '%-28s %-9s (the snapshot restore failed: %s)\n' "$name" "FAIL (99)" "$(tail -1 "$WORK_DIR/last-restore.log")"; return; }
   local t0=$SECONDS
   "$@" > "$WORK_DIR/last-$name.log" 2>&1; local rc=$?
   names+=("$name"); results+=("$rc"); printf '%-28s %-9s %4d s   (log: %s)\n' "$name" "$([ $rc -eq 0 ] && echo PASS || echo "FAIL ($rc)")" "$((SECONDS-t0))" "$WORK_DIR/last-$name.log"; }
 # The suites that write clustering results, again under clustering_engine=exapp (docs/exapp-clustering.md, S3).
 with_exapp() { occ config:app:set facewright_bridge clustering_engine --value=exapp >/dev/null; "$@"; local rc=$?
   occ config:app:delete facewright_bridge clustering_engine >/dev/null; return $rc; }
-# The suites that write people and faces, again with the `own` projection target next to `recognize`
-# (docs/memories-fork.md, M6): the tables are filled first, and every verify_step then also compares the two targets.
-with_own() { occ config:app:set facewright_bridge projection_targets --value=recognize,own >/dev/null
-  occ facewright:project --target=own >/dev/null || { echo "could not fill the own tables"; occ config:app:delete facewright_bridge projection_targets >/dev/null; return 1; }
+# memories-ui/admin_provider.py lists both providers and starts with the provider unset, so it needs Recognize enabled.
+# Put everything back afterwards, Recognize's jobs included (CLAUDE.md, "Coexisting with Recognize"). Step 5 of
+# docs/memories-fork.md (Recognize uninstalled) changes this suite.
+with_stock_memories() { local prov; prov=$(occ config:system:get memories.recognize.provider 2>/dev/null)
+  occ config:system:delete memories.recognize.provider >/dev/null; occ app:enable recognize >/dev/null; reload_web
   "$@"; local rc=$?
-  occ config:app:delete facewright_bridge projection_targets >/dev/null; return $rc; }
-# The fork of Memories pointed at this app (docs/memories-fork.md, M8): its provider setting, and optionally Recognize
-# disabled. Both put everything back, Recognize's jobs included (CLAUDE.md, "Coexisting with Recognize").
-with_provider() { occ config:system:set memories.recognize.provider --value=facewright_bridge >/dev/null
-  "$@"; local rc=$?
-  occ config:system:delete memories.recognize.provider >/dev/null; return $rc; }
-with_recognize_off() { occ app:disable recognize >/dev/null; reload_web
-  "$@"; local rc=$?
-  occ app:enable recognize >/dev/null
+  occ app:disable recognize >/dev/null
   for id in $(sql "SELECT id FROM oc_jobs WHERE class LIKE '%Recognize%MaintenanceJob' OR class LIKE '%ClusterFacesJob'"); do echo y | docker exec -i -u www-data "$NC_CONTAINER" php occ background-job:delete "$id" >/dev/null 2>&1; done
+  [ -n "$prov" ] && occ config:system:set memories.recognize.provider --value="$prov" >/dev/null; reload_web
   return $rc; }
 echo "(a snapshot restore precedes every suite)"
 run reads-stable           "$DEV_DIR/reads.sh" stable
@@ -55,9 +49,6 @@ run chain-assignable       "$DEV_DIR/chain-loop-test.sh" assignable
 run project-drift          "$DEV_DIR/project-drift.sh"
 run project-failure        "$DEV_DIR/project-failure.sh"
 run project-concurrency    "$DEV_DIR/project-concurrency.sh"
-run project-recognize-trap "$DEV_DIR/project-recognize-trap.sh"
-run project-recognize-copies "$DEV_DIR/project-recognize-copies.sh"
-run rollback-drill         "$DEV_DIR/rollback-drill.sh"
 # PEOPLE=50 everywhere: the suite keeps one detection cache and deletes the others, and cluster-compare needs this one.
 run clustering-truth       env PEOPLE=50 "$DEV_DIR/clustering-truth.sh"      # downloads the dataset on first use
 # Clustering in the ExApp (docs/exapp-clustering.md): the ExApp's cache and /cluster, the client, the comparison, the
@@ -73,25 +64,12 @@ run writers-cluster-exapp  with_exapp "$DEV_DIR/writers-cluster.sh"
 run chain-dangling-exapp   with_exapp "$DEV_DIR/chain-loop-test.sh" dangling
 run chain-assignable-exapp with_exapp "$DEV_DIR/chain-loop-test.sh" assignable
 run clustering-truth-exapp with_exapp env PEOPLE=50 "$DEV_DIR/clustering-truth.sh"
-# The `own` projection target (docs/memories-fork.md, M6): its own suite, then the suites that write people and
-# faces with `own` configured next to `recognize`, where every verify_step also compares the two targets.
+# The projection (docs/memories-fork.md, M6) and the bridge's DAV tree (M7).
 run project-own            "$DEV_DIR/project-own.sh"
-run writers-people-own     with_own "$DEV_DIR/writers-people.sh"
-run writers-cluster-own    with_own "$DEV_DIR/writers-cluster.sh"
-run writers-files-own      with_own "$DEV_DIR/writers-files.sh"
-run persist-guard-own      with_own "$DEV_DIR/persist-guard.sh"
-run project-concurrency-own with_own "$DEV_DIR/project-concurrency.sh"
-run dav-battery-recognize-own with_own "$DEV_DIR/battery.sh"
-# The bridge's own DAV tree (docs/memories-fork.md, M7): the same requests as dav-battery, answered by Dav\Tree, once with
-# only the recognize target and once with own next to it.
-run dav-battery-bridge     env TREE=facewright_bridge "$DEV_DIR/battery.sh"
-run dav-battery-own        with_own env TREE=facewright_bridge "$DEV_DIR/battery.sh"
+# Memories' own UI against the fork: it reads the own copy tables and writes to the bridge's tree.
 [ $ui = yes ] && run memories-ui "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
-# The same flows with the fork reading the own tables and writing to the bridge's tree, then with Recognize disabled too.
-[ $ui = yes ] && run memories-ui-bridge     with_own with_provider env PROVIDER=facewright_bridge "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
-[ $ui = yes ] && run memories-ui-bridge-off with_own with_provider with_recognize_off env PROVIDER=facewright_bridge "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/flows.py"
 # The provider dropdown on Memories' admin page (docs/memories-fork-admin-ui.md); it sets and restores the system setting itself.
-[ $ui = yes ] && run memories-ui-admin-provider "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/admin_provider.py"
+[ $ui = yes ] && run memories-ui-admin-provider with_stock_memories "$WORK_DIR/venv/bin/python" "$DEV_DIR/memories-ui/admin_provider.py"
 "$DEV_DIR/snapshot.sh" restore original | tail -1
 fail=0; for r in "${results[@]}"; do [ "$r" -ne 0 ] && fail=$((fail+1)); done
 echo "$((${#results[@]}-fail)) of ${#results[@]} suites passed"; [ $fail -eq 0 ]

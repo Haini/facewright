@@ -20,7 +20,7 @@ capture() {
   local u=$ADMIN_USER
   # --- what to look at, chosen from the data
   local P; P=($(words "$(csv "SELECT cluster_id FROM oc_facewright_user_faces WHERE user_id='$u' AND state=1 GROUP BY cluster_id ORDER BY COUNT(*) DESC, cluster_id LIMIT 3")"))
-  local SEARCH; SEARCH=$(one "SELECT LEFT(title,1) FROM oc_recognize_face_clusters WHERE user_id='$u' AND title<>'' ORDER BY id LIMIT 1")
+  local SEARCH; SEARCH=$(one "SELECT LEFT(title,1) FROM oc_facewright_bridge_face_clusters WHERE user_id='$u' AND title<>'' ORDER BY id LIMIT 1")
   local FILES; FILES=$(csv "SELECT DISTINCT f.file_id FROM oc_facewright_faces f JOIN oc_facewright_user_faces x ON x.face_id=f.id WHERE x.user_id='$u' ORDER BY f.file_id LIMIT 6")
   local BFILES; BFILES=$(csv "SELECT DISTINCT f.file_id FROM oc_facewright_faces f JOIN oc_facewright_user_faces x ON x.face_id=f.id WHERE x.user_id='$BOB_USER' ORDER BY f.file_id LIMIT 3")
   # Faces whose crop works: the lowest ids can belong to files without an image, and a capture of 404s tests nothing.

@@ -15,7 +15,7 @@ if [ "$FAIL" -ne 0 ]; then summary "fixture"; exit 2; fi
 
 echo "== hard requirements"
 need "$ADMIN_USER: people with 3 or more faces" "$(one "SELECT COUNT(*) FROM (SELECT cluster_id FROM oc_facewright_user_faces WHERE user_id='$ADMIN_USER' AND state=1 GROUP BY cluster_id HAVING COUNT(*)>=3) x")" 5
-need "$ADMIN_USER: titled people" "$(one "SELECT COUNT(*) FROM oc_recognize_face_clusters WHERE user_id='$ADMIN_USER' AND title<>''")" 2
+need "$ADMIN_USER: titled people" "$(one "SELECT COUNT(*) FROM oc_facewright_bridge_face_clusters WHERE user_id='$ADMIN_USER' AND title<>''")" 2
 need "$BOB_USER: faces" "$(one "SELECT COUNT(*) FROM oc_facewright_user_faces WHERE user_id='$BOB_USER'")" 1
 if occ facewright:own-tables --verify >/dev/null; then echo "  have  own-tables --verify                                clean"; else echo "  MISSING PRECONDITION: --verify is not clean; restore a snapshot (dev/snapshot.sh restore)"; exit 2; fi
 

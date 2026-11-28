@@ -33,23 +33,20 @@ that holds Recognize's tables (the old format; the last one is `.work/snapshots/
 |---|---|---|
 | `reads.sh capture\|compare\|stable` | ~50 outputs of the People code (commands, API); `stable` proves two captures equal | no |
 | `reads-direct.sh` (+ `reads_direct.php`, `compare_direct.py`) | the access-sync, detection and reset readers on a sample of files | no |
-| `battery.sh` (`TREE=recognize\|facewright_bridge`) | the DAV router and the reads of one tree: what is applied, refused, left alone; a person's listing against SQL, a face file's bytes against the Files tree, nothing moving between the two trees (`CROSS_TREE=no` skips that part) | restores itself |
-| `project-own.sh` | the `own` projection target: an empty copy, the fill, one planted fault per category, Recognize's tables untouched, a broken `own` statement isolated (docs/memories-fork.md, M6) | yes (restore) |
+| `battery.sh` | the DAV router and the reads of the `facewright_bridge/` tree: what is applied, refused, left alone; a person's listing against SQL, a face file's bytes against the Files tree, a Destination in another root (`recognize/`) refused | restores itself |
+| `project-own.sh` | the projection: an empty copy, the fill, one planted fault per category, a broken face upsert isolated from People writes (docs/memories-fork.md, M6) | yes (restore) |
 | `writers-people.sh` | every People API write | yes (restore) |
 | `writers-cluster.sh` | reopen, assign, mark unclusterable, clear marks, resets | yes (restore) |
 | `persist-guard.sh` (+ `persist_guard.php`) | a clustering pass writing after a human changed the rows: the human wins, and a person the pass left empty goes | yes (restore) |
-| `own-traps.sh` (+ `own_traps.php`) | commands from before Stage E cannot overwrite our tables; a repeated share copy is harmless | yes (restore) |
+| `own-traps.sh` (+ `own_traps.php`) | a repeated share copy is harmless; FaceStore refuses a person on a state that has none | yes (restore) |
 | `writers-files.sh` | detection with a real face, copy, prune, a real share, delete | cleans up |
 | `chain-loop-test.sh dangling\|assignable` | the clustering chain ends; fails on code from before "progress means rows written" | yes (restore) |
 | `clustering-sets.sh save\|compare` (+ `members.py`) | who ends up with whom, independent of numbering | yes (restore) |
 | `clustering-truth.sh` (+ `truth.py`, `fetch-dataset.sh`) | clustering against labelled identities (Georgia Tech set, downloaded into `.work/`, never committed: no stated licence); the oracle `truth.py USER` checks pure / complete / same in Recognize's table and is proven able to fail | yes (restore) |
-| `project-drift.sh` | Stage E reconcile: plants eight kinds of drift in Recognize's tables, requires the dry run to report exactly those, repairs, checks the legacy row and Memories | yes (restore) |
+| `project-drift.sh` | reconcile: plants kinds of drift in the own copy, requires the dry run to report exactly those, repairs, checks Memories | yes (restore) |
 | `project-failure.sh` | a broken push must not break People writes; the admin page says so; the hourly job repairs | yes (restore) |
 | `people-stats.sh` | each person's stored size and cover: the cover face leaving, a better face joining, opposite moves at once, merge, delete, reset, `--recount` | yes (restore) |
 | `project-concurrency.sh` | two parallel writers on the same faces; the copy must still agree; fails if the upsert is degraded | yes (restore) |
-| `project-recognize-trap.sh` | Recognize's own `.noimage` deletion job and `recognize:reset-face-clusters` (dev only): the projection brings everything back and Memories shows what it showed before | yes (restore) |
-| `project-recognize-copies.sh` | Recognize's access-sync handler writes rows of its own; reconcile removes them; ids that meet (squatters) | yes (restore) |
-| `rollback-drill.sh` | rollback tier R2: hydrate, swap the bridge files back to the Stage D commit, pass the Stage D checks, roll forward again (swaps tracked files; refuses unless clean) | yes (restore) |
 | `memories-api.py capture\|compare\|stable` | what Memories itself shows (people, photos per person, unassigned) as the oracle for table changes; proven able to fail | no |
 | `memories-ui/flows.py` | Memories' own UI: rename, remove face, move face, merge, remove person; requests and database | yes (restore) |
 | `memories-ui/admin_provider.py` | the face provider dropdown on Memories' admin page (fork only): the select and its card, choosing the other provider, choosing `recognize` deletes the key, a new page gets the provider, `nosuchapp` shows the error card; puts the setting back (docs/memories-fork-admin-ui.md) | the system setting (restored) |
@@ -67,15 +64,11 @@ that holds Recognize's tables (the old format; the last one is `.work/snapshots/
 
 ## The Memories fork (docs/memories-fork.md)
 
-- `run-all.sh` has wrappers that set one thing up and put it back: `with_own` (app config `projection_targets=recognize,own`
-  and the own tables filled; every `verify_step` then also runs the cross-target oracle in `lib.sh`), `with_provider`
-  (system config `memories.recognize.provider=facewright_bridge`) and `with_recognize_off` (`occ app:disable recognize`, then
-  enable and delete its jobs). The suites run under them have the suffix `-own`, `-bridge`, `-bridge-off`.
-- `memories-ui/flows.py` takes `PROVIDER=recognize|facewright_bridge`; `battery.sh` takes `TREE=recognize|facewright_bridge`.
+- `run-all.sh` has the wrapper `with_exapp` (clustering engine `exapp`) and `with_stock_memories` (provider unset and Recognize
+  enabled, for `memories-ui/admin_provider.py` only; everything is put back afterwards).
 - **Take every `memories-api.py capture` right after `snapshot.sh restore original`**: the UI flows delete a person and make
   Memories write cover rows, so a capture after them differs for reasons that are not the change under test.
-- `snapshot.sh restore` empties the two own tables and, when `own` is configured, refills them.
-- `rollback-drill.sh` refuses to start with uncommitted changes in `facewright_bridge/`: commit before `run-all.sh`.
+- `snapshot.sh restore` empties the two own tables and refills them.
 
 ## Why it is not slower
 

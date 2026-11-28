@@ -169,7 +169,27 @@ the own copy. `project-failure.sh` plants a fault by editing "the first statemen
 - `grep -rn 'recognize_face' dev` finds only `snapshot.sh`'s guard, the `with_stock_memories` wrapper if it needs one,
   and comments that say why (list what is left).
 
-**Done:**
+**Done:** (2026-11-28, bridge code still 0.12.6)
+- Suites deleted: `project-recognize-trap`, `project-recognize-copies`, `rollback-drill`, `dav-battery-recognize-own`, and the `-own` /
+  `-bridge` / `-bridge-off` duplicates (`writers-people-own`, `writers-cluster-own`, `writers-files-own`, `persist-guard-own`,
+  `project-concurrency-own`, `dav-battery-own`, `dav-battery-bridge`, the stock `memories-ui`; `memories-ui-bridge` is now `memories-ui`).
+  Wrappers `with_own`, `with_provider`, `with_recognize_off` gone; `with_stock_memories` added for `admin_provider.py`.
+  `own-traps.sh` lost its two Recognize traps (`--migrate`, `migrate-faces`), the two other checks stay. `lib.sh`: `own_oracle*`,
+  `own_configured`, `api_key_*` deleted. `battery.sh` is `facewright_bridge/` only; `recognize/` is the other root for the cross-root 403 checks.
+  Rewritten for the copy / our tables: `writers-people`, `writers-files` (link checks dropped), `persist-guard`, `chain-loop-test`
+  (dangling: plant 999999 in the copy; assignable: delete the rows from the copy), `clustering-truth` + `truth.py` (copy is sparse),
+  `project-drift` (own copy, ignored face made via API), `project-failure` (plants in `upsertFacesOwn`), `project-own`, `project-concurrency`,
+  `cluster-compare`, `cluster_inmemory.php`, `reads.sh`, `check-fixture.sh`, `memories-ui/flows.py`.
+- Deviations (needed to make the suites green on 0.12.6, all temporary or small): (1) 0.12.6's `--verify` still compares Recognize's frozen
+  tables, which a snapshot no longer restores and which any change or `reset` makes fail. `lib.sh` `run_verify()` ignores the six
+  Recognize-target lines (A_, C_, D_, B_, legacy) while the `own_` lines are present; every other line counts. S2 deletes that clause.
+  (2) `snapshot.sh restore` also makes the link table match the restored faces (delete orphans, insert missing), because 0.12.6's `--verify` checks it
+  and suites add links outside any snapshot (905 orphans appeared); S3 removes it. (3) `run-all.sh` now fails a suite whose restore failed
+  (it used to hide that in `/dev/null`). (4) `project-own.sh` truncates the copy first (a restore fills it now).
+- `dev/run-all.sh --ui` on 0.12.6: **29 of 29 suites passed** (was 42).
+- Planted fault: `projection_targets=recognize` after a restore: `writers-people.sh` failed (FAIL on every verify, 12 checks, and its restore could not fill the
+  own copy); `battery.sh` "passed 53, failed 6". Set back to `own`, restored, `project --dry-run` 0 in every class.
+- `grep -rn 'recognize_face' dev` (excluding `.work`): only the guard in `snapshot.sh`.
 
 ---
 

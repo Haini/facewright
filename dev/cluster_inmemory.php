@@ -10,7 +10,7 @@ use OCA\FacewrightBridge\Service\ClusteringService;
 $user = $argv[1];
 $db = \OCP\Server::get(\OCP\IDBConnection::class);
 $clustering = \OCP\Server::get(ClusteringService::class);
-$tables = ['facewright_user_faces', 'facewright_clusters', 'recognize_face_detections', 'recognize_face_clusters', 'jobs'];
+$tables = ['facewright_user_faces', 'facewright_clusters', 'facewright_bridge_face_detections', 'facewright_bridge_face_clusters', 'jobs'];
 $fingerprint = function () use ($db, $tables): string {
 	$out = [];
 	foreach ($tables as $t) {

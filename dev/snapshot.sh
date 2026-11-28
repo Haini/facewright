@@ -24,11 +24,16 @@ case "${1:-}" in
     if grep -q 'oc_recognize_face_detections' "$file"; then
       echo "snapshot '$name' is in the old format (it holds Recognize's tables); the old format is original-stock.sql and cannot be restored by this script"; exit 2; fi
     docker exec -i "$DB_CONTAINER" mariadb -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null < "$file"
+    # The link table is not in a snapshot but 0.12.6's --verify still checks it: make it match the restored faces
+    # (drop links to rows that no longer exist, add the missing ones). Removed with the table's last reader (S3).
+    sql "DELETE FROM oc_facewright_detection_faces WHERE detection_id NOT IN (SELECT id FROM oc_facewright_user_faces)"
+    sql "INSERT IGNORE INTO oc_facewright_detection_faces (detection_id, face_id, user_id) SELECT id, face_id, user_id FROM oc_facewright_user_faces"
+    sql "UPDATE oc_facewright_detection_faces l JOIN oc_facewright_user_faces u ON u.id=l.detection_id SET l.face_id=u.face_id, l.user_id=u.user_id"
     sql "TRUNCATE oc_facewright_bridge_face_detections; TRUNCATE oc_facewright_bridge_face_clusters; DELETE FROM oc_jobs WHERE class LIKE '%ClusterScanJob'"
     occ config:app:delete facewright_bridge projection_dirty_seq >/dev/null 2>&1; occ config:app:delete facewright_bridge projection_clean_seq >/dev/null 2>&1
     occ config:app:delete facewright_bridge projection_last_error >/dev/null 2>&1
     occ facewright:project >/dev/null || { echo "restored $name but the own tables could not be filled"; exit 1; }
-    if occ facewright:own-tables --verify >/dev/null; then echo "restored $name; verify clean"; else echo "restored $name but VERIFY FAILED"; exit 1; fi ;;
+    run_verify; if [ $VRC -eq 0 ]; then echo "restored $name; verify clean"; else echo "restored $name but VERIFY FAILED"; exit 1; fi ;;
   list) ls -l "$WORK_DIR/snapshots" | awk 'NR>1 {printf "%8s  %s\n", $5, $9}' ;;
   *) sed -n '2,12p' "$0"; exit 2 ;;
 esac

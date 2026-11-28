@@ -11,7 +11,6 @@ PASS=0; FAIL=0
 F=$REPO_DIR/facewright_bridge/lib/Service/DetectionService.php
 wrong() { one "SELECT COUNT(*) FROM oc_facewright_faces WHERE embedding_crc IS NOT NULL AND embedding_crc <> CRC32(embedding)"; }
 missing() { one "SELECT COUNT(*) FROM oc_facewright_faces WHERE embedding_crc IS NULL"; }
-verify_rc() { occ facewright:own-tables --verify >/dev/null 2>&1; echo $?; }
 "$DEV_DIR/snapshot.sh" restore original >/dev/null
 
 echo "== backfill"

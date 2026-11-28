@@ -2,10 +2,10 @@
 """Ground-truth oracle: do the people in the tables match the people in the photos?
 
 For one user whose photos come from the Georgia Tech set (file names carry the identity: .../s07_03.jpg), checks
-OUR tables and RECOGNIZE'S tables, which are what Memories shows:
+OUR tables and the own copy (facewright_bridge_face_*), which is what Memories shows:
   pure       no person holds faces of two different identities
   complete   no identity is spread over two people
-  agree      every face has the same person (or state) in Recognize's table as in ours
+  agree      every face has the same person (or is absent, or -1) in the copy as in ours
 Pure and complete are the property the tables cannot show about themselves: a wrong face under a wrong person is
 consistent in both tables and passes every row-for-row comparison.
 
@@ -27,8 +27,8 @@ ap.add_argument("--allow-split", action="store_true"); ap.add_argument("--quiet"
 u = a.user.replace("'", "")
 rows = sql(f"SELECT x.id, x.state, IFNULL(x.cluster_id,'NULL'), c.path, IFNULL(d.cluster_id,'MISSING') "
            f"FROM oc_facewright_user_faces x JOIN oc_facewright_faces f ON f.id=x.face_id JOIN oc_filecache c ON c.fileid=f.file_id "
-           f"LEFT JOIN oc_recognize_face_detections d ON d.id=x.id WHERE x.user_id='{u}'")
-EXPECT = {"0": "NULL", "2": "-1", "3": "-2", "4": "-3"}          # what Recognize holds for each hidden or non-person state
+           f"LEFT JOIN oc_facewright_bridge_face_detections d ON d.id=x.id WHERE x.user_id='{u}'")
+EXPECT = {"0": "MISSING", "2": "-1", "3": "MISSING", "4": "MISSING"}   # what the sparse copy holds for each state that is not a person
 people = collections.defaultdict(list); spread = collections.defaultdict(set); disagree = []; states = collections.Counter(); unlabeled = 0
 for fid, state, cluster, path, theirs in rows:
     m = re.search(r"(s\d\d)_\d+\.jpg$", path)
@@ -44,13 +44,13 @@ fails = []
 if not rows: fails.append("no faces for this user")
 if impure: fails.append(f"{len(impure)} impure person(s)")
 if split and not a.allow_split: fails.append(f"{len(split)} identity(ies) split over several people")
-if disagree: fails.append(f"{len(disagree)} face(s) where Recognize's table disagrees with ours")
+if disagree: fails.append(f"{len(disagree)} face(s) where the copy disagrees with ours")
 if a.people is not None and len(people) != a.people: fails.append(f"{len(people)} people, expected {a.people}")
 if a.each is not None and any(len(l) != a.each for l in people.values()): fails.append(f"person sizes {dict(sizes)}, expected all {a.each}")
 if not a.quiet:
     print(f"  {u}: {len(rows)-unlabeled} labelled faces; states {dict(sorted(states.items()))}; {len(people)} people; sizes {dict(sorted(sizes.items()))}")
     for c, cnt in list(impure.items())[:5]: print(f"  impure: person {c} holds {dict(cnt)}")
     for l, cs in list(split.items())[:5]: print(f"  split: {l} is in people {cs}")
-    for d in disagree[:5]: print(f"  disagree: face {d[0]} state {d[1]}: ours {d[2]}, Recognize {d[3]}")
+    for d in disagree[:5]: print(f"  disagree: face {d[0]} state {d[1]}: ours {d[2]}, copy {d[3]}")
 print("TRUTH " + ("OK" if not fails else "FAIL: " + "; ".join(fails)))
 sys.exit(1 if fails else 0)

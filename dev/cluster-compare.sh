@@ -18,7 +18,7 @@ compare() { docker exec -u www-data "$NC_CONTAINER" php occ facewright:cluster-c
 summary_line() { grep -E '^Differences:' <<<"$1"; }
 fingerprint() {
   local t out=""
-  for t in oc_facewright_user_faces oc_facewright_clusters oc_facewright_faces oc_recognize_face_detections oc_recognize_face_clusters oc_jobs; do
+  for t in oc_facewright_user_faces oc_facewright_clusters oc_facewright_faces oc_facewright_bridge_face_detections oc_facewright_bridge_face_clusters oc_jobs; do
     out+="$t:$(one "SELECT COUNT(*) FROM $t"):$(sql "CHECKSUM TABLE $t" | cut -f2) "
   done
   echo "$out"

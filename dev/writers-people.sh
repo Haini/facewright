@@ -30,7 +30,7 @@ check "move 2 faces into SC-A2" 200 "$(admin_ocs POST /faces/move "{\"ids\":[${F
 check "   face 1 is assigned to SC-A2" "1/$A" "$(state_of ${F[0]})"
 verify_step "move faces into a person"
 check "move 1 face to a new person SC-B" 200 "$(admin_ocs POST /faces/move "{\"ids\":[${F[2]}],\"newTitle\":\"SC-B\"}" | status)"
-B=$(one "SELECT id FROM oc_recognize_face_clusters WHERE user_id='$u' AND title='SC-B'"); need "SC-B exists" "${B:+1}" 1
+B=$(one "SELECT id FROM oc_facewright_bridge_face_clusters WHERE user_id='$u' AND title='SC-B'"); need "SC-B exists" "${B:+1}" 1
 check "   face 3 is in SC-B" "1/$B" "$(state_of ${F[2]})"
 verify_step "move faces to a new person"
 check "detach face 1" 200 "$(admin_ocs POST /faces/detach "{\"ids\":[${F[0]}]}" | status)"
@@ -60,7 +60,7 @@ echo "== empty people"
 check "MKCOL SC-Empty" 201 "$(admin_dav MKCOL "facewright_bridge/$u/faces/SC-Empty")"
 dry=$(occ facewright:people "$u" --delete-empty --dry-run | grep -o '[0-9]\+' | head -1); need "empty people to delete (SC-Empty at least)" "${dry:-0}" 1
 verify_step "an empty person exists"
-check "delete-empty removes them" 0 "$(occ facewright:people "$u" --delete-empty >/dev/null; one "SELECT COUNT(*) FROM oc_recognize_face_clusters c WHERE c.user_id='$u' AND NOT EXISTS (SELECT 1 FROM oc_recognize_face_detections d WHERE d.cluster_id=c.id)")"
+check "delete-empty removes them" 0 "$(occ facewright:people "$u" --delete-empty >/dev/null; one "SELECT COUNT(*) FROM oc_facewright_bridge_face_clusters c WHERE c.user_id='$u' AND NOT EXISTS (SELECT 1 FROM oc_facewright_bridge_face_detections d WHERE d.cluster_id=c.id)")"
 verify_step "delete empty people"
 
 echo "== put the faces back"
